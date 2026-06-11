@@ -179,6 +179,7 @@ class AgentDefaults(Base):
         serialization_alias="consolidationRatio",
     )  # Consolidation target ratio (0.5 = 50% of budget retained after compression)
     dream: DreamConfig = Field(default_factory=DreamConfig)
+    auxiliary: AuxiliaryConfig = Field(default_factory=AuxiliaryConfig)
 
 
 class AgentsConfig(Base):
