@@ -422,6 +422,15 @@ def do_create(
                                 ]
                                 telemetry.reconcile(known_entries)
                             except OSError as exc:
+                                # Note on exception narrowing: `filelock.Timeout`
+                                # is absorbed inside `SkillTelemetry._write_phase`
+                                # (caught in the retry loop, swallowed via
+                                # `_note_failure("filelock_timeout")`), so
+                                # `reconcile()` cannot propagate it to us
+                                # in practice. `OSError` covers the residual
+                                # atomic-write / IO paths. If a future refactor
+                                # surfaces raw `filelock.Timeout` here, broaden
+                                # this catch accordingly.
                                 logger.warning(
                                     "skill_manage telemetry.reconcile failed "
                                     "(verb=create, name=%s): %s",
