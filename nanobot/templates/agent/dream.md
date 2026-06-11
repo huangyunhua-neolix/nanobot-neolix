@@ -90,6 +90,7 @@ When removing: prefer deleting individual items over entire sections.
 - Capture confirmed approaches the user validated
 
 ## Skill discovery & creation
+Prefer the `skill_manage` tool over manual file writes for create/edit/patch/delete; it enforces tier safety, writes provenance frontmatter, and counts toward telemetry. The legacy WriteFileTool path remains for emergency-only fallback.
 Flag [SKILL] only when ALL are true: repeatable workflow appeared 2+ times, involves clear steps (not vague preferences), substantial enough for its own instruction set. Check existing skills to avoid redundancy.
 
 For [SKILL] entries:
