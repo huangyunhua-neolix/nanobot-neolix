@@ -372,7 +372,8 @@ def flush(writer="bump"):  # writer ∈ {"bump", "reconcile"}, 决定 origin/sha
 | `views / uses / patches`（entry 在 on_disk 与 snapshot 都存在） | `on_disk.value + max(snapshot.value - last_synced.get(name, 0), 0)` | 单调累计；用"自上次 flush 以来的增量"叠加磁盘已有值。`max(.., 0)` 兜底 corruption-rebuild 后 `last_synced` 偏大导致负差额 |
 | `views / uses / patches`（entry 仅在 snapshot 且 `writer == "bump"`） | **不复活**：直接跳过该 entry，相当于本进程承认别进程 reconcile 的删除决定；同时从 `self._last_synced_counts` 移除（下次 flush 不再算差额） | 防止 flush 与 reconcile 互相抢救；reconcile 是地基层，bump 不许越权 |
 | `views / uses / patches`（entry 仅在 snapshot 且 `writer == "reconcile"`） | **首次落盘**：counters 用 snapshot 值（reconcile 内"新出现 skill"分支生成的零计数条目）；不视为孤儿；同时 `_last_synced_counts[name]` 初始化为 snapshot 值 | reconcile 是新 entry 唯一合法的创建者；此分支与下方"origin/shadowed (entry 在 on_disk 不存在)"配对使用 |
-| `views / uses / patches`（entry 仅在 on_disk — snapshot 没动它） | 保持 `on_disk` 原值，不写 | 别进程在管它 |
+| `views / uses / patches`（entry 仅在 on_disk 且 `writer == "bump"`） | 保持 `on_disk` 原值，不写 | 别进程在管它；bump 是普通计数写者，无权删除别进程刚 reconcile 出来的条目 |
+| `views / uses / patches`（entry 仅在 on_disk 且 `writer == "reconcile"`） | **DELETE**：从 `disk_entries` 移除该条目（孤儿清理）。reconcile 已把 disabled-skills 显式保留在 `self._entries` → snapshot 里；磁盘上仍在但 snapshot 缺席的 entry，即本写者视角下 skill 文件已物理不存在的孤儿 | reconcile 是唯一的孤儿删除者；与"entry 仅在 snapshot 且 writer=reconcile"分支配对，共同构成 reconcile 对 entry 集合的双向 sync（添加 + 删除） |
 | `last_view / last_use` | `max(on_disk, snapshot)`（None 视为 -∞；未知 vs 已知，已知胜） | 时间戳取较新者 |
 | `entry_created_at` | `min(on_disk, snapshot)`（None 视为 +∞） | 取较早者，保留"该条目第一次出现"的真实时间 |
 | `origin / shadowed`（entry 在 on_disk 不存在） | 用 snapshot 的值；这是该 entry 首次落盘 | 新增条目必须带 origin |
@@ -489,6 +490,8 @@ filelock 在 NFS 上行为可疑（依赖 `flock` 语义）；本 spec 不为这
 > 不变量 2：**bump 的懒初始化 `origin="unknown"` 永远不会覆盖磁盘上已存在的真实 origin**——因为 §4.3 RMW 表对 `writer="bump"` 分支硬性规定保留 `on_disk.origin`。
 >
 > 不变量 3：**reconcile 决定删除的孤儿条目，flush 不会复活**——因为 §4.3 RMW 表对"entry 仅在 snapshot"分支硬性规定跳过并从 `_last_synced_counts` 移除。
+>
+> 不变量 4：**reconcile 是唯一的孤儿删除者；bump 不会误删别进程刚 reconcile 出来的条目**——因为 §4.3 RMW 表对"entry 仅在 on_disk"按 writer 分支：`writer="bump"` 保留 on_disk（别进程在管它），`writer="reconcile"` 才允许 DELETE（本写者视角下文件已不存在的孤儿）。配合不变量 3 构成 reconcile 对 entry 集合的双向 sync（添加 + 删除），而 bump 永远不参与 entry 集合的修改。
 
 #### bump 命中未知 name 的处理
 
