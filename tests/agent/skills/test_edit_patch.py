@@ -146,3 +146,70 @@ async def test_edit_bumps_telemetry_patch_kind(
     assert r["ok"], r
     snap_after = telem.snapshot()
     assert snap_after["entries"]["tracked"]["patches"] == patches_before + 1
+
+
+@pytest.mark.asyncio
+async def test_edit_preserves_body_starting_with_four_dashes(
+    tmp_workspace: Path, tool_factory,
+) -> None:
+    """Body whose first line is a markdown HR (`----`) must round-trip
+    intact through create → edit → on-disk read (FIX 7 / YEL-SEC-2).
+
+    The 5-byte fence (`\\n---\\n`) means the parser must NOT split on
+    the 4-byte prefix `\\n---` of `\\n----`, otherwise a stray `-` leaks
+    into the body.
+    """
+    tool = tool_factory()
+    initial = "----\noriginal content\n"
+    await _create(tool, "fourdash", body=initial)
+    r = await tool.execute(
+        verb="edit", name="fourdash", body="----\nupdated content\n",
+    )
+    assert r["ok"], r
+    skill_md = tmp_workspace / "skills" / "agent" / "fourdash" / "SKILL.md"
+    text = skill_md.read_text(encoding="utf-8")
+    # Sanity: frontmatter still well-formed.
+    assert text.startswith("---\n")
+    # The body must be EXACTLY "----\nupdated content\n" — no stray dash
+    # at the front (which would have appeared as "-----\n…" had the
+    # parser eaten only 4 bytes of the close fence).
+    body_idx = text.index("\n---\n", 3) + len("\n---\n")
+    body = text[body_idx:]
+    assert body == "----\nupdated content\n", (
+        f"round-trip corruption: body={body!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_edit_telemetry_warn_logged_on_bump_failure(
+    tmp_workspace: Path, tool_factory, monkeypatch, caplog,
+) -> None:
+    """When `telemetry.bump` raises `OSError`, the verb must still return
+    `ok=True` AND emit a WARN log line — the failure must be observable
+    rather than silently swallowed (FIX 2 / YEL-DI-#1)."""
+    import logging as _logging
+
+    telem = SkillTelemetry(tmp_workspace)
+    tool = tool_factory(telemetry=telem)
+    await _create(tool, "warner", body="initial")
+    telem.reconcile([{
+        "name": "warner",
+        "effective_origin": "agent",
+        "shadowed_origins": [],
+        "path": str(tmp_workspace / "skills/agent/warner/SKILL.md"),
+    }])
+
+    def _raise_oserror(name, kind):
+        raise OSError("simulated telemetry IO failure")
+
+    monkeypatch.setattr(telem, "bump", _raise_oserror)
+    caplog.set_level(_logging.WARNING, logger="nanobot.agent.tools.skill_manage_ops")
+    r = await tool.execute(verb="edit", name="warner", body="updated")
+    assert r["ok"] is True, r
+    matched = [
+        rec for rec in caplog.records
+        if rec.levelno == _logging.WARNING and "telemetry" in rec.getMessage()
+    ]
+    assert matched, (
+        f"expected a WARN log mentioning telemetry; got {caplog.records!r}"
+    )

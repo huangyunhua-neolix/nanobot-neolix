@@ -23,6 +23,7 @@ Lock layer ordering (spec §3.7 / §8.6 LIFO release):
 from __future__ import annotations
 
 import errno
+import logging
 import os
 import threading
 from datetime import datetime, timezone
@@ -36,6 +37,8 @@ from nanobot.agent._atomic_io import (
     atomic_write,
     fd_file_lock,
 )
+
+logger = logging.getLogger(__name__)
 
 # --- Module-level layer-1 (in-process, per-name) lock registry --------------
 
@@ -123,15 +126,16 @@ def _parse_skill(text: str) -> tuple[dict[str, Any], str]:
         rest = rest[2:]
     elif rest.startswith("\n"):
         rest = rest[1:]
-    end = rest.find("\n---")
+    # Match the full 5-byte close fence "\n---\n" (matching what
+    # `_serialize_skill` emits). Searching for "\n---" alone would split a
+    # body whose first post-frontmatter bytes are "----" (markdown HR),
+    # leaving a stray '-' attached to the body on round-trip.
+    end = rest.find("\n---\n")
     if end < 0:
         return ({}, text)
     fm_text = rest[:end]
-    after = rest[end + 4:]  # skip '\n---'
-    if after.startswith("\r\n"):
-        after = after[2:]
-    elif after.startswith("\n"):
-        after = after[1:]
+    # Skip "\n---\n" — exactly 5 chars.
+    after = rest[end + 5:]
     try:
         fm = yaml.safe_load(fm_text) or {}
     except yaml.YAMLError as exc:
@@ -152,9 +156,16 @@ def _safe_skill_md_path(workspace: Any, name: str) -> Path:
     """Resolve ``<workspace>/skills/agent/<name>/SKILL.md`` and assert it
     stays under the agent root, with O_NOFOLLOW semantics on read.
 
-    Raises :class:`SkillManageError` with ``path_escape`` on:
-    * symlink at <name>/ or <name>/SKILL.md
-    * resolved real path outside of <skills/agent>/
+    Raises ``SkillManageError(path_escape)`` on a symlink at <name>/ or
+    SKILL.md, or a resolved path outside of <skills/agent>/.
+
+    Threat-model boundary (spec §security boundary): the leaf is
+    O_NOFOLLOW-protected on open (TOCTOU swap of the leaf raises ELOOP);
+    intermediate components are bounded by the workspace trust boundary
+    plus layer-1+layer-2 cooperative locking. A non-cooperating writer
+    with workspace access can still swap an intermediate directory
+    between resolve() and open() — that scenario is INTENTIONALLY out of
+    scope per spec (workspace integrity is a precondition).
     """
     agent_root = _agent_root(workspace).resolve(strict=True)
     candidate = agent_root / name / "SKILL.md"
@@ -258,6 +269,31 @@ def _map_oserror(exc: OSError, verb: str, name: str) -> dict[str, Any]:
     return _reject(verb, name, code, str(exc))
 
 
+def _cleanup_empty_skill_dir(skill_dir: Path) -> None:
+    """Best-effort cleanup of `<name>/` on a failed create (YEL-DI-#4).
+
+    Used by both the inner ``atomic_write`` failure branch and the outer
+    layer-2 lock-acquisition failure branch of :func:`do_create` so a
+    retry isn't blocked by a phantom ``name_exists``. On ENOTEMPTY we
+    unlink the layer-2 ``.lock`` sentinel (the only file WE placed) and
+    retry; any other residue is left intact. All OSErrors swallowed.
+    """
+    try:
+        os.rmdir(skill_dir)
+        return
+    except OSError as exc:
+        if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+            return
+    try:
+        os.unlink(skill_dir / ".lock")
+    except OSError:
+        pass
+    try:
+        os.rmdir(skill_dir)
+    except OSError:
+        pass
+
+
 def do_create(
     *,
     workspace: Any,
@@ -343,14 +379,15 @@ def do_create(
                                 _serialize_skill(frontmatter, body or ""),
                             )
                         except OSError as exc:
+                            # YEL-DI-#4: best-effort cleanup of the empty
+                            # `<name>/` dir we just created so a retry
+                            # doesn't trip on phantom `name_exists`.
+                            _cleanup_empty_skill_dir(skill_dir)
                             return _map_oserror(exc, "create", name)
                 except SkillManageError as exc:
                     # Layer-2 failure: clean up the empty dir so subsequent
                     # creates aren't blocked by a phantom name_exists.
-                    try:
-                        os.rmdir(skill_dir)
-                    except OSError:
-                        pass
+                    _cleanup_empty_skill_dir(skill_dir)
                     return _reject("create", name, exc.error_code, str(exc))
     except SkillManageError as exc:
         # Layer-0 failure (e.g. concurrency_timeout or PATH_ESCAPE on
@@ -466,12 +503,18 @@ def _edit_or_patch(
         return _reject(verb, name, exc.error_code, str(exc))
 
     # Telemetry: edit/patch both bump the patch counter. M1's bump kind
-    # vocabulary uses "patch" for any agent-driven edit.
+    # vocabulary uses "patch" for any agent-driven edit. Only swallow
+    # OPERATIONAL errors here — programmer-error classes (RuntimeError,
+    # AssertionError, ValueError on unknown kind, KeyError) propagate so
+    # bugs surface in tests instead of being silently dropped (YEL-DI-#1).
     if telemetry is not None:
         try:
             telemetry.bump(name, "patch")
-        except Exception:  # pragma: no cover — telemetry must never crash a verb
-            pass
+        except OSError as exc:
+            logger.warning(
+                "skill_manage telemetry.bump failed (kind=patch, name=%s): %s",
+                name, exc,
+            )
     return _ok(verb, name)
 
 
@@ -552,18 +595,26 @@ def do_delete(
 
     skill_dir = _agent_root(workspace) / name
     lock_path = skill_dir / ".lock"
-    skill_md = skill_dir / "SKILL.md"
+    # YEL-SEC-1 / YEL-DI-#4: route through the same path-escape defense
+    # used by edit/patch BEFORE we acquire the layer-2 lock. The resolve
+    # must succeed while SKILL.md is still on disk (resolve(strict=True)
+    # raises if missing), and ELOOP/relative_to checks reject symlink
+    # redirects pointing outside the agent root.
+    try:
+        safe_skill_md = _safe_skill_md_path(workspace, name)
+    except SkillManageError as exc:
+        return _reject("delete", name, exc.error_code, str(exc))
     try:
         with _get_name_lock(name):
             try:
                 with fd_file_lock(lock_path, timeout=1.0):
-                    if not skill_md.exists():
+                    if not safe_skill_md.exists():
                         return _reject(
                             "delete", name, "not_found",
                             "SKILL.md vanished before delete",
                         )
                     try:
-                        os.unlink(skill_md)
+                        os.unlink(safe_skill_md)
                     except FileNotFoundError:
                         return _reject(
                             "delete", name, "not_found",
@@ -583,6 +634,13 @@ def do_delete(
                             if p.name != ".lock"
                         ]
                         if not residue:
+                            # Best-effort: a peer process that opened
+                            # `.lock` fd before we got here holds a flock
+                            # on an unlinked inode for a microsecond
+                            # window. Not a corruption risk — SKILL.md is
+                            # already gone and any re-create acquires
+                            # layer-0 (`.create.lock`) first, ensuring
+                            # serial reuse.
                             try:
                                 os.unlink(lock_path)
                             except OSError:
@@ -603,11 +661,16 @@ def do_delete(
         return _reject("delete", name, exc.error_code, str(exc))
 
     # Tombstone — counters stay monotonic; reconcile resets if reused.
+    # Same narrowing as edit/patch: only OPERATIONAL OSError swallowed
+    # (and logged); programmer-errors propagate (YEL-DI-#1).
     if telemetry is not None:
         try:
             telemetry.bump(name, "delete")
-        except Exception:  # pragma: no cover
-            pass
+        except OSError as exc:
+            logger.warning(
+                "skill_manage telemetry.bump failed (kind=delete, name=%s): %s",
+                name, exc,
+            )
     return _ok("delete", name)
 
 

@@ -98,3 +98,27 @@ async def test_name_dot_dot_blocked(tmp_workspace: Path) -> None:
     r = await tool.execute(verb="create", name="..", body="x")
     assert r["ok"] is False
     assert r["error_code"] == "invalid_name"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX-only path-escape test")
+@pytest.mark.asyncio
+async def test_delete_path_escape_via_skill_md_symlink_outside_workspace(
+    tmp_workspace: Path, tmp_path: Path,
+) -> None:
+    """`delete` MUST route through `_safe_skill_md_path` so a SKILL.md
+    symlinked outside the workspace is rejected with `path_escape` and the
+    external target is NOT removed (YEL-SEC-1 / YEL-DI-#4 fix coverage).
+    """
+    skill_dir = tmp_workspace / "skills" / "agent" / "evil-del"
+    skill_dir.mkdir(parents=True)
+    target = tmp_path / "external.md"
+    target.write_text("---\norigin: agent\n---\nbody\n", encoding="utf-8")
+    os.symlink(target, skill_dir / "SKILL.md")
+    tool = _tool(tmp_workspace)
+    r = await tool.execute(verb="delete", name="evil-del")
+    assert r["ok"] is False
+    assert r["error_code"] == "path_escape"
+    # External target must still exist — delete must NOT have followed
+    # the symlink.
+    assert target.exists()
+    assert target.read_text(encoding="utf-8").startswith("---\norigin: agent")

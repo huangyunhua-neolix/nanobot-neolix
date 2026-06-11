@@ -390,6 +390,24 @@ class SkillManageTool(Tool):
         rt_vars[self._RATE_CAP_KEY] = current + 1
         return True
 
+    @staticmethod
+    def _validate_requires_arg(requires: Any) -> str | None:
+        """Return None if `requires` is acceptable, else an error message.
+
+        Defense against schema-bypass (YEL-DI-#6): if a caller hands us a
+        non-iterable like ``requires=42`` or a list with non-str items, the
+        downstream ``list(requires or [])`` would raise ``TypeError`` and
+        bypass the reject envelope.
+        """
+        if requires is None:
+            return None
+        if not isinstance(requires, list):
+            return "requires must be list[str]"
+        for elem in requires:
+            if not isinstance(elem, str):
+                return "requires must be list[str]"
+        return None
+
     async def execute(self, **kwargs: Any) -> Any:
         """Dispatch to the appropriate verb pipeline (M2 §4.3)."""
         from nanobot.agent.tools import skill_manage_ops as _ops
@@ -441,6 +459,17 @@ class SkillManageTool(Tool):
                 _check_body_size(body, max_body_bytes=cfg.max_body_bytes)
             except SkillManageError as e:
                 return _reject(verb.value, name, e.error_code, str(e))
+
+        # Defensive type-check on `requires` — JSON schema may not be
+        # enforced by every caller (YEL-DI-#6). Reject before the verb
+        # pipelines so the caller sees an `invalid_args` envelope rather
+        # than a 500-class TypeError from `list(requires)`.
+        requires_arg = kwargs.get("requires")
+        requires_err = self._validate_requires_arg(requires_arg)
+        if requires_err is not None:
+            return _reject(
+                verb.value, name, _ErrorCode.INVALID_ARGS, requires_err,
+            )
 
         # --- Step C: verb dispatch ----------------------------------------
         if self._workspace_ is None:

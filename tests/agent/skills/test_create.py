@@ -159,3 +159,68 @@ async def test_create_does_not_bump_telemetry(
     snap = telem.snapshot()
     # `create` MUST NOT register/bump an entry (M1 invariant — that's reconcile's job).
     assert "newone" not in snap["entries"]
+
+
+@pytest.mark.asyncio
+async def test_create_case_fold_collision_against_uppercase_on_disk(
+    tmp_workspace: Path, tool_factory,
+) -> None:
+    """Pre-seed an uppercase-named agent-tier skill DIRECTLY on disk
+    (bypassing the validator) and assert a lowercase create collides
+    via the case-fold lookup branch in `_entry_for` (YEL test gap).
+    """
+    agent_root = tmp_workspace / "skills" / "agent"
+    (agent_root / "MyOldSkill").mkdir(parents=True)
+    (agent_root / "MyOldSkill" / "SKILL.md").write_text(
+        "---\norigin: agent\n---\nseed body\n", encoding="utf-8"
+    )
+    tool = tool_factory()
+    r = await tool.execute(verb="create", name="myoldskill", body="x")
+    assert r["ok"] is False
+    assert r["error_code"] == "name_collision"
+
+
+@pytest.mark.asyncio
+async def test_create_atomic_write_failure_cleans_up_dir(
+    tmp_workspace: Path, tool_factory, monkeypatch,
+) -> None:
+    """Simulate `atomic_write` raising mid-create and assert the empty
+    `<name>/` directory is cleaned up so the next attempt isn't blocked
+    by `name_exists` (FIX 3 / YEL-DI-#4)."""
+    import errno as _errno
+
+    from nanobot.agent.tools import skill_manage_ops as _ops
+
+    def _boom(*_args, **_kwargs):
+        raise OSError(_errno.EIO, "simulated I/O error")
+
+    monkeypatch.setattr(_ops, "atomic_write", _boom)
+    tool = tool_factory()
+    r = await tool.execute(verb="create", name="failer", body="x")
+    assert r["ok"] is False
+    assert r["error_code"] == "atomic_write_failed"
+    # Cleanup must have removed the empty dir we just created.
+    skill_dir = tmp_workspace / "skills" / "agent" / "failer"
+    assert not skill_dir.exists(), (
+        f"empty <name>/ dir {skill_dir} leaked after atomic_write failure"
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_invalid_args_requires_not_list(
+    tmp_workspace: Path, tool_factory,
+) -> None:
+    """A non-list `requires` (e.g. `42`) must return `invalid_args` rather
+    than crashing inside `list(requires or [])` (YEL-DI-#6)."""
+    tool = tool_factory()
+    r = await tool.execute(
+        verb="create", name="argsbad", body="x", requires=42,
+    )
+    assert r["ok"] is False
+    assert r["error_code"] == "invalid_args"
+
+    r2 = await tool.execute(
+        verb="create", name="argsbad2", body="x", requires=["ok", 7],
+    )
+    assert r2["ok"] is False
+    assert r2["error_code"] == "invalid_args"
