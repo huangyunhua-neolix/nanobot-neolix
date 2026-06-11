@@ -15,11 +15,11 @@ from pathlib import Path
 
 def _agent_worker(workspace_str: str, iterations: int) -> None:
     """Top-level so it survives `spawn` start-method serialization."""
-    from pathlib import Path as P
+    from pathlib import Path
 
     from nanobot.agent.skills_telemetry import SkillTelemetry
 
-    workspace = P(workspace_str)
+    workspace = Path(workspace_str)
     telemetry = SkillTelemetry(workspace=workspace)
     # Match real AgentLoop startup: reconcile-before-first-bump so the `alpha`
     # entry is created on disk by the legitimate entry-creator path. Per spec
@@ -41,11 +41,11 @@ def _agent_worker(workspace_str: str, iterations: int) -> None:
 
 
 def _webui_worker(workspace_str: str, iterations: int, results_path: str) -> None:
-    from pathlib import Path as P
+    from pathlib import Path
 
     from nanobot.webui.skills_api import webui_skill_detail_payload, webui_skills_payload
 
-    workspace = P(workspace_str)
+    workspace = Path(workspace_str)
     crashes = 0
     for _ in range(iterations):
         try:
@@ -53,7 +53,7 @@ def _webui_worker(workspace_str: str, iterations: int, results_path: str) -> Non
             webui_skill_detail_payload(workspace, "alpha")
         except Exception:
             crashes += 1
-    P(results_path).write_text(str(crashes))
+    Path(results_path).write_text(str(crashes))
 
 
 def test_webui_calls_do_not_modify_telemetry_file_under_active_agent(tmp_path: Path) -> None:
