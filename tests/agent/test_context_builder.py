@@ -400,3 +400,17 @@ class TestBuildMessages:
         user_msg = messages[-1]["content"]
         assert isinstance(user_msg, list)
         assert any(b.get("type") == "image_url" for b in user_msg)
+
+
+def test_context_builder_forwards_telemetry_to_loader(tmp_path: Path) -> None:
+    from nanobot.agent.context import ContextBuilder
+    from nanobot.agent.skills_telemetry import SkillTelemetry
+    telem = SkillTelemetry(tmp_path)
+    cb = ContextBuilder(tmp_path, telemetry=telem)
+    assert cb.skills.telemetry is telem
+
+
+def test_context_builder_no_telemetry_by_default(tmp_path: Path) -> None:
+    from nanobot.agent.context import ContextBuilder
+    cb = ContextBuilder(tmp_path)
+    assert cb.skills.telemetry is None
