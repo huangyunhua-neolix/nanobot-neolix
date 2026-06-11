@@ -21,9 +21,22 @@ from pathlib import Path
 
 import pytest
 
+from nanobot.agent.skills import SkillsLoader
 from nanobot.agent.skills_telemetry import SkillTelemetry
 from nanobot.agent.tools.skill_manage import SkillManageTool
 from nanobot.agent.tools.skill_manage_ops import _list_with_shadows, _parse_skill
+
+
+def _public_list_skills(workspace: Path) -> list[dict]:
+    """Invoke the public ``SkillsLoader.list_skills_with_shadows()`` verb.
+
+    This is the M1 listing surface the spec wording "list_skills includes"
+    refers to (see ``nanobot.agent.skills.SkillsLoader``). Used by Loop 1
+    so the round-trip pins the public verb's response shape rather than the
+    underscore-prefixed ``_list_with_shadows`` ops helper.
+    """
+    loader = SkillsLoader(workspace, disabled_skills=set())
+    return loader.list_skills_with_shadows()
 
 
 def _make_tool(workspace: Path, telemetry: SkillTelemetry | None) -> SkillManageTool:
@@ -92,8 +105,8 @@ async def test_loop1_create_list_edit_delete_round_trip(tmp_path: Path) -> None:
     )
     assert r_create["ok"] is True, r_create
 
-    # 2. list_skills should include "foo"
-    shadows = _list_with_shadows(workspace)
+    # 2. list_skills should include "foo" (via public SkillsLoader verb).
+    shadows = _public_list_skills(workspace)
     names = {e["name"] for e in shadows}
     assert "foo" in names, f"after create, shadows={shadows!r}"
 
@@ -113,8 +126,8 @@ async def test_loop1_create_list_edit_delete_round_trip(tmp_path: Path) -> None:
     r_delete = await tool.execute(verb="delete", name="foo")
     assert r_delete["ok"] is True, r_delete
 
-    # 5. list_skills no longer includes "foo"
-    shadows_after = _list_with_shadows(workspace)
+    # 5. list_skills no longer includes "foo" (via public SkillsLoader verb).
+    shadows_after = _public_list_skills(workspace)
     assert "foo" not in {e["name"] for e in shadows_after}, (
         f"after delete, shadows={shadows_after!r}"
     )
@@ -139,13 +152,12 @@ async def test_loop2_reconcile_bridge_across_restart(tmp_path: Path) -> None:
 
     # Simulate restart: drop the live telemetry, build a fresh one against
     # the same on-disk store. After construction, the in-memory entries map
-    # is empty — only the on-disk JSON survives the "restart".
+    # is empty — only the on-disk JSON survives the "restart". `snapshot()`
+    # reads from `_entries`, which the constructor initializes to `{}` and
+    # does not lazily populate from disk; reconcile() below is what bridges
+    # disk → memory.
     telemetry_2 = SkillTelemetry(workspace)
-    assert telemetry_2.snapshot()["entries"] == {} or all(
-        # Fresh constructor: in-memory is empty; even if on-disk had data,
-        # snapshot() reads from `_entries` not the JSON file.
-        v == v for v in telemetry_2.snapshot()["entries"].values()
-    )
+    assert telemetry_2.snapshot()["entries"] == {}
 
     # Reconcile against the on-disk skill set.
     telemetry_2.reconcile(_known_entries(workspace))
