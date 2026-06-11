@@ -130,6 +130,19 @@ class AuxiliaryConfig(Base):
     model_preset: str | None = Field(default=None, alias="modelPreset")
 
 
+class SkillManageConfig(Base):
+    """Skill management quota configuration (M2 §3.7 / §5.2 / §14.1).
+
+    Caps how aggressively the agent may mutate its own skill set within a
+    single turn or session. All four knobs default to the spec values.
+    """
+
+    max_mutations_per_turn: int = 5  # Spec §3.7 — mutation operations per turn
+    max_body_bytes: int = 65536  # Spec §3.7 — per-skill body size ceiling
+    max_agent_skills: int = 200  # Spec §5.2 — total agent-owned skills
+    max_description_len: int = 280  # Spec §3.7 — description string ceiling
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -180,6 +193,7 @@ class AgentDefaults(Base):
     )  # Consolidation target ratio (0.5 = 50% of budget retained after compression)
     dream: DreamConfig = Field(default_factory=DreamConfig)
     auxiliary: AuxiliaryConfig = Field(default_factory=AuxiliaryConfig)
+    skill_manage: SkillManageConfig = Field(default_factory=SkillManageConfig)
 
 
 class AgentsConfig(Base):
