@@ -6,7 +6,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
@@ -27,6 +27,9 @@ from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import AgentDefaults, ToolsConfig
 from nanobot.providers.base import LLMProvider
 from nanobot.utils.prompt_templates import render_template
+
+if TYPE_CHECKING:
+    from nanobot.agent.skills_telemetry import SkillTelemetry
 
 
 @dataclass(slots=True)
@@ -87,11 +90,14 @@ class SubagentManager:
         max_iterations: int | None = None,
         max_concurrent_subagents: int | None = None,
         llm_wall_timeout_for_session: Callable[[str | None], float | None] | None = None,
+        *,
+        telemetry: "SkillTelemetry | None" = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
         self.workspace = workspace
         self.bus = bus
+        self.telemetry = telemetry
         self.model = model or provider.get_default_model()
         self.tools_config = tools_config or ToolsConfig()
         self.max_tool_result_chars = max_tool_result_chars
@@ -362,6 +368,7 @@ class SubagentManager:
         skills_summary = SkillsLoader(
             root,
             disabled_skills=self.disabled_skills,
+            telemetry=self.telemetry,
         ).build_skills_summary()
         return render_template(
             "agent/subagent_system.md",
