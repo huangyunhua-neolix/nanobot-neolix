@@ -1,0 +1,2 @@
+- [Git remote / PR target](git_remote_pr_target.md) — `huangyunhua-neolix/nanobot-neolix` IS the upstream, not a fork; never push elsewhere
+- [PR submission method](pr_submission_method.md) — use `git credential fill` + REST API; gh CLI absent, keychain blob is a wrapper not a token; fork-of-fork makes browser UI default base to HKUDS
