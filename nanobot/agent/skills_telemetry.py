@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import atexit
 import json
-import os
-import sys
+import os  # noqa: F401  # kept for monkeypatch hook (`st.os.fsync`) in M1 tests
 import threading
 import time
 from copy import deepcopy
@@ -15,6 +14,10 @@ from typing import Literal, TypedDict
 
 import filelock
 from loguru import logger
+
+from nanobot.agent._atomic_io import (  # noqa: F401  # M1 monkeypatch hook (M2 §8.5 Option A)
+    atomic_write as _atomic_write,
+)
 
 BumpKind = Literal["view", "use", "patch"]
 Writer = Literal["bump", "reconcile"]
@@ -73,25 +76,6 @@ _KIND_TO_LAST_TS: dict[BumpKind, Literal["last_view", "last_use"]] = {
     "view": "last_view",
     "use": "last_use",
 }
-
-
-def _atomic_write(path: Path, payload: dict) -> None:
-    """tmp + fsync(tmp) + os.replace + fsync(parent_dir) on POSIX."""
-    tmp = path.with_name(path.name + ".tmp")
-    data = json.dumps(payload, indent=2, sort_keys=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
-    try:
-        os.write(fd, data.encode("utf-8"))
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)
-    if sys.platform != "win32":
-        dir_fd = os.open(str(path.parent), os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
 
 
 def _safe_read_json(path: Path) -> dict | None:
@@ -445,13 +429,20 @@ class SkillTelemetry:
         (caller treats False as a flush failure to be coalesced via
         `_note_failure`). Other I/O exceptions propagate to the caller.
         """
+        # Module-attribute indirection: M1 tests monkeypatch
+        # `nanobot.agent.skills_telemetry._atomic_write`. Importing the bound
+        # name into a local would defeat the monkeypatch — go through the
+        # module each call so test-time replacement always wins (M2 §8.5
+        # Option A.1, decision #68).
+        from nanobot.agent import skills_telemetry as _self_module
+
         lock = filelock.FileLock(str(self._lock_path), timeout=FILELOCK_TIMEOUT_S)
         for _attempt in range(FILELOCK_RETRIES):
             try:
                 with lock:
                     on_disk = _safe_read_json(self._path)
                     merged = _rmw_merge(on_disk, snapshot, last_synced_snapshot, writer)
-                    _atomic_write(self._path, merged)
+                    _self_module._atomic_write(self._path, merged)
                 return True
             except filelock.Timeout:
                 continue
