@@ -259,6 +259,17 @@ class SkillTelemetry:
             self._dirty = True
 
     def flush(self, writer: Writer = "bump") -> None:
+        """Persist in-memory bumps to disk via the 3-phase flush pipeline.
+
+        Phase 1 takes a deepcopy snapshot under the in-memory lock; phase 2
+        acquires the cross-process filelock, RMW-merges with on-disk state,
+        and atomically rewrites the file; phase 3 advances last-synced counters
+        and clears `_dirty` only if `_entries` did not change mid-flight.
+
+        A single-flight gate (`_flush_lock`) makes a second concurrent flush a
+        no-op. On filelock timeout or atomic-write failure, `_dirty` and
+        `_last_synced_counts` are left untouched so the next flush retries.
+        """
         # ----- Single-flight gate -----
         if not self._flush_lock.acquire(blocking=False):
             return  # another flush already in flight → no-op
@@ -291,7 +302,19 @@ class SkillTelemetry:
         finally:
             self._flush_lock.release()
 
-    def _write_phase(self, snapshot, last_synced_snapshot, writer: Writer) -> bool:
+    def _write_phase(
+        self,
+        snapshot: dict[str, TelemetryEntrySnapshot],
+        last_synced_snapshot: dict[str, dict[str, int]],
+        writer: Writer,
+    ) -> bool:
+        """Acquire filelock, RMW-merge with disk, atomic-write the result.
+
+        Retries up to `FILELOCK_RETRIES` times on filelock timeout. Returns
+        True on a successful merge+write; False if every attempt timed out
+        (caller treats False as a flush failure to be coalesced via
+        `_note_failure`). Other I/O exceptions propagate to the caller.
+        """
         lock = filelock.FileLock(str(self._lock_path), timeout=FILELOCK_TIMEOUT_S)
         for _attempt in range(FILELOCK_RETRIES):
             try:
@@ -305,6 +328,12 @@ class SkillTelemetry:
         return False
 
     def _note_failure(self, kind: str) -> None:
+        """Increment per-kind failure counter and emit a coalesced WARN.
+
+        Logs a single WARNING every `WARN_COALESCE_EVERY` (100) failures of
+        the same kind, so noisy environments don't spam the log on each
+        flush. Counters are in-process only; no persistence.
+        """
         bucket = self._failure_counts.setdefault(kind, 0) + 1
         self._failure_counts[kind] = bucket
         if bucket % WARN_COALESCE_EVERY == 0:

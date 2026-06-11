@@ -1,6 +1,9 @@
+import json
+import logging
 from pathlib import Path
 
 import pytest
+from loguru import logger as _loguru_logger
 
 from nanobot.agent.skills_telemetry import (
     BumpKind,  # noqa: F401
@@ -20,7 +23,6 @@ def _seed_disk(workspace: Path, entries: dict[str, dict]) -> Path:
     rule (spec §4.3 + invariant 3 + decision #31) means flush(writer="bump")
     only mutates entries that already exist on disk.
     """
-    import json as _json
     skills_dir = workspace / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -29,8 +31,30 @@ def _seed_disk(workspace: Path, entries: dict[str, dict]) -> Path:
         "entries": entries,
     }
     path = skills_dir / ".telemetry.json"
-    path.write_text(_json.dumps(payload))
+    path.write_text(json.dumps(payload))
     return path
+
+
+@pytest.fixture
+def loguru_caplog(caplog):
+    """Bridge loguru -> stdlib logging so pytest's caplog can capture records.
+
+    Project uses loguru (`from loguru import logger`), but caplog only sees
+    records routed through stdlib logging. Without this shim, WARNING records
+    emitted via loguru are invisible to caplog.records.
+    """
+    class PropagateHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            logging.getLogger(record.name).handle(record)
+
+    handler_id = _loguru_logger.add(
+        PropagateHandler(), format="{message}", level="WARNING"
+    )
+    caplog.set_level(logging.WARNING)
+    try:
+        yield caplog
+    finally:
+        _loguru_logger.remove(handler_id)
 
 
 def _zero_seed_entry(origin: str = "user") -> dict:
@@ -273,7 +297,7 @@ def test_flush_noop_when_not_dirty(tmp_path: Path) -> None:
     assert not (tmp_path / "ws" / "skills" / ".telemetry.json").exists()
 
 
-def test_flush_rmw_preserves_concurrent_process_writes(tmp_path: Path) -> None:
+def test_flush_rmw_merges_external_disk_changes_between_flushes(tmp_path: Path) -> None:
     import json
     workspace = tmp_path / "ws"
     _seed_disk(workspace, {"shared": _zero_seed_entry()})
@@ -322,3 +346,61 @@ def test_flush_single_flight_second_call_is_noop(tmp_path: Path, monkeypatch) ->
     block.set()
     t.join(timeout=2.0)
     assert call_count["n"] == 1
+
+
+def test_flush_filelock_timeout_preserves_dirty_and_last_synced(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import filelock
+
+    from nanobot.agent import skills_telemetry as st
+    telem = SkillTelemetry(tmp_path / "ws")
+    telem.bump("foo", "view")
+
+    class AlwaysTimeout:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            raise filelock.Timeout("lock")
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(st.filelock, "FileLock", AlwaysTimeout)
+    telem.flush()
+    # disk file never created; in-memory state preserved
+    assert not (tmp_path / "ws" / "skills" / ".telemetry.json").exists()
+    assert telem._dirty is True
+    assert telem._last_synced_counts == {}
+
+
+def test_warn_throttle_emits_once_per_100_failures(
+    tmp_path: Path, monkeypatch, loguru_caplog
+) -> None:
+    # Uses loguru_caplog (not bare caplog) because telemetry uses loguru;
+    # see fixture docstring for the stdlib bridge rationale.
+    import filelock
+
+    from nanobot.agent import skills_telemetry as st
+    telem = SkillTelemetry(tmp_path / "ws")
+
+    class AlwaysTimeout:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            raise filelock.Timeout("lock")
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(st.filelock, "FileLock", AlwaysTimeout)
+    for _ in range(250):
+        telem.bump("foo", "view")
+        telem.flush()
+    filelock_warns = [
+        r for r in loguru_caplog.records if "filelock_timeout" in r.getMessage()
+    ]
+    # Coalesced every 100 → 2 warnings for 100/200 thresholds; 250 itself doesn't trigger
+    assert len(filelock_warns) == 2
