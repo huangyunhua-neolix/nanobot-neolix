@@ -65,6 +65,13 @@ Messages flow through an async `MessageBus` (`nanobot/bus/queue.py`) that decoup
 
 See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for contribution flow and PR guidelines.
 
+### Git remote / PR target (iron rule)
+
+- **本仓库 = `git@github.com:huangyunhua-neolix/nanobot-neolix.git`**. Despite the user-style account name, this IS the upstream repo for this project — NOT a personal fork.
+- **All PRs MUST target this repo.** Never push branches or create PRs against any other remote (no upstream HKUDS push, no separate fork, no mirror).
+- The default `origin` remote already points here. Verify with `git remote -v` before any `git push`. If you ever see a different `origin` URL, STOP and ask before pushing.
+- PR / MR links must be raw URLs (`https://github.com/huangyunhua-neolix/nanobot-neolix/pull/123`), never `[text](url)` markdown links — the merge tooling cannot resolve markdown-formatted links.
+
 ## Code Style
 
 - Python 3.11+, asyncio throughout.
