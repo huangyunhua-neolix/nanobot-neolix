@@ -159,6 +159,7 @@ def _validate_provenance_tag(tag: str) -> None:
     Allowed forms:
 
     * Literal ``"agent"``.
+    * Literal ``"dream"`` (M2 §3.2 / §6.1 — Dream-tier consolidation runs).
     * ``"subagent:<id>"`` where ``<id>`` matches ``^[A-Za-z0-9_-]{1,64}$``.
 
     Anything else (Unicode, whitespace, bare ``"subagent:"``, oversized id,
@@ -168,7 +169,7 @@ def _validate_provenance_tag(tag: str) -> None:
     """
     if not isinstance(tag, str):
         raise ValueError(f"provenance_tag must be str, got {type(tag).__name__}")
-    if tag == "agent":
+    if tag == "agent" or tag == "dream":
         return
     if tag.startswith("subagent:"):
         sub_id = tag[len("subagent:"):]
@@ -180,7 +181,7 @@ def _validate_provenance_tag(tag: str) -> None:
         return
     raise ValueError(
         f"invalid provenance_tag: {tag!r} "
-        f"(allowed: 'agent' or 'subagent:<id>')"
+        f"(allowed: 'agent', 'dream', or 'subagent:<id>')"
     )
 
 

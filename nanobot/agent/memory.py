@@ -29,6 +29,7 @@ from nanobot.utils.helpers import (
 from nanobot.utils.prompt_templates import render_template
 
 if TYPE_CHECKING:
+    from nanobot.agent.skills_telemetry import SkillTelemetry
     from nanobot.providers.base import LLMProvider
     from nanobot.session.manager import SessionManager
 
@@ -49,9 +50,16 @@ class MemoryStore:
         r"^\[\d{4}-\d{2}-\d{2}[^\]]*\]\s+[A-Z][A-Z0-9_]*(?:\s+\[tools:\s*[^\]]+\])?:"
     )
 
-    def __init__(self, workspace: Path, max_history_entries: int = _DEFAULT_MAX_HISTORY):
+    def __init__(
+        self,
+        workspace: Path,
+        max_history_entries: int = _DEFAULT_MAX_HISTORY,
+        *,
+        telemetry: "SkillTelemetry | None" = None,
+    ):
         self.workspace = workspace
         self.max_history_entries = max_history_entries
+        self.telemetry = telemetry
         self.memory_dir = ensure_dir(workspace / "memory")
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "history.jsonl"
@@ -474,6 +482,7 @@ class MemoryStore:
         from nanobot.agent.tools.file_state import FileStates
         from nanobot.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
         from nanobot.agent.tools.registry import ToolRegistry
+        from nanobot.agent.tools.skill_manage import SkillManageTool
 
         tools = ToolRegistry()
         file_states = FileStates()
@@ -506,6 +515,15 @@ class MemoryStore:
             workspace=workspace,
             allowed_dir=skills_dir,
             file_states=file_states,
+        ))
+        # Dream-tier skill management: tag created/edited skills with
+        # ``created_by: dream`` via the explicit provenance kwarg. This path
+        # bypasses ``Tool.create(ctx)`` because Dream owns its own private
+        # tool registry without a ToolContext.
+        tools.register(SkillManageTool(
+            workspace=workspace,
+            telemetry=self.telemetry,
+            provenance_tag="dream",
         ))
         return tools
 

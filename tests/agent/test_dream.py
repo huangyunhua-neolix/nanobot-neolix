@@ -108,8 +108,15 @@ class TestDreamTools:
             "apply_patch",
             "edit_file",
             "read_file",
+            "skill_manage",
             "write_file",
         }
+
+    def test_dream_skill_manage_uses_dream_provenance(self, store):
+        tools = store.build_dream_tools()
+        skill_tool = tools.get("skill_manage")
+        assert skill_tool is not None
+        assert skill_tool._provenance_tag_ == "dream"
 
 
 class TestEphemeralDirect:
