@@ -294,19 +294,21 @@ M2 ships `skill_manage`，一个 4-verb 工具（`create / edit / patch / delete
   - `pytest tests/agent/skills/test_lock_order.py tests/agent/skills/test_concurrency.py -v`
 - **Review focus:** `concurrency` (deadlock freedom, layer-0 scoping), `data-integrity` (cap consistency under race)
 
-### t-11: SubagentManager `_build_tools` task_id wiring
-- **Spec:** §8.3 (decision #40 + #40a)
-- **Files:** `nanobot/agent/subagent.py` (modify); `tests/agent/skills/test_provenance.py` (modify — append subagent path test)
+### t-11: SubagentManager `_build_tools` task_id wiring + subagent `runtime_state` inheritance
+- **Spec:** §8.3 (decision #40 + #40a) + §5.2.1 subagent 行为表（独立满额 5）
+- **Files:** `nanobot/agent/subagent.py` (modify); `tests/agent/skills/test_provenance.py` (modify — append subagent path test); `tests/agent/skills/test_rate_cap.py` (modify — append subagent inheritance test)
 - **Definition of done:**
   - `_build_tools(workspace=None, tools_config=None, *, task_id: str)` 签名加 `task_id` keyword-only 参数。
   - 构造 `ToolContext(provenance_tag=f"subagent:{task_id}", config=cfg, workspace=str(root.resolve()), ...)`。
   - `_run_subagent` (line ~233) 调用点把外层 `task_id` (生成于 line ~168 `task_id = str(uuid.uuid4())[:8]`) 传入。
-  - 测试：spawn subagent → SkillManageTool 实例的 `self._provenance_tag_ == f"subagent:{task_id}"`；后续在 main agent ctx 上 mutate `ctx.provenance_tag = "agent"` 不影响 subagent 实例（write-once）。
+  - **NEW (t-06 follow-up):** `_run_subagent` 中构造 `AgentRunSpec(...)` (line ~248) 必须显式传 `runtime_state=...`。subagent 取**自身独立的** `RuntimeState`（非父继承）—— 这样 spec §5.2.1 表的"subagent 第一个 iteration 顶部 reset → 独立满额 5"才成立；若复用父 runtime_state，subagent mutation 计数会算进父 turn cap，违反 spec。具体：在 `_build_tools` 上方或 `_run_subagent` 内部构造一个 fresh `RuntimeState`（参考 `AgentLoop.__init__` 的 RuntimeState 构造模式）并传入 AgentRunSpec。
+  - 测试：(a) spawn subagent → SkillManageTool 实例的 `self._provenance_tag_ == f"subagent:{task_id}"`；后续在 main agent ctx 上 mutate `ctx.provenance_tag = "agent"` 不影响 subagent 实例（write-once）；(b) **NEW** spawn subagent，连续在 subagent 内 mutation → 第 5 次 OK / 第 6 次 hit `quota_exceeded`，且父 agent 的 `mutations_this_turn` 不受影响（独立 5 名额）。
 - **Commands:**
   - `pytest tests/agent/skills/test_provenance.py::test_subagent_provenance_tag -v`
+  - `pytest tests/agent/skills/test_rate_cap.py::test_subagent_independent_quota -v`
   - `pytest tests/agent/test_subagent.py -v` → 不能 regress（如有 _build_tools 既存测试需更新调用方）。
   - `ruff check nanobot/agent/subagent.py`
-- **Review focus:** `correctness`, `api-contract`
+- **Review focus:** `correctness`, `api-contract`, **`coherence`** (spec §5.2.1 subagent 独立 cap 不可破)
 
 ### t-12: MemoryStore.__init__ telemetry injection + Dream tool registration
 - **Spec:** §6.1 / §6.5 (R3 fix RED-2)
