@@ -159,11 +159,12 @@ def _rmw_merge(
         disk_entry = disk_entries.get(name)
         if disk_entry is None:
             # Branch: entry only in snapshot
-            if writer == "bump" and name in last_synced:
-                # We previously synced this entry; it's gone from disk →
-                # reconcile killed it. Do not resurrect.
+            if writer == "bump":
+                # Spec §4.3 + invariant 3 + decision #31:
+                # reconcile is the only legitimate creator of new entries;
+                # bump never resurrects an entry that's not on disk.
                 continue
-            # writer == "reconcile" OR first landing of a never-synced entry
+            # writer == "reconcile" → first landing
             disk_entries[name] = dict(snap_entry)
             continue
         # Branch: entry in both

@@ -12,6 +12,36 @@ from nanobot.agent.skills_telemetry import (
 )
 
 
+def _seed_disk(workspace: Path, entries: dict[str, dict]) -> Path:
+    """Pre-populate the telemetry file as if reconcile() already ran.
+
+    A7 will land the real reconcile() helper; A5's tests use this seed shim
+    to simulate the post-reconcile state, since the strict bump-orphan-skip
+    rule (spec §4.3 + invariant 3 + decision #31) means flush(writer="bump")
+    only mutates entries that already exist on disk.
+    """
+    import json as _json
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "updated_at": "2026-06-11T00:00:00Z",
+        "entries": entries,
+    }
+    path = skills_dir / ".telemetry.json"
+    path.write_text(_json.dumps(payload))
+    return path
+
+
+def _zero_seed_entry(origin: str = "user") -> dict:
+    return {
+        "origin": origin, "shadowed": [],
+        "views": 0, "uses": 0, "patches": 0,
+        "entry_created_at": "2026-06-11T00:00:00Z",
+        "last_view": None, "last_use": None,
+    }
+
+
 def test_construct_on_fresh_workspace_creates_parent_dir(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     # NOTE: workspace 本身不存在，skills/ 不存在 —— 必须由 __init__ 自建
@@ -159,10 +189,7 @@ def test_rmw_bump_only_skips_orphan_entry_not_on_disk() -> None:
             "last_view": "2026-06-11T00:00:00Z", "last_use": None,
         }
     }
-    # last_synced has a record for foo → "we previously synced 3 views;
-    # disk lost it → reconcile killed it."
-    last_synced = {"foo": {"views": 3, "uses": 0, "patches": 0}}
-    merged = _rmw_merge(on_disk, snapshot, last_synced, writer="bump")
+    merged = _rmw_merge(on_disk, snapshot, {}, writer="bump")
     assert merged["entries"] == {}  # bump cannot resurrect entry reconcile killed
 
 
@@ -227,11 +254,14 @@ def test_rmw_preserves_unknown_top_level_fields() -> None:
 
 def test_flush_writes_disk_and_advances_last_synced(tmp_path: Path) -> None:
     import json
-    telem = SkillTelemetry(tmp_path / "ws")
+    workspace = tmp_path / "ws"
+    _seed_disk(workspace, {"foo": _zero_seed_entry()})
+
+    telem = SkillTelemetry(workspace)
     telem.bump("foo", "view")
     telem.bump("foo", "view")
     telem.flush()
-    data = json.loads((tmp_path / "ws" / "skills" / ".telemetry.json").read_text())
+    data = json.loads((workspace / "skills" / ".telemetry.json").read_text())
     assert data["entries"]["foo"]["views"] == 2
     assert telem._last_synced_counts["foo"]["views"] == 2
     assert telem._dirty is False
@@ -245,14 +275,17 @@ def test_flush_noop_when_not_dirty(tmp_path: Path) -> None:
 
 def test_flush_rmw_preserves_concurrent_process_writes(tmp_path: Path) -> None:
     import json
+    workspace = tmp_path / "ws"
+    _seed_disk(workspace, {"shared": _zero_seed_entry()})
+
     # Process A: bump 5 views, flush, then bump 3 more
     # Meanwhile simulate "process B" by editing disk directly between flushes
-    telem = SkillTelemetry(tmp_path / "ws")
+    telem = SkillTelemetry(workspace)
     for _ in range(5):
         telem.bump("shared", "view")
     telem.flush()
     # External process bumps disk by 7 (simulating another nanobot writing)
-    path = tmp_path / "ws" / "skills" / ".telemetry.json"
+    path = workspace / "skills" / ".telemetry.json"
     on_disk = json.loads(path.read_text())
     on_disk["entries"]["shared"]["views"] += 7
     path.write_text(json.dumps(on_disk))
