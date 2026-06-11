@@ -2,7 +2,7 @@
 
 > **文档性质**：5-milestone 路线图 / 决策记录。本身**不是单个 spec**，而是把"全都要"这一个超大需求拆成可独立 spec→plan→implementation 的多周期总览。每个 milestone 自己有 spec、plan、progress 文档，本文负责导航和锁顺序。
 >
-> **状态**：路线图已锁定（2026-06-11）。M1 正在 brainstorming 阶段。
+> **状态**：路线图已锁定（2026-06-11）。**M1 已完成（2026-06-11，PR #1 + #2）**。M2 / M4 可启动。
 >
 > **目录约定**：本系列所有文档入库于 `docs/hermes-evolution/`，与 `docs/superpowers/`（本地、gitignore）区分。
 >
@@ -26,6 +26,7 @@
 |---|---|---|
 | 2026-06-10 | 接受调研报告 §5 的两个澄清点：(1) 运行时回路 + 离线管线都做；(2) 进入 brainstorming + writing-plans 流程 | 由用户在 chat 中确认 |
 | 2026-06-11 | 锁定 5-milestone 拆解（M1→M5），M2 与 M4 在 M1 完成后可并行 | 用户选项 A |
+| 2026-06-11 | **M1 完成并合入 main**（PR #1 33-task plan + 4 follow-ups + 2 YELLOW 修复；PR #2 `.agent/memory/` 记忆固化） | 见 `retros/m1-foundations.md` |
 
 ## 3. Milestone 总览
 
@@ -37,7 +38,7 @@ M1 Foundations  ──┬──> M2 skill_manage ──> M3 Curator
 
 | ID | 范围 | 依赖 | 当前状态 | spec | plan | progress |
 |---|---|---|---|---|---|---|
-| **M1** | provenance 字段 + skill 目录分层 + telemetry 计数 + auxiliary provider 配置形态 | — | brainstorming 中 | `specs/m1-foundations.md` *(待写)* | — | — |
+| **M1** | provenance 字段 + skill 目录分层 + telemetry 计数 + auxiliary provider 配置形态 | — | ✅ 已完成 (2026-06-11, PR #1+#2) | [`specs/m1-foundations.md`](specs/m1-foundations.md) | [`plans/m1-foundations.md`](plans/m1-foundations.md) | [`retros/m1-foundations.md`](retros/m1-foundations.md) |
 | **M2** | `skill_manage` 工具(create/patch/edit/delete) + 触发规则 + Dream 整合点 | M1 | 待启动 | `specs/m2-skill-manage.md` | `plans/m2-skill-manage.md` | — |
 | **M3** | Curator Phase 1(确定性状态机) + Phase 2(aux-model 审议) + dry-run + `/curator` 命令 + protect-list | M2 | 待启动 | `specs/m3-curator.md` | `plans/m3-curator.md` | — |
 | **M4** | DSPy + GEPA 接入 + 评测数据 4 级分层 + LLM-as-judge rubric + 5 道闸门的前 3 道（测试/大小/cache 兼容） | M1 | 待启动 | `specs/m4-offline-skeleton.md` | `plans/m4-offline-skeleton.md` | — |
@@ -63,7 +64,7 @@ M1 Foundations  ──┬──> M2 skill_manage ──> M3 Curator
 
 *（每个 milestone 完成后，在此追加 200–500 字回顾：实际落地与设计的偏差、遇到的坑、对后续 milestone 的影响。）*
 
-- M1: *待完成*
+- M1: ✅ 已完成 — 详见 [`retros/m1-foundations.md`](retros/m1-foundations.md)
 - M2: *待启动*
 - M3: *待启动*
 - M4: *待启动*
@@ -83,7 +84,7 @@ M1 Foundations  ──┬──> M2 skill_manage ──> M3 Curator
 
 - [x] 0. 调研完成（[hermes-self-evolution.md](../../hermes-self-evolution.md)）
 - [x] 1. 范围拆解 + milestone 顺序锁定（本文档）
-- [ ] 2. **M1 brainstorming（进行中）**
-- [ ] 3. M1 spec → plan → 实施
-- [ ] 4. M2 / M4 并行启动
+- [x] 2. M1 brainstorming
+- [x] 3. M1 spec → plan → 实施（2026-06-11 合入 main）
+- [ ] 4. **M2 / M4 并行启动（下一步）**
 - [ ] 5. M3 / M5
