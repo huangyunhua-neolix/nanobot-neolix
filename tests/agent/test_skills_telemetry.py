@@ -494,3 +494,35 @@ def test_restart_does_not_double_counters(tmp_path: Path) -> None:
     s2.flush()
     data = json.loads((workspace / "skills" / ".telemetry.json").read_text())
     assert data["entries"]["foo"]["views"] == 5  # unchanged, not 10
+
+
+def test_concurrent_threaded_bumps_no_loss(tmp_path: Path) -> None:
+    import threading
+    telem = SkillTelemetry(tmp_path / "ws")
+    telem.reconcile([_make_entry("foo")])
+
+    def worker():
+        for _ in range(1000):
+            telem.bump("foo", "view")
+
+    threads = [threading.Thread(target=worker) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    telem.flush()
+    data = json.loads((tmp_path / "ws" / "skills" / ".telemetry.json").read_text())
+    assert data["entries"]["foo"]["views"] == 10_000
+
+
+async def test_asyncio_concurrent_bumps_no_loss(tmp_path: Path) -> None:
+    import asyncio
+    telem = SkillTelemetry(tmp_path / "ws")
+    telem.reconcile([_make_entry("foo")])
+    await asyncio.gather(*[
+        asyncio.to_thread(telem.bump, "foo", "view")
+        for _ in range(100)
+    ])
+    telem.flush()
+    data = json.loads((tmp_path / "ws" / "skills" / ".telemetry.json").read_text())
+    assert data["entries"]["foo"]["views"] == 100
