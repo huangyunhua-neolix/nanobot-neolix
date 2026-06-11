@@ -365,6 +365,22 @@ class Config(BaseSettings):
                 raise ValueError(f"fallback_models entry {fallback!r} not found in model_presets")
         return self
 
+    @model_validator(mode="after")
+    def _validate_auxiliary_preset(self) -> "Config":
+        """Spec §6 — when agents.defaults.auxiliary.modelPreset is set, it MUST
+        reference an existing entry under `modelPresets`. Silent fallback only
+        happens when the field is unset (None)."""
+        preset = self.agents.defaults.auxiliary.model_preset
+        if preset is None:
+            return self
+        if preset not in self.model_presets:
+            raise ValueError(
+                f"agents.defaults.auxiliary.modelPreset='{preset}' "
+                f"does not match any entry under modelPresets "
+                f"(known: {sorted(self.model_presets)})"
+            )
+        return self
+
     def resolve_default_preset(self) -> ModelPresetConfig:
         """Return the implicit `default` preset from agents.defaults fields."""
         d = self.agents.defaults
