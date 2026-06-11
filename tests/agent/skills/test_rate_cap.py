@@ -108,3 +108,53 @@ async def test_runtime_state_none_is_back_compat_noop() -> None:
         # runtime_state intentionally omitted → defaults to None
     ))
     assert result.final_content == "done"
+
+
+# --- t-08 addition: rate-limited dispatcher path -----------------------------
+
+
+from pathlib import Path  # noqa: E402
+
+from nanobot.agent.tools.skill_manage import SkillManageTool  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_create_rate_limited_after_5_in_one_iteration(
+    tmp_path: Path,
+) -> None:
+    """6th create within a single iteration → `rate_limited` reject."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    runtime_state = SimpleNamespace(_runtime_vars={"skill_manage.mutations_this_turn": 0})
+    config = type(
+        "_Cfg", (), {
+            "skill_manage": type(
+                "_SM", (), {
+                    "max_mutations_per_turn": 5,
+                    "max_body_bytes": 65536,
+                    "max_agent_skills": 200,
+                    "max_description_len": 280,
+                },
+            )(),
+        },
+    )()
+    tool = SkillManageTool(
+        workspace=workspace,
+        telemetry=None,
+        provenance_tag="agent",
+        config=config,
+        runtime_state=runtime_state,
+    )
+    accepted = 0
+    rejected: list[dict] = []
+    for i in range(6):
+        r = await tool.execute(verb="create", name=f"s{i}", body="x")
+        if r["ok"]:
+            accepted += 1
+        else:
+            rejected.append(r)
+    assert accepted == 5
+    assert len(rejected) == 1
+    assert rejected[0]["error_code"] == "rate_limited"
+    # Counter MUST NOT have been incremented past max on the rejected call.
+    assert runtime_state._runtime_vars["skill_manage.mutations_this_turn"] == 5

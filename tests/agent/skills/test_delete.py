@@ -146,3 +146,108 @@ def test_reconcile_no_tombstone_no_reset(tmp_workspace: Path) -> None:
     assert entry_after["entry_created_at"] == original_created_at
     assert "tombstone" not in entry_after
     assert entry_after["origin"] == "user"
+
+
+# --- t-08 additions: full delete-verb pipeline coverage --------------------
+
+
+import pytest  # noqa: E402  (module-level test below tolerates late import)
+
+from nanobot.agent.tools.skill_manage import SkillManageTool  # noqa: E402
+
+
+def _make_tool(tmp_workspace: Path, telemetry=None) -> SkillManageTool:
+    config = type(
+        "_Cfg", (), {
+            "skill_manage": type(
+                "_SM", (), {
+                    "max_mutations_per_turn": 1000,
+                    "max_body_bytes": 65536,
+                    "max_agent_skills": 200,
+                    "max_description_len": 280,
+                },
+            )(),
+        },
+    )()
+    return SkillManageTool(
+        workspace=tmp_workspace,
+        telemetry=telemetry,
+        provenance_tag="agent",
+        config=config,
+        runtime_state=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_skill_md_and_dir(tmp_workspace: Path) -> None:
+    tool = _make_tool(tmp_workspace)
+    await tool.execute(verb="create", name="zap", body="x")
+    skill_md = tmp_workspace / "skills" / "agent" / "zap" / "SKILL.md"
+    skill_dir = skill_md.parent
+    assert skill_md.exists()
+    r = await tool.execute(verb="delete", name="zap")
+    assert r["ok"] is True
+    assert not skill_md.exists()
+    # Best-effort dir cleanup — empty dir + lock should be gone.
+    assert not skill_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_idempotent_or_not_found(tmp_workspace: Path) -> None:
+    """Per t-08 chosen semantics: missing skill → `not_found` reject
+    (no telemetry mutation, no lock errors). Documented choice."""
+    tool = _make_tool(tmp_workspace)
+    r = await tool.execute(verb="delete", name="ghost")
+    assert r["ok"] is False
+    assert r["error_code"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_delete_tier_locked_for_non_agent_tier(
+    tmp_workspace: Path,
+) -> None:
+    user_dir = tmp_workspace / "skills" / "ours"
+    user_dir.mkdir(parents=True)
+    (user_dir / "SKILL.md").write_text(
+        "---\norigin: user\n---\nbody\n", encoding="utf-8"
+    )
+    tool = _make_tool(tmp_workspace)
+    r = await tool.execute(verb="delete", name="ours")
+    assert r["ok"] is False
+    assert r["error_code"] == "tier_locked"
+
+
+@pytest.mark.asyncio
+async def test_delete_bumps_tombstone_then_reuse_zeroes(
+    tmp_workspace: Path,
+) -> None:
+    """Close-loop with t-04: delete → tombstone, reconcile-on-recreate → zero."""
+    telem = SkillTelemetry(tmp_workspace)
+    tool = _make_tool(tmp_workspace, telemetry=telem)
+    await tool.execute(verb="create", name="loopy", body="orig")
+    telem.reconcile([_make_entry("loopy", "agent",
+                                 path=str(tmp_workspace / "skills/agent/loopy/SKILL.md"))])
+    for _ in range(3):
+        telem.bump("loopy", "view")
+    telem.flush()
+    snap_before = telem.snapshot()
+    assert snap_before["entries"]["loopy"]["views"] == 3
+
+    # Delete via tool — should bump kind=delete (tombstone).
+    r = await tool.execute(verb="delete", name="loopy")
+    assert r["ok"], r
+    telem.flush()
+    snap_after = telem.snapshot()
+    assert snap_after["entries"]["loopy"]["tombstone"] is True
+    # Counters are still monotonic at this point.
+    assert snap_after["entries"]["loopy"]["views"] == 3
+
+    # Recreate — reconcile clears the tombstone & zeroes counters.
+    await tool.execute(verb="create", name="loopy", body="reborn")
+    telem.reconcile([_make_entry(
+        "loopy", "agent",
+        path=str(tmp_workspace / "skills/agent/loopy/SKILL.md"),
+    )])
+    snap_reused = telem.snapshot()
+    assert snap_reused["entries"]["loopy"]["views"] == 0
+    assert "tombstone" not in snap_reused["entries"]["loopy"]

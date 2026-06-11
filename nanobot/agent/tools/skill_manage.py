@@ -28,6 +28,7 @@ NOTE: :class:`SkillManageError` is reused from ``nanobot.agent._atomic_io``
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Final
 
@@ -39,6 +40,21 @@ from nanobot.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
+
+
+@dataclass(frozen=True)
+class _RuntimeConfigView:
+    """Snapshot of the four SkillManageConfig knobs the dispatcher needs.
+
+    Built per ``execute()`` call so a hot-reload of the running config
+    takes effect on the next mutation, but the dispatcher itself never
+    reads the config more than once per call (M2 §3.7 stability guarantee).
+    """
+
+    max_mutations_per_turn: int
+    max_body_bytes: int
+    max_agent_skills: int
+    max_description_len: int
 
 
 class SkillManageVerb(StrEnum):
@@ -59,6 +75,7 @@ class _ErrorCode:
 
     INVALID_NAME: Final[str] = "invalid_name"
     INVALID_VERB: Final[str] = "invalid_verb"
+    INVALID_ARGS: Final[str] = "invalid_args"
     BODY_TOO_LARGE: Final[str] = "body_too_large"
     DESCRIPTION_TOO_LONG: Final[str] = "description_too_long"
     NOT_IMPLEMENTED: Final[str] = "not_implemented"
@@ -67,7 +84,15 @@ class _ErrorCode:
     TIER_LOCKED: Final[str] = "tier_locked"
     NOT_FOUND: Final[str] = "not_found"
     QUOTA_EXCEEDED: Final[str] = "quota_exceeded"
-    RATE_CAPPED: Final[str] = "rate_capped"
+    RATE_LIMITED: Final[str] = "rate_limited"
+    RATE_CAPPED: Final[str] = "rate_capped"  # Legacy alias kept for reviewers
+    LOCK_BUSY: Final[str] = "lock_busy"
+    PATH_ESCAPE: Final[str] = "path_escape"
+    ATOMIC_WRITE_FAILED: Final[str] = "atomic_write_failed"
+    SEARCH_NOT_FOUND: Final[str] = "search_not_found"
+    SEARCH_AMBIGUOUS: Final[str] = "search_ambiguous"
+    CORRUPT_SKILL: Final[str] = "corrupt_skill"
+    INTERNAL_ERROR: Final[str] = "internal_error"
 
 
 # --- Validation primitives ----------------------------------------------------
@@ -271,21 +296,32 @@ class SkillManageTool(Tool):
         workspace: Any,
         telemetry: Any,
         provenance_tag: str = "agent",
+        config: Any = None,
+        runtime_state: Any = None,
     ) -> None:
         _validate_provenance_tag(provenance_tag)
         self._workspace_ = workspace
         self._telemetry_ = telemetry
         self._provenance_tag_ = provenance_tag
+        self._config_ = config
+        self._runtime_state_ = runtime_state
 
     @classmethod
     def create(cls, ctx: ToolContext) -> Tool:
         # Read provenance_tag exactly once at construction time. Subsequent
         # ctx.provenance_tag mutations must not bleed into this instance.
         captured_tag = getattr(ctx, "provenance_tag", "agent")
+        # Telemetry / runtime_state / config travel as ctx attributes when
+        # available; tests may construct the tool directly with kwargs.
+        telemetry = getattr(ctx, "telemetry", None)
+        config = getattr(ctx, "config", None)
+        runtime_state = getattr(ctx, "runtime_state", None)
         return cls(
             workspace=getattr(ctx, "workspace", None),
-            telemetry=None,  # t-08 wires the real SkillsTelemetry instance
+            telemetry=telemetry,
             provenance_tag=captured_tag,
+            config=config,
+            runtime_state=runtime_state,
         )
 
     @classmethod
@@ -309,19 +345,60 @@ class SkillManageTool(Tool):
         # Mutates files under workspace; must not run alongside other writers.
         return True
 
-    async def execute(self, **kwargs: Any) -> Any:
-        """Validate inputs and return a canonical JSON envelope.
+    # --- Rate-cap helpers (M2 §3.7 / plan §t-08 step A) ---------------------
+    #
+    # SYNCHRONOUS, no `await`. Consults & mutates
+    # `runtime_state._runtime_vars["skill_manage.mutations_this_turn"]`
+    # ONCE per call. On reject, NO telemetry bump, NO disk write.
 
-        Until t-08 lands the verb pipelines this returns
-        ``_reject("not_implemented")`` once validation passes, proving the
-        cheap-reject layer is end-to-end wired through the tool dispatch.
+    _RATE_CAP_KEY: Final[str] = "skill_manage.mutations_this_turn"
+
+    def _resolve_skill_manage_config(self) -> "_RuntimeConfigView":
+        """Pull the four knobs off the wired config; fall back to spec
+        defaults so unit tests that omit `config=` still exercise real
+        bounds rather than infinity.
         """
+        cfg = getattr(self._config_, "skill_manage", None)
+        if cfg is None and self._config_ is not None:
+            cfg = self._config_
+        return _RuntimeConfigView(
+            max_mutations_per_turn=getattr(cfg, "max_mutations_per_turn", 5),
+            max_body_bytes=getattr(cfg, "max_body_bytes", 65536),
+            max_agent_skills=getattr(cfg, "max_agent_skills", 200),
+            max_description_len=getattr(cfg, "max_description_len", 280),
+        )
+
+    def _increment_mutation_counter_or_reject(
+        self,
+        runtime_state: Any,
+        max_mutations_per_turn: int,
+    ) -> bool:
+        """Synchronous gate. Returns True on accept, False on rate-cap reject.
+
+        The orchestrator (`AgentRunner._run_core`) resets the counter at the
+        TOP of each iteration, so this method only ever has to compare
+        against a value within `[0, max_mutations_per_turn]`.
+        """
+        if runtime_state is None:
+            return True  # back-compat: harnesses without runtime_state skip
+        rt_vars = getattr(runtime_state, "_runtime_vars", None)
+        if rt_vars is None:
+            return True
+        current = rt_vars.get(self._RATE_CAP_KEY, 0)
+        if current >= max_mutations_per_turn:
+            return False
+        rt_vars[self._RATE_CAP_KEY] = current + 1
+        return True
+
+    async def execute(self, **kwargs: Any) -> Any:
+        """Dispatch to the appropriate verb pipeline (M2 §4.3)."""
+        from nanobot.agent.tools import skill_manage_ops as _ops
+
         verb_raw = kwargs.get("verb", "")
         name = kwargs.get("name", "")
 
-        # Verb is the most informative thing for any reject envelope; resolve
-        # it first so the caller always sees the verb they sent (or empty if
-        # malformed).
+        # Verb resolution first (so reject envelopes always carry the verb
+        # the caller sent, or empty if malformed).
         try:
             verb = SkillManageVerb(verb_raw)
         except ValueError:
@@ -332,36 +409,90 @@ class SkillManageTool(Tool):
                 f"unknown verb: {verb_raw!r}",
             )
 
-        # Name validation — cheap, no state.
+        cfg = self._resolve_skill_manage_config()
+
+        # --- Step A: rate-cap gate (synchronous, before cheap-rejects) -----
+        if not self._increment_mutation_counter_or_reject(
+            self._runtime_state_, cfg.max_mutations_per_turn,
+        ):
+            return _reject(
+                verb.value, str(name), _ErrorCode.RATE_LIMITED,
+                f"max_mutations_per_turn={cfg.max_mutations_per_turn} reached",
+            )
+
+        # --- Step B: cheap-rejects (no on-disk state) ----------------------
         try:
             _validate_skill_name(name)
         except SkillManageError as e:
             return _reject(verb.value, str(name), e.error_code, str(e))
 
-        # Description / body cheap-reject (description is char-counted; body
-        # is UTF-8 byte-counted). Limits come from SkillManageConfig (t-05),
-        # which is wired by t-08 — until then we use the documented spec
-        # defaults so the placeholder still exercises real bounds.
         description = kwargs.get("description")
         if isinstance(description, str):
             try:
-                _check_description_len(description, max_description_len=280)
+                _check_description_len(
+                    description, max_description_len=cfg.max_description_len,
+                )
             except SkillManageError as e:
                 return _reject(verb.value, name, e.error_code, str(e))
 
         body = kwargs.get("body")
         if isinstance(body, (str, bytes, bytearray)):
             try:
-                _check_body_size(body, max_body_bytes=65536)
+                _check_body_size(body, max_body_bytes=cfg.max_body_bytes)
             except SkillManageError as e:
                 return _reject(verb.value, name, e.error_code, str(e))
 
-        # Validation passed — verb pipeline (t-08) not yet wired.
+        # --- Step C: verb dispatch ----------------------------------------
+        if self._workspace_ is None:
+            return _reject(
+                verb.value, name, _ErrorCode.INTERNAL_ERROR,
+                "tool has no workspace bound",
+            )
+
+        if verb is SkillManageVerb.CREATE:
+            return _ops.do_create(
+                workspace=self._workspace_,
+                telemetry=self._telemetry_,
+                provenance_tag=self._provenance_tag_,
+                name=name,
+                description=description if isinstance(description, str) else None,
+                body=body if isinstance(body, str) else None,
+                requires=kwargs.get("requires"),
+                max_agent_skills=cfg.max_agent_skills,
+            )
+        if verb is SkillManageVerb.EDIT:
+            return _ops.do_edit(
+                workspace=self._workspace_,
+                telemetry=self._telemetry_,
+                provenance_tag=self._provenance_tag_,
+                name=name,
+                description=description if isinstance(description, str) else None,
+                requires=kwargs.get("requires"),
+                body=body if isinstance(body, str) else None,
+            )
+        if verb is SkillManageVerb.PATCH:
+            return _ops.do_patch(
+                workspace=self._workspace_,
+                telemetry=self._telemetry_,
+                provenance_tag=self._provenance_tag_,
+                name=name,
+                description=description if isinstance(description, str) else None,
+                requires=kwargs.get("requires"),
+                search=kwargs.get("search"),
+                replace=kwargs.get("replace"),
+            )
+        if verb is SkillManageVerb.DELETE:
+            return _ops.do_delete(
+                workspace=self._workspace_,
+                telemetry=self._telemetry_,
+                provenance_tag=self._provenance_tag_,
+                name=name,
+            )
+
+        # Unreachable: enum already enumerated above.
         return _reject(
-            verb.value,
-            name,
-            _ErrorCode.NOT_IMPLEMENTED,
-            "verb pipeline lands in t-08",
+            verb.value, name, _ErrorCode.INVALID_VERB,
+            f"unhandled verb: {verb!r}",
         )
 
 
