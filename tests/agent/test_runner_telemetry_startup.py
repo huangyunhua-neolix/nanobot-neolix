@@ -27,3 +27,34 @@ def test_agent_loop_constructs_telemetry_and_passes_down(tmp_path: Path) -> None
     # The same SkillTelemetry instance must be threaded into both downstream owners.
     assert loop.context.skills.telemetry is loop.telemetry
     assert loop.subagents.telemetry is loop.telemetry
+
+
+def test_reconcile_runs_before_first_consume(tmp_path: Path) -> None:
+    """run() must reconcile telemetry against current skills set BEFORE entering consume loop."""
+    import asyncio
+
+    loop = _make_loop_with_real_deps(tmp_path)
+    (tmp_path / "skills" / "foo").mkdir(parents=True)
+    (tmp_path / "skills" / "foo" / "SKILL.md").write_text("---\nname: foo\n---\n")
+
+    reconcile_called = {"flag": False}
+    real = loop.telemetry.reconcile
+
+    def spy(known, disabled_skills=None):
+        reconcile_called["flag"] = True
+        return real(known, disabled_skills=disabled_skills)
+
+    loop.telemetry.reconcile = spy
+
+    async def driver() -> None:
+        async def quick_stop() -> None:
+            await asyncio.sleep(0.05)
+            loop._running = False
+        await asyncio.gather(loop.run(), quick_stop())
+
+    asyncio.run(driver())
+
+    assert reconcile_called["flag"] is True
+    snap = loop.telemetry.snapshot()
+    assert "foo" in snap["entries"]
+    assert snap["entries"]["foo"]["origin"] == "user"

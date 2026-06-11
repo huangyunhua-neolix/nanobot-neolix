@@ -861,6 +861,12 @@ class AgentLoop:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
         await self._connect_mcp()
+        # M1: reconcile telemetry against the current skills set BEFORE consuming any
+        # inbound message, so origin/shadowed metadata reflects the live filesystem.
+        self.telemetry.reconcile(
+            self.context.skills.list_skills_with_shadows(),
+            disabled_skills=set(self.context.skills.disabled_skills),
+        )
         logger.info("Agent loop started")
 
         while self._running:
