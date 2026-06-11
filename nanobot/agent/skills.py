@@ -157,6 +157,50 @@ class SkillsLoader:
             ]
         return skills
 
+    def list_skills_with_shadows(self) -> list[dict]:
+        """Return one record per visible skill with origin + shadowed_origins.
+
+        Returns dicts shape-compatible with
+        ``nanobot.agent.skills_telemetry.SkillEntry``. Order: ``user`` > ``agent``
+        > ``builtin``; first occurrence is ``effective_origin``, the rest are
+        ``shadowed_origins`` (in user→agent→builtin scan order).
+
+        Disabled skills are filtered out entirely (consistent with
+        ``list_skills`` semantics; the caller can pass these names to
+        ``SkillTelemetry.reconcile`` separately as ``disabled_skills``).
+
+        Contract: this method NEVER calls ``_get_skill_meta`` /
+        ``_check_requirements`` — it must be cheap enough to run at startup
+        before any frontmatter parsing happens.
+        """
+        user_entries = self._skill_entries_from_dir(self.workspace_skills, "workspace")
+        agent_entries = self._entries_from_agent_dir()
+        builtin_entries = (
+            self._skill_entries_from_dir(self.builtin_skills, "builtin")
+            if self.builtin_skills and self.builtin_skills.exists()
+            else []
+        )
+        by_name: dict[str, list[tuple[str, str]]] = {}
+        for e in user_entries:
+            by_name.setdefault(e["name"], []).append(("user", e["path"]))
+        for e in agent_entries:
+            by_name.setdefault(e["name"], []).append(("agent", e["path"]))
+        for e in builtin_entries:
+            by_name.setdefault(e["name"], []).append(("builtin", e["path"]))
+        out: list[dict] = []
+        for name, locs in by_name.items():
+            if name in self.disabled_skills:
+                continue
+            effective_origin, effective_path = locs[0]
+            shadowed = [origin for origin, _p in locs[1:]]
+            out.append({
+                "name": name,
+                "effective_origin": effective_origin,
+                "shadowed_origins": shadowed,
+                "path": effective_path,
+            })
+        return out
+
     def load_skill(self, name: str) -> str | None:
         """
         Load a skill by name.

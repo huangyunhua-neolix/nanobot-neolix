@@ -493,3 +493,50 @@ def test_collision_warning_logged_once_per_loader(
         r for r in loguru_caplog.records if "collision" in r.getMessage().lower()
     ]
     assert len(collisions) == 1
+
+
+def test_list_skills_with_shadows_three_source(tmp_path: Path) -> None:
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    (builtin / "x").mkdir()
+    (builtin / "x" / "SKILL.md").write_text("---\nname: x\n---\nb")
+    (tmp_path / "skills" / "agent" / "x").mkdir(parents=True)
+    (tmp_path / "skills" / "agent" / "x" / "SKILL.md").write_text("---\nname: x\n---\na")
+    (tmp_path / "skills" / "x").mkdir(parents=True)
+    (tmp_path / "skills" / "x" / "SKILL.md").write_text("---\nname: x\n---\nu")
+    (tmp_path / "skills" / "y").mkdir()
+    (tmp_path / "skills" / "y" / "SKILL.md").write_text("---\nname: y\n---\nu")
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin)
+    rows = loader.list_skills_with_shadows()
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["x"]["effective_origin"] == "user"
+    assert set(by_name["x"]["shadowed_origins"]) == {"agent", "builtin"}
+    assert by_name["y"]["effective_origin"] == "user"
+    assert by_name["y"]["shadowed_origins"] == []
+
+
+def test_list_skills_with_shadows_respects_disabled(tmp_path: Path) -> None:
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    (tmp_path / "skills" / "foo").mkdir(parents=True)
+    (tmp_path / "skills" / "foo" / "SKILL.md").write_text("---\nname: foo\n---\n")
+    (tmp_path / "skills" / "bar").mkdir()
+    (tmp_path / "skills" / "bar" / "SKILL.md").write_text("---\nname: bar\n---\n")
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin, disabled_skills={"bar"})
+    rows = loader.list_skills_with_shadows()
+    names = {r["name"] for r in rows}
+    assert names == {"foo"}
+
+
+def test_list_skills_with_shadows_does_not_call_get_skill_meta(
+    tmp_path: Path, monkeypatch
+) -> None:
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    (tmp_path / "skills" / "foo").mkdir(parents=True)
+    (tmp_path / "skills" / "foo" / "SKILL.md").write_text("---\nname: foo\n---\n")
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin)
+    calls: list = []
+    monkeypatch.setattr(loader, "_get_skill_meta", lambda n: calls.append(n) or {})
+    loader.list_skills_with_shadows()
+    assert calls == []  # MUST NOT touch frontmatter
