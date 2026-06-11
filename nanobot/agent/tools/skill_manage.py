@@ -290,6 +290,13 @@ class SkillManageTool(Tool):
     Google-style "private mutable bound at construction" convention.
     """
 
+    # Loader scope visibility (M2 §t-13): main agent (`core`), subagent runtime
+    # (`subagent`), and Dream / memory consolidation registry (`memory`). The
+    # production scope literal for Dream is `"memory"` (see filesystem.py,
+    # test_dream_tools.py); the M2 spec colloquially calls this "dream scope"
+    # but the loader matches `"memory"` exactly.
+    _scopes = {"core", "subagent", "memory"}
+
     def __init__(
         self,
         *,
