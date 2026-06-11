@@ -30,7 +30,12 @@ def make_provider(
         temperature=0.1,
         reasoning_effort=None,
     )
-    provider.estimate_prompt_tokens.return_value = (10_000, "test")
+    # estimate_prompt_tokens is duck-typed via getattr(provider, "...", None)
+    # in nanobot/utils/helpers.py:510, so it is NOT on the LLMProvider spec.
+    # Direct attribute access (provider.estimate_prompt_tokens.return_value)
+    # would raise AttributeError on spec=True mocks. Direct assignment of a
+    # fresh MagicMock bypasses spec attribute-access enforcement.
+    provider.estimate_prompt_tokens = MagicMock(return_value=(10_000, "test"))
     return provider
 
 
