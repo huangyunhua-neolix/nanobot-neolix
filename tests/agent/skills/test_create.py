@@ -149,16 +149,115 @@ async def test_create_quota_exceeded(
 
 
 @pytest.mark.asyncio
-async def test_create_does_not_bump_telemetry(
+async def test_create_does_not_bump_telemetry_counters(
     tmp_workspace: Path, tool_factory
 ) -> None:
+    """`create` MUST NOT increment view/use/patch counters. Post fix-bump-on-create
+    the entry IS registered (with zero counters) via an immediate
+    `telemetry.reconcile` call so subsequent `bump(kind="patch")` deltas
+    are captured correctly. Counters themselves remain at 0 — that's the
+    actual M1 invariant."""
     telem = SkillTelemetry(tmp_workspace)
     tool = tool_factory(telemetry=telem)
     r = await tool.execute(verb="create", name="newone", body="hello")
     assert r["ok"], r
     snap = telem.snapshot()
-    # `create` MUST NOT register/bump an entry (M1 invariant — that's reconcile's job).
-    assert "newone" not in snap["entries"]
+    entry = snap["entries"]["newone"]
+    assert entry["views"] == 0
+    assert entry["uses"] == 0
+    assert entry["patches"] == 0
+
+
+@pytest.mark.asyncio
+async def test_create_registers_zero_counter_entry_in_telemetry(
+    tmp_workspace: Path, tool_factory
+) -> None:
+    """`create` reconciles the new skill into telemetry immediately so the
+    on-disk `.telemetry.json` has a zero-counter entry with the correct
+    `origin="agent"`. Without this, the first patch's counter delta is
+    lost (see fix-bump-on-create commit message).
+    """
+    import json
+
+    telem = SkillTelemetry(tmp_workspace)
+    tool = tool_factory(telemetry=telem)
+    r = await tool.execute(verb="create", name="foo", body="hello")
+    assert r["ok"], r
+    telemetry_path = tmp_workspace / "skills" / ".telemetry.json"
+    assert telemetry_path.exists(), "reconcile should have written telemetry"
+    data = json.loads(telemetry_path.read_text(encoding="utf-8"))
+    assert "foo" in data["entries"]
+    e = data["entries"]["foo"]
+    assert e["origin"] == "agent"
+    assert e["views"] == 0
+    assert e["uses"] == 0
+    assert e["patches"] == 0
+
+
+@pytest.mark.asyncio
+async def test_first_edit_after_create_increments_disk_counter(
+    tmp_workspace: Path, tool_factory
+) -> None:
+    """Regression for the t-10 surfaced bug: prior to fix-bump-on-create,
+    the FIRST patch on a freshly-created skill was lost on disk because
+    `_rmw_merge(writer="bump")` skipped entries with `disk_entry is None`
+    while flush phase 3 advanced `_last_synced_counts` regardless.
+    """
+    import json
+
+    telem = SkillTelemetry(tmp_workspace)
+    tool = tool_factory(telemetry=telem)
+    r1 = await tool.execute(verb="create", name="foo", body="original\n")
+    assert r1["ok"], r1
+    r2 = await tool.execute(verb="edit", name="foo", body="rewritten\n")
+    assert r2["ok"], r2
+    telem.flush()
+    data = json.loads(
+        (tmp_workspace / "skills" / ".telemetry.json").read_text(encoding="utf-8")
+    )
+    assert data["entries"]["foo"]["patches"] == 1, data["entries"]["foo"]
+
+
+@pytest.mark.asyncio
+async def test_create_telemetry_warn_logged_on_reconcile_failure(
+    tmp_workspace: Path, tool_factory, monkeypatch, caplog
+) -> None:
+    """If `telemetry.reconcile` raises an OPERATIONAL OSError, the create
+    envelope still succeeds (SKILL.md is already on disk) and a single
+    WARNING is emitted on the skill_manage_ops logger.
+    """
+    import logging
+
+    telem = SkillTelemetry(tmp_workspace)
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("simulated EIO from reconcile")
+
+    monkeypatch.setattr(telem, "reconcile", _boom)
+    tool = tool_factory(telemetry=telem)
+    with caplog.at_level(logging.WARNING, logger="nanobot.agent.tools.skill_manage_ops"):
+        r = await tool.execute(verb="create", name="foo", body="hello")
+    assert r["ok"] is True, r
+    # SKILL.md is committed to disk regardless.
+    assert (tmp_workspace / "skills" / "agent" / "foo" / "SKILL.md").exists()
+    assert any(
+        "telemetry.reconcile failed" in rec.getMessage()
+        and rec.levelno == logging.WARNING
+        for rec in caplog.records
+    ), [r.getMessage() for r in caplog.records]
+
+
+@pytest.mark.asyncio
+async def test_create_with_telemetry_none_skips_reconcile(
+    tmp_workspace: Path, tool_factory
+) -> None:
+    """WebUI bypass (M1 invariant) passes `telemetry=None`. The reconcile
+    call must be skipped silently — no AttributeError, no exception.
+    """
+    tool = tool_factory(telemetry=None)
+    r = await tool.execute(verb="create", name="foo", body="hello")
+    assert r["ok"] is True, r
+    assert (tmp_workspace / "skills" / "agent" / "foo" / "SKILL.md").exists()
 
 
 @pytest.mark.asyncio

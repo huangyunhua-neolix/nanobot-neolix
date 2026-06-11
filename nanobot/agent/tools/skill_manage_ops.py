@@ -384,6 +384,49 @@ def do_create(
                             # doesn't trip on phantom `name_exists`.
                             _cleanup_empty_skill_dir(skill_dir)
                             return _map_oserror(exc, "create", name)
+                        # fix-bump-on-create: register the new entry on disk
+                        # immediately via `telemetry.reconcile`. Without this,
+                        # `_rmw_merge(writer="bump")` skips entries with
+                        # `disk_entry is None` while flush phase 3 advances
+                        # `_last_synced_counts` regardless → first patch
+                        # counter for a freshly-created skill is permanently
+                        # lost. Reconcile is the only legitimate creator of
+                        # new on-disk entries (M1 invariant 3).
+                        #
+                        # Lock-order note: telemetry.reconcile internally
+                        # acquires layer-3 (telemetry threading.Lock) and
+                        # layer-4 (telemetry filelock). Both layers are
+                        # numerically higher than layer-2 (held here), so
+                        # ascending acquisition is preserved (spec §8.6).
+                        #
+                        # Failure handling mirrors `_edit_or_patch`: only
+                        # OPERATIONAL OSError is swallowed + WARN-logged.
+                        # The create itself MUST still succeed — the SKILL.md
+                        # is already on disk; telemetry registration failure
+                        # must not surface as a failed create envelope.
+                        if telemetry is not None:
+                            try:
+                                shadows_after = _list_with_shadows(workspace)
+                                known_entries = [
+                                    {
+                                        "name": e["name"],
+                                        "effective_origin": e[
+                                            "effective_origin"
+                                        ],
+                                        "shadowed_origins": list(
+                                            e["shadowed_origins"]
+                                        ),
+                                        "path": e["path"],
+                                    }
+                                    for e in shadows_after
+                                ]
+                                telemetry.reconcile(known_entries)
+                            except OSError as exc:
+                                logger.warning(
+                                    "skill_manage telemetry.reconcile failed "
+                                    "(verb=create, name=%s): %s",
+                                    name, exc,
+                                )
                 except SkillManageError as exc:
                     # Layer-2 failure: clean up the empty dir so subsequent
                     # creates aren't blocked by a phantom name_exists.
@@ -400,8 +443,10 @@ def do_create(
         # so the caller sees a verb-shaped reject rather than a 500.
         return _reject("create", name, "lock_busy", str(exc))
 
-    # Telemetry: do NOT bump on create. Reconcile registers the entry on
-    # the next pass (M1 invariant).
+    # Telemetry: do NOT bump counters on create. Reconcile (called inside
+    # the layer-2 lock above) registers the new entry with zero counters
+    # so the first subsequent patch's counter delta is captured correctly
+    # (fix-bump-on-create).
     return _ok("create", name)
 
 

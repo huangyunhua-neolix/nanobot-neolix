@@ -234,8 +234,11 @@ def test_concurrent_patch_non_overlapping(tmp_workspace: Path) -> None:
     )
     # Pre-register the entry in telemetry so flush(writer="bump") will
     # accept the patch counter (per `_rmw_merge`, writer=="bump" never
-    # creates new entries — only reconcile does). Without this the two
-    # bump-only flushes would no-op against the disk state.
+    # creates new entries — only reconcile does). This pre-seed is
+    # redundant after fix-bump-on-create (do_create now reconciles), but
+    # this test seeds the skill DIRECTLY on disk (bypassing the tool), so
+    # the reconcile-on-create path is not exercised here — the explicit
+    # pre-seed is kept as belt-and-suspenders setup.
     from nanobot.agent.skills_telemetry import SkillTelemetry
 
     telem_seed = SkillTelemetry(tmp_workspace)
