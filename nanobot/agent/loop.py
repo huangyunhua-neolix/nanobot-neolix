@@ -811,6 +811,9 @@ class AgentLoop:
                 concurrent_tools=True,
                 workspace=effective_scope.project_path,
                 session_key=session.key if session else None,
+                # M2 (#67 W1): forward AgentLoop as RuntimeState so the runner
+                # can reset skill_manage.mutations_this_turn at each iteration.
+                runtime_state=self,
                 context_window_tokens=self.context_window_tokens,
                 context_block_limit=self.context_block_limit,
                 provider_retry_mode=self.provider_retry_mode,

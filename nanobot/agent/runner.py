@@ -15,6 +15,7 @@ from loguru import logger
 
 from nanobot.agent.hook import AgentHook, AgentHookContext, AgentRunHookContext
 from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.agent.tools.runtime_state import RuntimeState
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.utils.file_edit_events import (
     StreamingFileEditTracker,
@@ -111,6 +112,10 @@ class AgentRunSpec:
     goal_active_predicate: Callable[[], bool] | None = None
     goal_continue_message: str | None = None
     finalize_on_max_iterations: bool = True
+    # M2 (#67 W1): per-turn rate-cap state lives on the AgentLoop-as-RuntimeState.
+    # Defaults to None for back-compat with non-agent harnesses (tests/integration
+    # code that build AgentRunSpec without a RuntimeState).
+    runtime_state: RuntimeState | None = None
 
 
 @dataclass(slots=True)
@@ -341,6 +346,12 @@ class AgentRunner:
         injection_cycles = 0
 
         for iteration in range(spec.max_iterations):
+            # M2 (#67 W1): reset per-turn skill_manage mutation counter at the
+            # TOP of every iteration so a brand-new turn always starts at 0.
+            # Placing this OUTSIDE the loop would persist the counter across
+            # iterations and break the max_mutations_per_turn spec.
+            if spec.runtime_state is not None:
+                spec.runtime_state._runtime_vars["skill_manage.mutations_this_turn"] = 0
             try:
                 # Keep the persisted conversation untouched. Context governance
                 # may repair or compact historical messages for the model, but
