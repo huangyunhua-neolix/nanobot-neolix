@@ -526,3 +526,41 @@ async def test_asyncio_concurrent_bumps_no_loss(tmp_path: Path) -> None:
     telem.flush()
     data = json.loads((tmp_path / "ws" / "skills" / ".telemetry.json").read_text())
     assert data["entries"]["foo"]["views"] == 100
+
+
+def _mp_bump_worker(workspace_str: str, n: int) -> None:
+    """Top-level (importable by spawn) worker; takes workspace as arg, not fixture."""
+    from pathlib import Path
+
+    from nanobot.agent.skills_telemetry import SkillTelemetry
+
+    telem = SkillTelemetry(Path(workspace_str))
+    telem.reconcile([{
+        "name": "shared",
+        "effective_origin": "user",
+        "shadowed_origins": [],
+        "path": "/x",
+    }])
+    for _ in range(n):
+        telem.bump("shared", "view")
+    telem.flush()
+
+
+def test_multiproc_bumps_via_rmw_no_loss(tmp_path: Path) -> None:
+    import multiprocessing as mp
+
+    ctx = mp.get_context("spawn")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    procs = [
+        ctx.Process(target=_mp_bump_worker, args=(str(workspace), 500))
+        for _ in range(2)
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=30)
+    for p in procs:
+        assert p.exitcode == 0, f"worker process exited with code {p.exitcode}"
+    data = json.loads((workspace / "skills" / ".telemetry.json").read_text())
+    assert data["entries"]["shared"]["views"] == 1000
