@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from nanobot.agent.skills import SkillsLoader
+from nanobot.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
 
 
 def _write_skill(
@@ -397,3 +397,21 @@ def test_get_skill_metadata_handles_yaml_types(tmp_path: Path) -> None:
     assert meta.get("always") is True
     # metadata is a parsed dict, not a JSON string
     assert isinstance(meta.get("metadata"), dict)
+
+
+def test_infer_origin_user(tmp_path: Path) -> None:
+    loader = SkillsLoader(tmp_path)
+    p = tmp_path / "skills" / "foo" / "SKILL.md"
+    assert loader._infer_origin_from_path(p) == "user"
+
+
+def test_infer_origin_agent(tmp_path: Path) -> None:
+    loader = SkillsLoader(tmp_path)
+    p = tmp_path / "skills" / "agent" / "foo" / "SKILL.md"
+    assert loader._infer_origin_from_path(p) == "agent"
+
+
+def test_infer_origin_builtin(tmp_path: Path) -> None:
+    loader = SkillsLoader(tmp_path)
+    p = BUILTIN_SKILLS_DIR / "foo" / "SKILL.md"
+    assert loader._infer_origin_from_path(p) == "builtin"

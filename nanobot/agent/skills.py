@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+from typing import Literal
 
 import yaml
 
@@ -31,6 +32,33 @@ class SkillsLoader:
         self.workspace_skills = workspace / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self.disabled_skills = disabled_skills or set()
+
+    def _infer_origin_from_path(self, path: Path) -> Literal["user", "agent", "builtin"]:
+        """Single inference site for skill physical source (spec §3.1).
+
+        Rules:
+        - <workspace>/skills/agent/*  -> "agent"
+        - <workspace>/skills/*        -> "user"
+        - <builtin_skills>/*          -> "builtin"
+
+        Order matters: check builtin first (covers absolute paths outside the
+        workspace tree); then check the agent subdir under workspace_skills;
+        fall through to "user" for anything else inside workspace_skills (or
+        a path we can't classify, since the caller is expected to only pass
+        in real skill SKILL.md paths).
+        """
+        try:
+            if self.builtin_skills and path.is_relative_to(self.builtin_skills):
+                return "builtin"
+        except (AttributeError, ValueError):
+            pass
+        workspace_agent_dir = self.workspace_skills / "agent"
+        try:
+            if path.is_relative_to(workspace_agent_dir):
+                return "agent"
+        except ValueError:
+            pass
+        return "user"
 
     def _skill_entries_from_dir(self, base: Path, source: str, *, skip_names: set[str] | None = None) -> list[dict[str, str]]:
         if not base.exists():
