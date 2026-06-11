@@ -19,6 +19,7 @@ silently dropped).
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from nanobot.agent.context import ContextBuilder
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.skills_telemetry import SkillTelemetry
 from nanobot.agent.tools.skill_manage import SkillManageTool
+from nanobot.agent.tools.skill_manage_ops import _parse_skill
 
 # ---------------------------------------------------------------------------
 # 1. Functional end-to-end: Dream-tier create writes ``created_by: dream``
@@ -66,7 +68,11 @@ async def test_dream_skill_create_records_dream_provenance(tmp_path: Path) -> No
     skill_md = workspace / "skills" / "agent" / "dreamt-up" / "SKILL.md"
     assert skill_md.exists()
     text = skill_md.read_text(encoding="utf-8")
-    assert "created_by: dream" in text
+    # Use the same parser the production code uses (skill_manage_ops._parse_skill)
+    # so YAML quoting, trailing whitespace, or key ordering changes don't silently
+    # break this contract — we want to assert the *parsed value*, not its rendering.
+    frontmatter, _body = _parse_skill(text)
+    assert frontmatter["created_by"] == "dream"
 
 
 @pytest.mark.asyncio
@@ -122,6 +128,30 @@ def _read_text(rel: str) -> str:
     return (_REPO_ROOT / rel).read_text(encoding="utf-8")
 
 
+def _find_store_attr_chains(rel: str) -> list[str]:
+    """Parse ``rel`` and return ``ast.unparse`` of every ``store = <Attribute>``
+    assignment found anywhere in the module (including nested closures).
+
+    Substring matching on raw source produces confusing failures on innocuous
+    refactors (whitespace, comments, line wrapping); structural AST inspection
+    pins the *shape* of the assignment instead.
+    """
+    tree = ast.parse(_read_text(rel))
+    chains: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not (isinstance(target, ast.Name) and target.id == "store"):
+            continue
+        if not isinstance(node.value, ast.Attribute):
+            continue
+        chains.append(ast.unparse(node.value))
+    return chains
+
+
 def test_context_py_constructs_memory_store_with_telemetry() -> None:
     """``nanobot/agent/context.py`` must construct ``MemoryStore`` with the
     ``telemetry=`` kwarg. Plain ``MemoryStore(workspace)`` without
@@ -141,25 +171,52 @@ def test_context_py_constructs_memory_store_with_telemetry() -> None:
 def test_cli_commands_dream_path_uses_context_memory() -> None:
     """The CLI cron Dream job sources its store from ``agent.context.memory``
     so the telemetry threaded into ContextBuilder reaches build_dream_tools().
+
+    Verified structurally via AST: we look for an ``Assign`` node whose target
+    is ``store`` and whose value is the attribute chain ``agent.context.memory``.
+    This survives whitespace / comment / wrapping changes but still pins the
+    head of the chain (``agent``) and the intermediate node (``context``).
     """
-    text = _read_text("nanobot/cli/commands.py")
-    # Must call build_dream_tools on agent.context.memory — not freshly
-    # construct a MemoryStore that would skip the telemetry hand-off.
-    assert "store = agent.context.memory" in text, (
-        "Dream CLI job must reuse agent.context.memory (carrying telemetry)"
+    rel = "nanobot/cli/commands.py"
+    chains = _find_store_attr_chains(rel)
+    assert "agent.context.memory" in chains, (
+        f"Dream CLI job must contain `store = agent.context.memory` "
+        f"(carrying telemetry); found store-assignments: {chains!r}"
     )
-    assert "store.build_dream_tools()" in text
+    # Also confirm build_dream_tools() is invoked on a `store.` somewhere
+    # in the module (structural rather than textual).
+    tree = ast.parse(_read_text(rel))
+    assert any(
+        isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "build_dream_tools"
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == "store"
+        for n in ast.walk(tree)
+    ), "Dream CLI job must call store.build_dream_tools()"
 
 
 def test_builtin_dream_command_uses_context_memory() -> None:
     """The manual `/dream` command's store must come from
     ``loop.context.memory`` so the AgentLoop's telemetry instance is used.
+
+    Verified structurally via AST (see ``_find_store_attr_chains``).
     """
-    text = _read_text("nanobot/command/builtin.py")
-    assert "store = loop.context.memory" in text, (
-        "/dream builtin command must reuse loop.context.memory (carrying telemetry)"
+    rel = "nanobot/command/builtin.py"
+    chains = _find_store_attr_chains(rel)
+    assert "loop.context.memory" in chains, (
+        f"/dream builtin command must contain `store = loop.context.memory` "
+        f"(carrying telemetry); found store-assignments: {chains!r}"
     )
-    assert "store.build_dream_tools()" in text
+    tree = ast.parse(_read_text(rel))
+    assert any(
+        isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "build_dream_tools"
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == "store"
+        for n in ast.walk(tree)
+    ), "/dream builtin command must call store.build_dream_tools()"
 
 
 def test_agent_loop_passes_telemetry_to_context_builder() -> None:
