@@ -158,3 +158,209 @@ async def test_create_rate_limited_after_5_in_one_iteration(
     assert rejected[0]["error_code"] == "rate_limited"
     # Counter MUST NOT have been incremented past max on the rejected call.
     assert runtime_state._runtime_vars["skill_manage.mutations_this_turn"] == 5
+
+
+# --- t-09 additions: synchronicity + subagent-budget isolation ---------------
+
+import ast  # noqa: E402
+import asyncio  # noqa: E402
+import inspect  # noqa: E402
+
+
+def _make_tool(workspace: Path, runtime_state: SimpleNamespace) -> SkillManageTool:
+    """Helper: build a SkillManageTool wired to the given workspace + state.
+
+    Mirrors the construction used by `test_create_rate_limited_after_5_in_one_iteration`
+    above, factored out so the t-09 tests can stay terse.
+    """
+    config = type(
+        "_Cfg", (), {
+            "skill_manage": type(
+                "_SM", (), {
+                    "max_mutations_per_turn": 5,
+                    "max_body_bytes": 65536,
+                    "max_agent_skills": 200,
+                    "max_description_len": 280,
+                },
+            )(),
+        },
+    )()
+    return SkillManageTool(
+        workspace=workspace,
+        telemetry=None,
+        provenance_tag="agent",
+        config=config,
+        runtime_state=runtime_state,
+    )
+
+
+@pytest.mark.parametrize("sixth_verb", ["edit", "patch", "delete"])
+@pytest.mark.asyncio
+async def test_any_verb_rate_limited_after_5_creates(
+    tmp_path: Path,
+    sixth_verb: str,
+) -> None:
+    """5 successful creates + 6th call of ANY verb → `rate_limited`.
+
+    The rate-cap gate runs BEFORE cheap-rejects (skill_manage.py §Step A,
+    pre-validation, pre-existence-check), so the 6th verb does not need to
+    name an existing skill — it just has to trip the gate.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    runtime_state = SimpleNamespace(_runtime_vars={_RATE_CAP_KEY: 0})
+    tool = _make_tool(workspace, runtime_state)
+
+    for i in range(5):
+        r = await tool.execute(verb="create", name=f"s{i}", body="x")
+        assert r["ok"], f"create #{i} should succeed but got {r!r}"
+    assert runtime_state._runtime_vars[_RATE_CAP_KEY] == 5
+
+    # 6th call: pick verb-appropriate args. Even if the verb would otherwise
+    # cheap-reject (e.g. delete on a non-existent name), the rate-cap gate
+    # MUST fire first.
+    if sixth_verb == "edit":
+        sixth = await tool.execute(verb="edit", name="s0", body="y")
+    elif sixth_verb == "patch":
+        sixth = await tool.execute(
+            verb="patch", name="s0", search="x", replace="z",
+        )
+    else:  # delete
+        sixth = await tool.execute(verb="delete", name="s0")
+
+    assert sixth["ok"] is False
+    assert sixth["error_code"] == "rate_limited", (
+        f"expected rate_limited as 6th verb={sixth_verb!r}, got {sixth!r}"
+    )
+    # Reject path must NOT have bumped the counter further.
+    assert runtime_state._runtime_vars[_RATE_CAP_KEY] == 5
+
+
+@pytest.mark.asyncio
+async def test_reset_then_mixed_verbs_succeed(tmp_path: Path) -> None:
+    """5 creates → manual reset → 5 mixed verbs (edit/patch/delete on existing
+    skills) all succeed. Proves the gate is purely counter-based and does NOT
+    track verb identity.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    runtime_state = SimpleNamespace(_runtime_vars={_RATE_CAP_KEY: 0})
+    tool = _make_tool(workspace, runtime_state)
+
+    # Phase 1: saturate the counter with 5 creates.
+    for i in range(5):
+        r = await tool.execute(verb="create", name=f"s{i}", body="x")
+        assert r["ok"], f"create #{i} unexpectedly rejected: {r!r}"
+    assert runtime_state._runtime_vars[_RATE_CAP_KEY] == 5
+
+    # Simulate AgentRunner._run_core's per-iteration reset (top of for-loop).
+    runtime_state._runtime_vars[_RATE_CAP_KEY] = 0
+
+    # Phase 2: 5 mixed-verb mutations on the existing skills, all should pass
+    # both the rate-cap gate and verb pipelines.
+    mixed: list[dict] = []
+    mixed.append(await tool.execute(verb="edit", name="s0", body="yy"))
+    mixed.append(
+        await tool.execute(verb="patch", name="s1", search="x", replace="z")
+    )
+    mixed.append(await tool.execute(verb="delete", name="s2"))
+    mixed.append(await tool.execute(verb="edit", name="s3", body="qq"))
+    mixed.append(await tool.execute(verb="delete", name="s4"))
+
+    for idx, r in enumerate(mixed):
+        assert r["ok"], f"mixed-verb call #{idx} rejected: {r!r}"
+    assert runtime_state._runtime_vars[_RATE_CAP_KEY] == 5
+
+
+@pytest.mark.asyncio
+async def test_concurrent_gather_at_counter_4_one_winner(tmp_path: Path) -> None:
+    """Two parallel `asyncio.gather` tasks starting from counter=4 →
+    exactly one `ok=True` and one `rate_limited`.
+
+    This locks down the synchronicity invariant: the read+check+increment
+    sequence inside `_increment_mutation_counter_or_reject` does NOT
+    `await`, so a single-threaded asyncio loop cannot interleave them, and
+    only one of the two tasks can observe `current=4` before incrementing.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    runtime_state = SimpleNamespace(_runtime_vars={_RATE_CAP_KEY: 4})
+    tool = _make_tool(workspace, runtime_state)
+
+    # Two distinct names so the verb pipelines themselves cannot interfere
+    # (each grabs a different name-lock); the only contended resource is the
+    # rate-cap counter.
+    call1 = tool.execute(verb="create", name="alpha", body="a")
+    call2 = tool.execute(verb="create", name="beta", body="b")
+    r1, r2 = await asyncio.gather(call1, call2)
+
+    oks = [r for r in (r1, r2) if r["ok"]]
+    rejects = [r for r in (r1, r2) if not r["ok"]]
+    assert len(oks) == 1, f"expected exactly one winner, got {oks!r}"
+    assert len(rejects) == 1, f"expected exactly one reject, got {rejects!r}"
+    assert rejects[0]["error_code"] == "rate_limited"
+    # Final counter == 5 (the lone successful increment).
+    assert runtime_state._runtime_vars[_RATE_CAP_KEY] == 5
+
+
+def test_increment_helper_has_no_await() -> None:
+    """Static gate: `_increment_mutation_counter_or_reject` MUST be a
+    plain synchronous function with NO `await` expressions. An accidental
+    `await` (e.g. someone refactoring to use an async lock) would re-open
+    the race window the helper is meant to close.
+    """
+    src = inspect.getsource(
+        SkillManageTool._increment_mutation_counter_or_reject
+    )
+    tree = ast.parse(src.lstrip())  # lstrip to drop leading method indent
+    awaits = [n for n in ast.walk(tree) if isinstance(n, ast.Await)]
+    assert awaits == [], (
+        "_increment_mutation_counter_or_reject must contain no `await` "
+        f"expressions; found {len(awaits)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_subagent_independent_quota(tmp_path: Path) -> None:
+    """Subagent (and grandchild) get a FRESH per-turn quota — the parent's
+    counter is not inherited or shared. Each tier runs the full 5-mutation
+    budget independently; the parent's counter remains untouched.
+    """
+    # --- Parent: 4 mutations (under the cap) -------------------------------
+    parent_ws = tmp_path / "parent_ws"
+    parent_ws.mkdir()
+    parent_state = SimpleNamespace(_runtime_vars={_RATE_CAP_KEY: 0})
+    parent_tool = _make_tool(parent_ws, parent_state)
+    for i in range(4):
+        r = await parent_tool.execute(verb="create", name=f"p{i}", body="x")
+        assert r["ok"], f"parent create #{i} rejected: {r!r}"
+    assert parent_state._runtime_vars[_RATE_CAP_KEY] == 4
+
+    # --- Subagent spawn: a FRESH RuntimeState (NOT shared with parent). ----
+    # In production this is the contract `subagent.py` (t-11) must honour;
+    # here we exercise the RuntimeState contract directly.
+    sub_ws = tmp_path / "sub_ws"
+    sub_ws.mkdir()
+    sub_state = SimpleNamespace(_runtime_vars={_RATE_CAP_KEY: 0})
+    assert sub_state is not parent_state
+    assert sub_state._runtime_vars is not parent_state._runtime_vars
+
+    sub_tool = _make_tool(sub_ws, sub_state)
+    for i in range(5):
+        r = await sub_tool.execute(verb="create", name=f"c{i}", body="x")
+        assert r["ok"], f"subagent create #{i} rejected: {r!r}"
+    assert sub_state._runtime_vars[_RATE_CAP_KEY] == 5
+
+    # --- Grandchild spawn: another fresh RuntimeState. ---------------------
+    grand_ws = tmp_path / "grand_ws"
+    grand_ws.mkdir()
+    grand_state = SimpleNamespace(_runtime_vars={_RATE_CAP_KEY: 0})
+    grand_tool = _make_tool(grand_ws, grand_state)
+    for i in range(5):
+        r = await grand_tool.execute(verb="create", name=f"g{i}", body="x")
+        assert r["ok"], f"grandchild create #{i} rejected: {r!r}"
+    assert grand_state._runtime_vars[_RATE_CAP_KEY] == 5
+
+    # Parent counter MUST NOT have moved while children mutated. Confirms
+    # there is no aliasing of `_runtime_vars` across the tier boundary.
+    assert parent_state._runtime_vars[_RATE_CAP_KEY] == 4
