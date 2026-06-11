@@ -118,6 +118,18 @@ class ModelPresetConfig(Base):
         )
 
 
+class AuxiliaryConfig(Base):
+    """Auxiliary provider configuration used by Curator/deliberation paths.
+
+    Spec §6. Points at an existing entry under `modelPresets`. Set to None
+    (the default) to fall back to the agent's main preset. When set but the
+    referenced preset is absent, root-level validation (`Config`) raises a
+    ConfigError at load time — never silently fall back in that case.
+    """
+
+    model_preset: str | None = Field(default=None, alias="modelPreset")
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -167,6 +179,7 @@ class AgentDefaults(Base):
         serialization_alias="consolidationRatio",
     )  # Consolidation target ratio (0.5 = 50% of budget retained after compression)
     dream: DreamConfig = Field(default_factory=DreamConfig)
+    auxiliary: AuxiliaryConfig = Field(default_factory=AuxiliaryConfig)
 
 
 class AgentsConfig(Base):
@@ -350,6 +363,22 @@ class Config(BaseSettings):
         for fallback in self.agents.defaults.fallback_models:
             if isinstance(fallback, str) and fallback not in self.model_presets:
                 raise ValueError(f"fallback_models entry {fallback!r} not found in model_presets")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_auxiliary_preset(self) -> "Config":
+        """Spec §6 — when agents.defaults.auxiliary.modelPreset is set, it MUST
+        reference an existing entry under `modelPresets`. Silent fallback only
+        happens when the field is unset (None)."""
+        preset = self.agents.defaults.auxiliary.model_preset
+        if preset is None:
+            return self
+        if preset not in self.model_presets:
+            raise ValueError(
+                f"agents.defaults.auxiliary.modelPreset='{preset}' "
+                f"does not match any entry under modelPresets "
+                f"(known: {sorted(self.model_presets)})"
+            )
         return self
 
     def resolve_default_preset(self) -> ModelPresetConfig:

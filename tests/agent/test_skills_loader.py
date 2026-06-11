@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from nanobot.agent.skills import SkillsLoader
+from nanobot.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
 
 
 def _write_skill(
@@ -397,3 +397,249 @@ def test_get_skill_metadata_handles_yaml_types(tmp_path: Path) -> None:
     assert meta.get("always") is True
     # metadata is a parsed dict, not a JSON string
     assert isinstance(meta.get("metadata"), dict)
+
+
+def test_infer_origin_user(tmp_path: Path) -> None:
+    loader = SkillsLoader(tmp_path)
+    p = tmp_path / "skills" / "foo" / "SKILL.md"
+    assert loader._infer_origin_from_path(p) == "user"
+
+
+def test_infer_origin_agent(tmp_path: Path) -> None:
+    loader = SkillsLoader(tmp_path)
+    p = tmp_path / "skills" / "agent" / "foo" / "SKILL.md"
+    assert loader._infer_origin_from_path(p) == "agent"
+
+
+def test_infer_origin_builtin(tmp_path: Path) -> None:
+    loader = SkillsLoader(tmp_path)
+    p = BUILTIN_SKILLS_DIR / "foo" / "SKILL.md"
+    assert loader._infer_origin_from_path(p) == "builtin"
+
+
+def test_agent_subdir_not_treated_as_top_level_skill(tmp_path: Path) -> None:
+    # User has <workspace>/skills/agent/foo/SKILL.md
+    skills_dir = tmp_path / "skills"
+    (skills_dir / "agent" / "foo").mkdir(parents=True)
+    (skills_dir / "agent" / "foo" / "SKILL.md").write_text("---\nname: foo\n---\nbody")
+    (skills_dir / "real-user-skill").mkdir()
+    (skills_dir / "real-user-skill" / "SKILL.md").write_text("---\nname: rus\n---\nbody")
+
+    loader = SkillsLoader(tmp_path)
+    names = {e["name"] for e in loader.list_skills(filter_unavailable=False)}
+    # "agent" itself MUST NOT appear as a skill name
+    assert "agent" not in names
+    # The agent-source skill MUST appear under its real name
+    assert "foo" in names
+    assert "real-user-skill" in names
+
+
+def test_entries_from_agent_dir_returns_real_skill_entries(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills" / "agent"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "auto-sum").mkdir()
+    (skills_dir / "auto-sum" / "SKILL.md").write_text("---\nname: auto-sum\n---\nbody")
+    loader = SkillsLoader(tmp_path)
+    entries = loader._entries_from_agent_dir()
+    assert any(e["name"] == "auto-sum" for e in entries)
+    # Source field stays "workspace" per spec §3.1
+    assert all(e["source"] == "workspace" for e in entries)
+
+
+def test_list_skills_priority_user_over_agent_over_builtin(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # All three sources have "summarize"
+    builtin = tmp_path / "_fake_builtin"
+    builtin.mkdir()
+    (builtin / "summarize").mkdir()
+    (builtin / "summarize" / "SKILL.md").write_text(
+        "---\nname: summarize\n---\nbuiltin-body"
+    )
+
+    agent_dir = tmp_path / "skills" / "agent" / "summarize"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "SKILL.md").write_text("---\nname: summarize\n---\nagent-body")
+
+    user_dir = tmp_path / "skills" / "summarize"
+    user_dir.mkdir()
+    (user_dir / "SKILL.md").write_text("---\nname: summarize\n---\nuser-body")
+
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin)
+    entries = loader.list_skills(filter_unavailable=False)
+    names = [e["name"] for e in entries]
+    # exactly one "summarize"; the user copy wins
+    assert names.count("summarize") == 1
+    winner = next(e for e in entries if e["name"] == "summarize")
+    assert winner["path"] == str(user_dir / "SKILL.md")
+
+
+def test_collision_warning_logged_once_per_loader(
+    tmp_path: Path, loguru_caplog
+) -> None:
+    builtin = tmp_path / "_fake_builtin"
+    builtin.mkdir()
+    (builtin / "dup").mkdir()
+    (builtin / "dup" / "SKILL.md").write_text("---\nname: dup\n---\nb")
+    user = tmp_path / "skills" / "dup"
+    user.mkdir(parents=True)
+    (user / "SKILL.md").write_text("---\nname: dup\n---\nu")
+
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin)
+    loader.list_skills()
+    loader.list_skills()
+    loader.list_skills()
+    collisions = [
+        r for r in loguru_caplog.records if "collision" in r.getMessage().lower()
+    ]
+    assert len(collisions) == 1
+
+
+def test_list_skills_with_shadows_three_source(tmp_path: Path) -> None:
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    (builtin / "x").mkdir()
+    (builtin / "x" / "SKILL.md").write_text("---\nname: x\n---\nb")
+    (tmp_path / "skills" / "agent" / "x").mkdir(parents=True)
+    (tmp_path / "skills" / "agent" / "x" / "SKILL.md").write_text("---\nname: x\n---\na")
+    (tmp_path / "skills" / "x").mkdir(parents=True)
+    (tmp_path / "skills" / "x" / "SKILL.md").write_text("---\nname: x\n---\nu")
+    (tmp_path / "skills" / "y").mkdir()
+    (tmp_path / "skills" / "y" / "SKILL.md").write_text("---\nname: y\n---\nu")
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin)
+    rows = loader.list_skills_with_shadows()
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["x"]["effective_origin"] == "user"
+    assert set(by_name["x"]["shadowed_origins"]) == {"agent", "builtin"}
+    assert by_name["y"]["effective_origin"] == "user"
+    assert by_name["y"]["shadowed_origins"] == []
+
+
+def test_list_skills_with_shadows_respects_disabled(tmp_path: Path) -> None:
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    (tmp_path / "skills" / "foo").mkdir(parents=True)
+    (tmp_path / "skills" / "foo" / "SKILL.md").write_text("---\nname: foo\n---\n")
+    (tmp_path / "skills" / "bar").mkdir()
+    (tmp_path / "skills" / "bar" / "SKILL.md").write_text("---\nname: bar\n---\n")
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin, disabled_skills={"bar"})
+    rows = loader.list_skills_with_shadows()
+    names = {r["name"] for r in rows}
+    assert names == {"foo"}
+
+
+def test_list_skills_with_shadows_does_not_call_get_skill_meta(
+    tmp_path: Path, monkeypatch
+) -> None:
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    (tmp_path / "skills" / "foo").mkdir(parents=True)
+    (tmp_path / "skills" / "foo" / "SKILL.md").write_text("---\nname: foo\n---\n")
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin)
+    calls: list = []
+    monkeypatch.setattr(loader, "_get_skill_meta", lambda n: calls.append(n) or {})
+    loader.list_skills_with_shadows()
+    assert calls == []  # MUST NOT touch frontmatter
+
+
+def test_telemetry_param_is_keyword_only(tmp_path: Path) -> None:
+    from nanobot.agent.skills_telemetry import SkillTelemetry
+
+    telem = SkillTelemetry(tmp_path / "ws")
+    # Keyword form must work
+    loader = SkillsLoader(tmp_path / "ws", telemetry=telem)
+    assert loader.telemetry is telem
+    # Positional form must raise TypeError (telemetry is keyword-only)
+    with pytest.raises(TypeError):
+        SkillsLoader(tmp_path / "ws", None, None, telem)  # type: ignore[misc]
+
+
+def test_telemetry_default_is_none(tmp_path: Path) -> None:
+    loader = SkillsLoader(tmp_path)
+    assert loader.telemetry is None
+
+
+def test_build_skills_summary_bumps_view_per_returned_skill(tmp_path: Path) -> None:
+    from nanobot.agent.skills_telemetry import SkillTelemetry
+    (tmp_path / "skills" / "foo").mkdir(parents=True)
+    (tmp_path / "skills" / "foo" / "SKILL.md").write_text(
+        "---\nname: foo\ndescription: f\n---\nbody"
+    )
+    (tmp_path / "skills" / "bar").mkdir()
+    (tmp_path / "skills" / "bar" / "SKILL.md").write_text(
+        "---\nname: bar\ndescription: b\n---\nbody"
+    )
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    telem = SkillTelemetry(tmp_path)
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin, telemetry=telem)
+    summary = loader.build_skills_summary()
+    assert "foo" in summary and "bar" in summary
+    snap = telem.snapshot()
+    assert snap["entries"]["foo"]["views"] == 1
+    assert snap["entries"]["bar"]["views"] == 1
+
+
+def test_build_skills_summary_no_bump_when_telemetry_none(tmp_path: Path) -> None:
+    (tmp_path / "skills" / "foo").mkdir(parents=True)
+    (tmp_path / "skills" / "foo" / "SKILL.md").write_text(
+        "---\nname: foo\ndescription: f\n---\n"
+    )
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin, telemetry=None)
+    # Must not raise — physically impossible to bump.
+    loader.build_skills_summary()
+
+
+def test_load_skills_for_context_bumps_use_per_loaded_skill(tmp_path: Path) -> None:
+    from nanobot.agent.skills_telemetry import SkillTelemetry
+    (tmp_path / "skills" / "foo").mkdir(parents=True)
+    (tmp_path / "skills" / "foo" / "SKILL.md").write_text(
+        "---\nname: foo\n---\nfoo-body"
+    )
+    (tmp_path / "skills" / "bar").mkdir()
+    (tmp_path / "skills" / "bar" / "SKILL.md").write_text(
+        "---\nname: bar\n---\nbar-body"
+    )
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    telem = SkillTelemetry(tmp_path)
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin, telemetry=telem)
+    out = loader.load_skills_for_context(["foo", "bar"])
+    assert "foo-body" in out and "bar-body" in out
+    snap = telem.snapshot()
+    assert snap["entries"]["foo"]["uses"] == 1
+    assert snap["entries"]["bar"]["uses"] == 1
+
+
+def test_load_skills_for_context_does_not_bump_missing_skill(tmp_path: Path) -> None:
+    from nanobot.agent.skills_telemetry import SkillTelemetry
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    telem = SkillTelemetry(tmp_path)
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin, telemetry=telem)
+    loader.load_skills_for_context(["does-not-exist"])
+    snap = telem.snapshot()
+    # Per spec §7 row (e): bump only after load success → no entry for missing skill
+    assert "does-not-exist" not in snap["entries"]
+
+
+def test_list_skills_never_bumps(tmp_path: Path) -> None:
+    from nanobot.agent.skills_telemetry import SkillTelemetry
+    (tmp_path / "skills" / "foo").mkdir(parents=True)
+    (tmp_path / "skills" / "foo" / "SKILL.md").write_text("---\nname: foo\n---\n")
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    telem = SkillTelemetry(tmp_path)
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin, telemetry=telem)
+    for _ in range(10):
+        loader.list_skills()
+        loader.list_skills_with_shadows()
+        loader.load_skill("foo")
+    snap = telem.snapshot()
+    # foo never bumped — these methods MUST NOT bump per spec §7 hook table.
+    # Either no entries exist (no bump path was hit) OR every entry has zero counters.
+    assert snap["entries"] == {} or all(
+        e["views"] == 0 and e["uses"] == 0 for e in snap["entries"].values()
+    )

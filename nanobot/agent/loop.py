@@ -23,6 +23,7 @@ from nanobot.agent.hook import AgentHook, CompositeHook
 from nanobot.agent.memory import Consolidator
 from nanobot.agent.progress_hook import AgentProgressHook
 from nanobot.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
+from nanobot.agent.skills_telemetry import SkillTelemetry
 from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.tools.context import RequestContext, bind_request_context, reset_request_context
 from nanobot.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
@@ -266,7 +267,14 @@ class AgentLoop:
         self._last_usage: dict[str, int] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
 
-        self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
+        self.telemetry = SkillTelemetry(workspace)
+        self.telemetry.register_atexit()
+        self.context = ContextBuilder(
+            workspace,
+            timezone=timezone,
+            disabled_skills=disabled_skills,
+            telemetry=self.telemetry,
+        )
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         # One file-read/write tracker per logical session. The tool registry is
@@ -285,6 +293,7 @@ class AgentLoop:
             max_iterations=self.max_iterations,
             max_concurrent_subagents=max_concurrent_subagents,
             llm_wall_timeout_for_session=lambda sk: runner_wall_llm_timeout_s(self.sessions, sk),
+            telemetry=self.telemetry,
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 120
@@ -846,12 +855,23 @@ class AgentLoop:
                 await on_stream_end(resuming=False)
         elif result.stop_reason == "error":
             logger.error("LLM returned error: {}", (result.final_content or "")[:200])
+        # M1: flush telemetry once per turn (no-op when not dirty)
+        try:
+            self.telemetry.flush()
+        except Exception as exc:
+            logger.warning("telemetry flush at turn end failed: {}", exc)
         return result.final_content, result.tools_used, result.messages, result.stop_reason, result.had_injections
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
         await self._connect_mcp()
+        # M1: reconcile telemetry against the current skills set BEFORE consuming any
+        # inbound message, so origin/shadowed metadata reflects the live filesystem.
+        self.telemetry.reconcile(
+            self.context.skills.list_skills_with_shadows(),
+            disabled_skills=set(self.context.skills.disabled_skills),
+        )
         logger.info("Agent loop started")
 
         while self._running:

@@ -14,7 +14,11 @@ def webui_skills_payload(
     disabled_skills: set[str] | None = None,
 ) -> dict[str, Any]:
     """Return agent skills without leaking local filesystem paths."""
-    loader = SkillsLoader(workspace_path, disabled_skills=disabled_skills)
+    loader = SkillsLoader(
+        workspace_path,
+        disabled_skills=disabled_skills,
+        telemetry=None,  # WebUI must never bump counters; spec §7 hook table
+    )
     entries = sorted(
         loader.list_skills(filter_unavailable=False),
         key=lambda entry: (entry.get("source") != "workspace", entry["name"]),
@@ -29,7 +33,11 @@ def webui_skill_detail_payload(
     disabled_skills: set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Return a single skill's safe detail payload."""
-    loader = SkillsLoader(workspace_path, disabled_skills=disabled_skills)
+    loader = SkillsLoader(
+        workspace_path,
+        disabled_skills=disabled_skills,
+        telemetry=None,  # WebUI must never bump counters; spec §7 hook table
+    )
     entries = loader.list_skills(filter_unavailable=False)
     entry = next((item for item in entries if item["name"] == name), None)
     if entry is None:

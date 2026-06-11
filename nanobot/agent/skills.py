@@ -5,8 +5,13 @@ import os
 import re
 import shutil
 from pathlib import Path
+from typing import TYPE_CHECKING, Literal
 
 import yaml
+from loguru import logger
+
+if TYPE_CHECKING:
+    from nanobot.agent.skills_telemetry import SkillTelemetry
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
@@ -26,11 +31,80 @@ class SkillsLoader:
     specific tools or perform certain tasks.
     """
 
-    def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None, disabled_skills: set[str] | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        builtin_skills_dir: Path | None = None,
+        disabled_skills: set[str] | None = None,
+        *,
+        telemetry: "SkillTelemetry | None" = None,
+    ) -> None:
         self.workspace = workspace
         self.workspace_skills = workspace / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self.disabled_skills = disabled_skills or set()
+        self.telemetry = telemetry
+        self._collision_warned = False
+        self._detect_collisions_once()
+
+    def _detect_collisions_once(self) -> None:
+        """Walk all 3 skill sources once and warn about each name collision.
+
+        Order matters: ``(user, agent, builtin)`` — first occurrence wins,
+        rest are reported as "hidden". Idempotent via ``_collision_warned``.
+        """
+        if self._collision_warned:
+            return
+        user = self._skill_entries_from_dir(self.workspace_skills, "workspace")
+        agent = self._entries_from_agent_dir()
+        builtin = (
+            self._skill_entries_from_dir(self.builtin_skills, "builtin")
+            if self.builtin_skills and self.builtin_skills.exists()
+            else []
+        )
+        by_name: dict[str, list[tuple[str, str]]] = {}
+        for src, entries in (("user", user), ("agent", agent), ("builtin", builtin)):
+            for e in entries:
+                by_name.setdefault(e["name"], []).append((src, e["path"]))
+        for name, locs in by_name.items():
+            if len(locs) <= 1:
+                continue
+            _winning_src, winning_path = locs[0]
+            hidden = [p for _src, p in locs[1:]]
+            logger.warning(
+                "Skill name collision: '{}' shadowed at {}, hidden at [{}]",
+                name,
+                winning_path,
+                ", ".join(hidden),
+            )
+        self._collision_warned = True
+
+    def _infer_origin_from_path(self, path: Path) -> Literal["user", "agent", "builtin"]:
+        """Single inference site for skill physical source (spec §3.1).
+
+        Rules:
+        - <workspace>/skills/agent/*  -> "agent"
+        - <workspace>/skills/*        -> "user"
+        - <builtin_skills>/*          -> "builtin"
+
+        Order matters: check builtin first (covers absolute paths outside the
+        workspace tree); then check the agent subdir under workspace_skills;
+        fall through to "user" for anything else inside workspace_skills (or
+        a path we can't classify, since the caller is expected to only pass
+        in real skill SKILL.md paths).
+        """
+        try:
+            if self.builtin_skills and path.is_relative_to(self.builtin_skills):
+                return "builtin"
+        except (AttributeError, ValueError):
+            pass
+        workspace_agent_dir = self.workspace_skills / "agent"
+        try:
+            if path.is_relative_to(workspace_agent_dir):
+                return "agent"
+        except ValueError:
+            pass
+        return "user"
 
     def _skill_entries_from_dir(self, base: Path, source: str, *, skip_names: set[str] | None = None) -> list[dict[str, str]]:
         if not base.exists():
@@ -38,6 +112,8 @@ class SkillsLoader:
         entries: list[dict[str, str]] = []
         for skill_dir in base.iterdir():
             if not skill_dir.is_dir():
+                continue
+            if base == self.workspace_skills and skill_dir.name == "agent":
                 continue
             skill_file = skill_dir / "SKILL.md"
             if not skill_file.exists():
@@ -48,29 +124,93 @@ class SkillsLoader:
             entries.append({"name": name, "path": str(skill_file), "source": source})
         return entries
 
+    def _entries_from_agent_dir(self) -> list[dict[str, str]]:
+        """Scan ``<workspace>/skills/agent/`` as the agent-source slot.
+
+        Entries still report ``source="workspace"`` per spec §3.1 (legacy
+        2-value field untouched for WebUI/CLI back-compat). The 3-value
+        ``origin`` is computed by consumers via ``_infer_origin_from_path``.
+        """
+        agent_dir = self.workspace_skills / "agent"
+        return self._skill_entries_from_dir(agent_dir, "workspace")
+
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         """
-        List all available skills.
+        List all available skills with user > agent > builtin priority.
 
         Args:
             filter_unavailable: If True, filter out skills with unmet requirements.
 
         Returns:
-            List of skill info dicts with 'name', 'path', 'source'.
+            List of skill info dicts with 'name', 'path', 'source'. Each name
+            appears at most once; user > agent > builtin shadow priority.
         """
         skills = self._skill_entries_from_dir(self.workspace_skills, "workspace")
         workspace_names = {entry["name"] for entry in skills}
+        agent_entries = [
+            e for e in self._entries_from_agent_dir()
+            if e["name"] not in workspace_names
+        ]
+        skills.extend(agent_entries)
+        seen = {e["name"] for e in skills}
         if self.builtin_skills and self.builtin_skills.exists():
             skills.extend(
-                self._skill_entries_from_dir(self.builtin_skills, "builtin", skip_names=workspace_names)
+                self._skill_entries_from_dir(
+                    self.builtin_skills, "builtin", skip_names=seen
+                )
             )
-
         if self.disabled_skills:
             skills = [s for s in skills if s["name"] not in self.disabled_skills]
-
         if filter_unavailable:
-            return [skill for skill in skills if self._check_requirements(self._get_skill_meta(skill["name"]))]
+            return [
+                s for s in skills
+                if self._check_requirements(self._get_skill_meta(s["name"]))
+            ]
         return skills
+
+    def list_skills_with_shadows(self) -> list[dict]:
+        """Return one record per visible skill with origin + shadowed_origins.
+
+        Returns dicts shape-compatible with
+        ``nanobot.agent.skills_telemetry.SkillEntry``. Order: ``user`` > ``agent``
+        > ``builtin``; first occurrence is ``effective_origin``, the rest are
+        ``shadowed_origins`` (in user→agent→builtin scan order).
+
+        Disabled skills are filtered out entirely (consistent with
+        ``list_skills`` semantics; the caller can pass these names to
+        ``SkillTelemetry.reconcile`` separately as ``disabled_skills``).
+
+        Contract: this method NEVER calls ``_get_skill_meta`` /
+        ``_check_requirements`` — it must be cheap enough to run at startup
+        before any frontmatter parsing happens.
+        """
+        user_entries = self._skill_entries_from_dir(self.workspace_skills, "workspace")
+        agent_entries = self._entries_from_agent_dir()
+        builtin_entries = (
+            self._skill_entries_from_dir(self.builtin_skills, "builtin")
+            if self.builtin_skills and self.builtin_skills.exists()
+            else []
+        )
+        by_name: dict[str, list[tuple[str, str]]] = {}
+        for e in user_entries:
+            by_name.setdefault(e["name"], []).append(("user", e["path"]))
+        for e in agent_entries:
+            by_name.setdefault(e["name"], []).append(("agent", e["path"]))
+        for e in builtin_entries:
+            by_name.setdefault(e["name"], []).append(("builtin", e["path"]))
+        out: list[dict] = []
+        for name, locs in by_name.items():
+            if name in self.disabled_skills:
+                continue
+            effective_origin, effective_path = locs[0]
+            shadowed = [origin for origin, _p in locs[1:]]
+            out.append({
+                "name": name,
+                "effective_origin": effective_origin,
+                "shadowed_origins": shadowed,
+                "path": effective_path,
+            })
+        return out
 
     def load_skill(self, name: str) -> str | None:
         """
@@ -101,11 +241,15 @@ class SkillsLoader:
         Returns:
             Formatted skills content.
         """
-        parts = [
-            f"### Skill: {name}\n\n{self._strip_frontmatter(markdown)}"
-            for name in skill_names
-            if (markdown := self.load_skill(name))
-        ]
+        parts: list[str] = []
+        for name in skill_names:
+            markdown = self.load_skill(name)
+            if markdown is None:
+                continue
+            parts.append(f"### Skill: {name}\n\n{self._strip_frontmatter(markdown)}")
+            # M1: bump use counter only after successful load (spec §7 row e)
+            if self.telemetry is not None:
+                self.telemetry.bump(name, "use")
         return "\n\n---\n\n".join(parts)
 
     def build_skills_summary(self, exclude: set[str] | None = None) -> str:
@@ -139,6 +283,9 @@ class SkillsLoader:
                 missing = self._get_missing_requirements(meta)
                 suffix = f" (unavailable: {missing})" if missing else " (unavailable)"
                 lines.append(f"- **{skill_name}** — {desc}{suffix}  `{entry['path']}`")
+            # M1: bump view counter, gated on telemetry presence
+            if self.telemetry is not None:
+                self.telemetry.bump(skill_name, "view")
         return "\n".join(lines)
 
     def _get_missing_requirements(self, skill_meta: dict) -> str:
@@ -213,6 +360,8 @@ class SkillsLoader:
             os.environ.get(var) for var in required_env_vars
         )
 
+    # NOTE: M1 spec elevates this to a contract (provenance read entry); keep signature
+    # stable. See docs/hermes-evolution/specs/m1-foundations.md §5/§11.
     def _get_skill_meta(self, name: str) -> dict:
         """Get nanobot metadata for a skill (cached in frontmatter)."""
         raw_meta = self.get_skill_metadata(name) or {}

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from loguru import logger as _loguru_logger
 
 from nanobot.agent.loop import AgentLoop
 from nanobot.bus.queue import MessageBus
@@ -28,7 +30,12 @@ def make_provider(
         temperature=0.1,
         reasoning_effort=None,
     )
-    provider.estimate_prompt_tokens.return_value = (10_000, "test")
+    # estimate_prompt_tokens is duck-typed via getattr(provider, "...", None)
+    # in nanobot/utils/helpers.py:510, so it is NOT on the LLMProvider spec.
+    # Direct attribute access (provider.estimate_prompt_tokens.return_value)
+    # would raise AttributeError on spec=True mocks. Direct assignment of a
+    # fresh MagicMock bypasses spec attribute-access enforcement.
+    provider.estimate_prompt_tokens = MagicMock(return_value=(10_000, "test"))
     return provider
 
 
@@ -91,3 +98,25 @@ def loop_factory(tmp_path):
     def _factory(**kwargs):
         return make_loop(tmp_path, **kwargs)
     return _factory
+
+
+@pytest.fixture
+def loguru_caplog(caplog):
+    """Bridge loguru -> stdlib logging so pytest's caplog can capture records.
+
+    Project uses loguru (`from loguru import logger`), but caplog only sees
+    records routed through stdlib logging. Without this shim, WARNING records
+    emitted via loguru are invisible to caplog.records.
+    """
+    class PropagateHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            logging.getLogger(record.name).handle(record)
+
+    handler_id = _loguru_logger.add(
+        PropagateHandler(), format="{message}", level="WARNING"
+    )
+    caplog.set_level(logging.WARNING)
+    try:
+        yield caplog
+    finally:
+        _loguru_logger.remove(handler_id)
