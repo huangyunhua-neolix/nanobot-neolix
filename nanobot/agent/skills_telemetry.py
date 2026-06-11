@@ -288,11 +288,18 @@ class SkillTelemetry:
         self.flush()
         with self._lock:
             still_dirty = self._dirty
+            # Snapshot _failure_counts inside the lock: `_note_failure`
+            # mutates the dict unlocked (lock-free fast path), so reading
+            # it from this thread without _lock would risk
+            # `RuntimeError: dictionary changed size during iteration`
+            # on the `dict(...)` copy if a peer flush worker is still
+            # alive at shutdown. See review YELLOW-1.
+            failure_counts_snapshot = dict(self._failure_counts)
         if still_dirty:
             logger.warning(
                 "telemetry atexit flush skipped after retry "
                 "(kind=atexit_flush_skipped, failure_counts={})",
-                dict(self._failure_counts),
+                failure_counts_snapshot,
             )
 
     def snapshot(self) -> TelemetrySnapshot:

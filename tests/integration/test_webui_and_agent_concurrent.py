@@ -15,8 +15,6 @@ from pathlib import Path
 
 def _agent_worker(workspace_str: str, iterations: int) -> None:
     """Top-level so it survives `spawn` start-method serialization."""
-    from pathlib import Path
-
     from nanobot.agent.skills_telemetry import SkillTelemetry
 
     workspace = Path(workspace_str)
@@ -41,8 +39,6 @@ def _agent_worker(workspace_str: str, iterations: int) -> None:
 
 
 def _webui_worker(workspace_str: str, iterations: int, results_path: str) -> None:
-    from pathlib import Path
-
     from nanobot.webui.skills_api import webui_skill_detail_payload, webui_skills_payload
 
     workspace = Path(workspace_str)
@@ -70,8 +66,26 @@ def test_webui_calls_do_not_modify_telemetry_file_under_active_agent(tmp_path: P
     )
 
     agent_proc.start()
-    # Give the agent a head start to ensure .telemetry.json exists.
-    time.sleep(0.05)
+    # Wait until the agent has produced its first .telemetry.json before
+    # starting the WebUI worker. A fixed sleep was previously used here
+    # but is flake-prone on loaded CI: spawn-start re-imports nanobot +
+    # filelock + loguru cold, which can exceed 100 ms. If WebUI starts
+    # before the agent's first flush, the test still passes (WebUI
+    # tolerates missing files) but no longer proves what it claims —
+    # "WebUI runs *concurrently with* an active producer". Poll for the
+    # file with a 5 s timeout instead. See review YELLOW-2.
+    telemetry_file = workspace / "skills" / ".telemetry.json"
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if telemetry_file.exists():
+            break
+        if not agent_proc.is_alive():
+            break  # agent died before producing the file — let join surface it
+        time.sleep(0.01)
+    assert telemetry_file.exists(), (
+        "agent failed to produce .telemetry.json within 5s; "
+        "WebUI concurrency window would be empty"
+    )
     webui_proc.start()
 
     agent_proc.join(timeout=60)
