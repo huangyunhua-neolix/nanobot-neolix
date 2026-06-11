@@ -364,3 +364,72 @@ async def test_subagent_independent_quota(tmp_path: Path) -> None:
     # Parent counter MUST NOT have moved while children mutated. Confirms
     # there is no aliasing of `_runtime_vars` across the tier boundary.
     assert parent_state._runtime_vars[_RATE_CAP_KEY] == 4
+
+
+# --- t-11 addition: subagent independent quota via SkillManageTool ----------
+
+
+@pytest.mark.asyncio
+async def test_subagent_skill_manage_tool_independent_quota(
+    tmp_path: Path,
+) -> None:
+    """Spec §5.2.1 (SkillManageTool layer): a spawned subagent's per-turn
+    rate-cap counter is INDEPENDENT of its parent's. Five mutations on the
+    subagent's state succeed, the 6th rate-limits, and the parent's counter
+    is unchanged.
+
+    Companion to `test_subagent_independent_quota` above: that one exercises
+    the RuntimeState contract via `_make_tool`; this one constructs
+    `SkillManageTool` directly with a `subagent:` provenance tag to lock
+    down the tool-level wiring contract that t-11 depends on.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    parent_runtime_state = SimpleNamespace(
+        _runtime_vars={"skill_manage.mutations_this_turn": 3},
+    )
+    sub_runtime_state = SimpleNamespace(
+        _runtime_vars={"skill_manage.mutations_this_turn": 0},
+    )
+
+    config = type(
+        "_Cfg", (), {
+            "skill_manage": type(
+                "_SM", (), {
+                    "max_mutations_per_turn": 5,
+                    "max_body_bytes": 65536,
+                    "max_agent_skills": 200,
+                    "max_description_len": 280,
+                },
+            )(),
+        },
+    )()
+
+    sub_tool = SkillManageTool(
+        workspace=workspace,
+        telemetry=None,
+        provenance_tag="subagent:abcd1234",
+        config=config,
+        runtime_state=sub_runtime_state,
+    )
+
+    accepted = 0
+    rejected: list[dict] = []
+    for i in range(6):
+        r = await sub_tool.execute(verb="create", name=f"s{i}", body="x")
+        if r["ok"]:
+            accepted += 1
+        else:
+            rejected.append(r)
+
+    # 5 succeed on the subagent; 6th rate-limits.
+    assert accepted == 5
+    assert len(rejected) == 1
+    assert rejected[0]["error_code"] == "rate_limited"
+    assert sub_runtime_state._runtime_vars["skill_manage.mutations_this_turn"] == 5
+
+    # Parent's counter is untouched — the two RuntimeStates are isolated.
+    assert parent_runtime_state._runtime_vars[
+        "skill_manage.mutations_this_turn"
+    ] == 3

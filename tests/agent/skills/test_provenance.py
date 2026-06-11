@@ -90,3 +90,94 @@ def test_validate_provenance_tag_rejects_bad_ids():
     for tag in bad:
         with pytest.raises(ValueError):
             _validate_provenance_tag(tag)
+
+
+# --- t-11 additions: subagent provenance tag wiring -------------------------
+
+
+def test_subagent_provenance_tag(tmp_path):
+    """SubagentManager._build_subagent_tool_context stamps the ctx with
+    `subagent:<task_id>`; a SkillManageTool created from that ctx captures
+    the tag write-once. Mutating the parent's ctx afterwards does NOT change
+    the subagent tool's bound tag.
+    """
+    from unittest.mock import MagicMock
+
+    from nanobot.agent.subagent import SubagentManager
+    from nanobot.agent.tools.context import ToolContext
+    from nanobot.agent.tools.skill_manage import SkillManageTool
+    from nanobot.bus.queue import MessageBus
+    from nanobot.providers.base import LLMProvider
+
+    provider = MagicMock(spec=LLMProvider)
+    provider.get_default_model.return_value = "test"
+    sm = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=MessageBus(),
+        model="test",
+        max_tool_result_chars=16_000,
+    )
+
+    task_id = "abcd1234"
+    sub_ctx = sm._build_subagent_tool_context(task_id=task_id)
+    assert sub_ctx.provenance_tag == f"subagent:{task_id}"
+
+    skill_tool = SkillManageTool.create(sub_ctx)
+    assert skill_tool._provenance_tag_ == f"subagent:{task_id}"
+
+    # Mutating an UNRELATED parent ctx must not bleed in.
+    parent_ctx = ToolContext(
+        config=None,
+        workspace=str(tmp_path),
+        provenance_tag="agent",
+    )
+    parent_ctx.provenance_tag = "agent"
+    assert skill_tool._provenance_tag_ == f"subagent:{task_id}"
+
+    # Mutating the SAME ctx after construction also must not bleed (t-07
+    # write-once contract).
+    sub_ctx.provenance_tag = "agent"
+    assert skill_tool._provenance_tag_ == f"subagent:{task_id}"
+
+    # Two distinct task_ids produce two distinct tags on two distinct tools.
+    other_ctx = sm._build_subagent_tool_context(task_id="zz999999")
+    other_tool = SkillManageTool.create(other_ctx)
+    assert other_tool._provenance_tag_ == "subagent:zz999999"
+    assert skill_tool._provenance_tag_ == f"subagent:{task_id}"
+
+
+def test_subagent_runtime_state_is_fresh_and_isolated(tmp_path):
+    """Each call to `_make_subagent_runtime_state` returns a NEW instance
+    with an empty `_runtime_vars`, and `_build_subagent_tool_context` wires
+    it onto ctx so SkillManageTool's rate-cap path uses it (not the parent's
+    counter).
+    """
+    from unittest.mock import MagicMock
+
+    from nanobot.agent.subagent import SubagentManager, _SubagentRuntimeState
+    from nanobot.agent.tools.skill_manage import SkillManageTool
+    from nanobot.bus.queue import MessageBus
+    from nanobot.providers.base import LLMProvider
+
+    provider = MagicMock(spec=LLMProvider)
+    provider.get_default_model.return_value = "test"
+    sm = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=MessageBus(),
+        model="test",
+        max_tool_result_chars=16_000,
+    )
+
+    rt1 = sm._make_subagent_runtime_state()
+    rt2 = sm._make_subagent_runtime_state()
+    assert isinstance(rt1, _SubagentRuntimeState)
+    assert rt1 is not rt2
+    assert rt1._runtime_vars == {}
+    rt1._runtime_vars["x"] = 1
+    assert rt2._runtime_vars == {}
+
+    sub_ctx = sm._build_subagent_tool_context(task_id="task0001", runtime_state=rt1)
+    skill_tool = SkillManageTool.create(sub_ctx)
+    assert skill_tool._runtime_state_ is rt1
