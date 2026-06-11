@@ -1,11 +1,14 @@
 """Tests for telemetry construction & wiring at AgentLoop startup (M1 Task C3+)."""
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from nanobot.agent.loop import AgentLoop
 from nanobot.agent.skills_telemetry import SkillTelemetry
 from nanobot.bus.queue import MessageBus
+from nanobot.providers.base import LLMResponse
 
 
 def _make_loop_with_real_deps(tmp_path: Path) -> AgentLoop:
@@ -58,3 +61,28 @@ def test_reconcile_runs_before_first_consume(tmp_path: Path) -> None:
     snap = loop.telemetry.snapshot()
     assert "foo" in snap["entries"]
     assert snap["entries"]["foo"]["origin"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_flush_called_at_turn_end(tmp_path: Path, monkeypatch) -> None:
+    """`_run_agent_loop` must flush telemetry before returning so per-turn bumps land on disk."""
+    from tests.agent.test_loop_runner_integration import _make_loop
+    loop = _make_loop(tmp_path)
+
+    flush_calls = {"n": 0}
+    orig = loop.telemetry.flush
+
+    def spy(writer: str = "bump") -> None:
+        flush_calls["n"] += 1
+        return orig(writer)
+
+    monkeypatch.setattr(loop.telemetry, "flush", spy)
+
+    loop.provider.chat_with_retry = AsyncMock(
+        return_value=LLMResponse(content="ok", tool_calls=[], usage={})
+    )
+    loop.tools.get_definitions = MagicMock(return_value=[])
+
+    await loop._run_agent_loop([])
+
+    assert flush_calls["n"] >= 1

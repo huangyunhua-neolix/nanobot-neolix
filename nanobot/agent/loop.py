@@ -855,6 +855,11 @@ class AgentLoop:
                 await on_stream_end(resuming=False)
         elif result.stop_reason == "error":
             logger.error("LLM returned error: {}", (result.final_content or "")[:200])
+        # M1: flush telemetry once per turn (no-op when not dirty)
+        try:
+            self.telemetry.flush()
+        except Exception as exc:
+            logger.warning("telemetry flush at turn end failed: {}", exc)
         return result.final_content, result.tools_used, result.messages, result.stop_reason, result.had_injections
 
     async def run(self) -> None:
