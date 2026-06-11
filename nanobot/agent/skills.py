@@ -360,6 +360,8 @@ class SkillsLoader:
             os.environ.get(var) for var in required_env_vars
         )
 
+    # NOTE: M1 spec elevates this to a contract (provenance read entry); keep signature
+    # stable. See docs/hermes-evolution/specs/m1-foundations.md §5/§11.
     def _get_skill_meta(self, name: str) -> dict:
         """Get nanobot metadata for a skill (cached in frontmatter)."""
         raw_meta = self.get_skill_metadata(name) or {}

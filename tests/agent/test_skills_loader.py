@@ -623,3 +623,23 @@ def test_load_skills_for_context_does_not_bump_missing_skill(tmp_path: Path) -> 
     snap = telem.snapshot()
     # Per spec §7 row (e): bump only after load success → no entry for missing skill
     assert "does-not-exist" not in snap["entries"]
+
+
+def test_list_skills_never_bumps(tmp_path: Path) -> None:
+    from nanobot.agent.skills_telemetry import SkillTelemetry
+    (tmp_path / "skills" / "foo").mkdir(parents=True)
+    (tmp_path / "skills" / "foo" / "SKILL.md").write_text("---\nname: foo\n---\n")
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    telem = SkillTelemetry(tmp_path)
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin, telemetry=telem)
+    for _ in range(10):
+        loader.list_skills()
+        loader.list_skills_with_shadows()
+        loader.load_skill("foo")
+    snap = telem.snapshot()
+    # foo never bumped — these methods MUST NOT bump per spec §7 hook table.
+    # Either no entries exist (no bump path was hit) OR every entry has zero counters.
+    assert snap["entries"] == {} or all(
+        e["views"] == 0 and e["uses"] == 0 for e in snap["entries"].values()
+    )
