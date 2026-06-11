@@ -557,3 +557,36 @@ def test_telemetry_param_is_keyword_only(tmp_path: Path) -> None:
 def test_telemetry_default_is_none(tmp_path: Path) -> None:
     loader = SkillsLoader(tmp_path)
     assert loader.telemetry is None
+
+
+def test_build_skills_summary_bumps_view_per_returned_skill(tmp_path: Path) -> None:
+    from nanobot.agent.skills_telemetry import SkillTelemetry
+    (tmp_path / "skills" / "foo").mkdir(parents=True)
+    (tmp_path / "skills" / "foo" / "SKILL.md").write_text(
+        "---\nname: foo\ndescription: f\n---\nbody"
+    )
+    (tmp_path / "skills" / "bar").mkdir()
+    (tmp_path / "skills" / "bar" / "SKILL.md").write_text(
+        "---\nname: bar\ndescription: b\n---\nbody"
+    )
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    telem = SkillTelemetry(tmp_path)
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin, telemetry=telem)
+    summary = loader.build_skills_summary()
+    assert "foo" in summary and "bar" in summary
+    snap = telem.snapshot()
+    assert snap["entries"]["foo"]["views"] == 1
+    assert snap["entries"]["bar"]["views"] == 1
+
+
+def test_build_skills_summary_no_bump_when_telemetry_none(tmp_path: Path) -> None:
+    (tmp_path / "skills" / "foo").mkdir(parents=True)
+    (tmp_path / "skills" / "foo" / "SKILL.md").write_text(
+        "---\nname: foo\ndescription: f\n---\n"
+    )
+    builtin = tmp_path / "_b"
+    builtin.mkdir()
+    loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin, telemetry=None)
+    # Must not raise — physically impossible to bump.
+    loader.build_skills_summary()

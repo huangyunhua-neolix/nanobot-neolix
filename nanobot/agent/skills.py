@@ -279,6 +279,9 @@ class SkillsLoader:
                 missing = self._get_missing_requirements(meta)
                 suffix = f" (unavailable: {missing})" if missing else " (unavailable)"
                 lines.append(f"- **{skill_name}** — {desc}{suffix}  `{entry['path']}`")
+            # M1: bump view counter, gated on telemetry presence
+            if self.telemetry is not None:
+                self.telemetry.bump(skill_name, "view")
         return "\n".join(lines)
 
     def _get_missing_requirements(self, skill_meta: dict) -> str:
