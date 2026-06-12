@@ -10,6 +10,7 @@ from nanobot.evolve.exceptions import (
     EvolveEnvironmentError,
     EvolveError,
     EvolveExtraNotInstalled,
+    GateInternalError,
     JudgeError,
     ManifestPrivacyViolation,
 )
@@ -23,4 +24,5 @@ __all__ = [
     "ManifestPrivacyViolation",
     "EvolveEnvironmentError",
     "ConfigError",
+    "GateInternalError",
 ]

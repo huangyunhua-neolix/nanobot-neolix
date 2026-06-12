@@ -22,6 +22,7 @@ from nanobot.evolve import (
     EvolveEnvironmentError,
     EvolveError,
     EvolveExtraNotInstalled,
+    GateInternalError,
     JudgeError,
     ManifestPrivacyViolation,
 )
@@ -138,6 +139,16 @@ def test_structured_kwargs_must_be_frozenset_type():
             def __init__(self, msg: str, *, foo: int) -> None:
                 super().__init__(msg)
                 self.foo = foo
+
+
+def test_gate_internal_error_round_trip():
+    """GateInternalError: positional message via mixin → RuntimeError args[0]."""
+    err = GateInternalError("tier-c-empty: gate-1 requires ≥1 record")
+    assert isinstance(err, RuntimeError)
+    assert isinstance(err, EvolveError)
+    assert err.args[0] == "tier-c-empty: gate-1 requires ≥1 record"
+    assert GateInternalError.STRUCTURED_KWARGS == frozenset()
+    assert "RuntimeError" in GateInternalError.MUST_PRECEDE
 
 
 def test_get_type_hints_resolves_on_apply_terminal_error():

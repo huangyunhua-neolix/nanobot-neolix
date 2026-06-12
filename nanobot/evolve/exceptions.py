@@ -95,3 +95,16 @@ class EvolveEnvironmentError(EvolveError, RuntimeError):
 
 
 class ConfigError(EvolveError, ValueError): ...
+
+
+class GateInternalError(EvolveError, RuntimeError):
+    """Raised when a gate cannot evaluate due to malformed inputs.
+
+    Distinct from a gate FAIL verdict: this signals a precondition violation
+    (e.g. missing tier-C records, tier sizes below §1.1 invariant floor).
+    Spec §6.1.2 / decision #120. Harness §6.0 point 3 wraps this into an
+    abort/failure path for the candidate.
+    """
+
+    STRUCTURED_KWARGS: ClassVar[frozenset[str]] = frozenset()
+    MUST_PRECEDE: ClassVar[frozenset[str]] = frozenset({"RuntimeError"})
