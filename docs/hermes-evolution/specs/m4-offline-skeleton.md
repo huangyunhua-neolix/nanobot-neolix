@@ -2,7 +2,7 @@
 
 > **Milestone**：M4（离线进化骨架）。属于 [Hermes 风格自我进化能力路线图](../roadmap.md) 的第四阶段。
 >
-> **状态**：草稿中（2026-06-12，C-rev9 收敛：闭合 C-rev8 carry-forward 5 YELLOW（W3 / W5 / W7 / W8 / W10），§0 决策已锁定，body 待逐节 approve）。
+> **状态**：草稿中（2026-06-12，C-rev12 housekeeping pass：banner 同步至当前轮次，C-rev11 4-reviewer 收敛结果 0 RED / 1 housekeeping YELLOW（本条状态行）/ 2 carry-forward advisory 全部就位；C-rev11 落地 闭合 1 RED + 6 YELLOW + 2 tighten（RED-1 / YELLOW-1..6 / Tighten-1..2），新增决策 #107 / #108 + 2 Scope advisory 至 §12.3（CF-C-rev11-1/2）；§0 决策已锁定，§0–§5 已 4-reviewer 收敛 PASS，body §6+ 待逐节 approve）。
 >
 > **依赖**：M1（[`m1-foundations.md`](./m1-foundations.md)）—— 需要 provenance 字段（`origin: agent`、`created_by`、`created_at`）作为离线进化候选的来源标签；不依赖 M2、不依赖 M3（M3 是运行时 lane，M4 是离线 lane，两条 lane 并行无耦合）。
 >
