@@ -49,5 +49,11 @@ def test_e2e_gates_iterate_with_shared_fake(shared_passing_candidate, shared_bas
         r = gate.evaluate(shared_passing_candidate, shared_baseline)
         results.append(r)
         assert r.gate_name == gate.name
-        assert r.verdict in ("pass", "fail")
+        # ``shared_passing_candidate`` is constructed to satisfy every gate; a
+        # gate that spuriously returns "fail" on this fixture trips here so the
+        # regression surfaces with the offending gate name + failure_reason.
+        assert r.verdict == "pass", (
+            f"gate {gate.name!r} returned verdict={r.verdict!r} on known-passing "
+            f"fixture; failure_reason={r.failure_reason!r}"
+        )
     assert len(results) == len(GATES)
