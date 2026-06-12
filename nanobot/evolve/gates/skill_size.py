@@ -13,11 +13,11 @@ metric is platform-independent.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from time import perf_counter
 from typing import TYPE_CHECKING, ClassVar
 
-from nanobot.evolve.gates import GATES, Gate, GateResult
+from nanobot.evolve.gates import Gate, GateResult
 from nanobot.evolve.gates._constants import SKILL_LINE_DELTA_CAP, SKILL_LINE_HARD_CAP
 
 if TYPE_CHECKING:
@@ -82,11 +82,6 @@ class SkillSizeGate(Gate):
                 "delta_cap": float(SKILL_LINE_DELTA_CAP),
             },
             failure_reason=failure_reason,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             duration_ms=duration_ms,
         )
-
-
-# NOTE: orchestrator appends `GATES.append(SkillSizeGate())` to
-# nanobot/evolve/gates/__init__.py after t-08/09/10 all merge.
-_ = GATES  # re-export touch to keep the import non-unused for ruff F401
