@@ -7,6 +7,9 @@ Covers spec §3.2 (data models), §3.7 (RunManifest frozen + extra=forbid),
 
 from __future__ import annotations
 
+import asyncio
+import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar
@@ -244,8 +247,89 @@ def test_run_gates_propagates_keyboard_interrupt(tmp_path: Path) -> None:
 def test_run_gates_propagates_system_exit(tmp_path: Path) -> None:
     gates = [_RaiseGate("1-sysexit", SystemExit(2))]
     harness = OfflineHarness(workspace=tmp_path, gates=gates)
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc_info:
         harness._run_gates(_make_candidate(), _make_baseline())
+    # Pin the exit CODE, not just the type — a regression that collapsed
+    # SystemExit(2) into bare SystemExit() must not slip through.
+    assert exc_info.value.code == 2
+
+
+def test_run_gates_propagates_cancelled_error(tmp_path: Path) -> None:
+    # asyncio.CancelledError derives from BaseException on Python 3.8+; the
+    # harness's ``except Exception`` clause MUST let it escape so a cancelled
+    # outer task is not silently downgraded into a verdict='fail' trace.
+    gates = [_RaiseGate("1-cancel", asyncio.CancelledError())]
+    harness = OfflineHarness(workspace=tmp_path, gates=gates)
+    with pytest.raises(asyncio.CancelledError):
+        harness._run_gates(_make_candidate(), _make_baseline())
+
+
+def test_run_gates_synthetic_fail_short_circuits(tmp_path: Path) -> None:
+    # A gate-internal-error must short-circuit subsequent gates identically to
+    # an explicit verdict='fail'. Guards against a refactor that moves the
+    # ``if result.verdict == 'fail': break`` inside the try block.
+    invoked: list[str] = []
+    gates = [
+        _RaiseGate("1-boom", ValueError("boom")),
+        _PassGate("2-should-skip", invoked),
+    ]
+    harness = OfflineHarness(workspace=tmp_path, gates=gates)
+    trace = harness._run_gates(_make_candidate(), _make_baseline())
+    assert invoked == [], "gate after a synthetic fail must NOT be invoked"
+    assert len(trace) == 1
+    assert trace[0].verdict == "fail"
+    assert trace[0].failure_reason is not None
+    assert "gate-internal-error" in trace[0].failure_reason
+
+
+def test_run_gates_error_file_path_uses_unknown_when_hash_empty(tmp_path: Path) -> None:
+    # The _write_gate_error fallback branch ``hash_prefix = ... or "unknown"``
+    # is exercised when content_hash is empty — without this test, the
+    # fallback has zero coverage and a regression replacing it (e.g. with a
+    # bare ``[:12]``) would create a directory named "" instead.
+    gates = [_RaiseGate("1-explodes", RuntimeError("oops"))]
+    harness = OfflineHarness(workspace=tmp_path, gates=gates)
+    candidate = _make_candidate(content_hash="")
+    harness._run_gates(candidate, _make_baseline())
+    err_path = tmp_path / "gates" / "unknown" / "1-explodes.error.txt"
+    assert err_path.exists()
+    contents = err_path.read_text()
+    assert "RuntimeError" in contents
+    assert "oops" in contents
+
+
+def test_run_gates_continues_when_error_file_write_fails(tmp_path: Path) -> None:
+    # _write_gate_error wraps its IO in try/except so a missing or read-only
+    # workspace cannot mask the synthetic fail GateResult — the primary
+    # signal. Exercise this by removing the workspace mid-flight (tmp_path
+    # itself stays around for pytest teardown bookkeeping; we recreate it
+    # under a sub-dir so we can rmtree just the harness's view).
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    harness = OfflineHarness(workspace=workspace, gates=[_RaiseGate("1-boom", ValueError("x"))])
+    # Make the gates dir un-writable on POSIX so the mkdir inside
+    # _write_gate_error fails. (chmod 0o400 = read-only for owner.)
+    gates_dir = workspace / "gates"
+    gates_dir.mkdir()
+    original_mode = gates_dir.stat().st_mode
+    if sys.platform == "win32":
+        # On Windows chmod-based read-only is unreliable; rmtree the gates
+        # dir AND the workspace so the err_dir.mkdir(parents=True) fails.
+        shutil.rmtree(workspace)
+    else:
+        gates_dir.chmod(0o400)
+    try:
+        trace = harness._run_gates(_make_candidate(), _make_baseline())
+    finally:
+        # Restore perms so pytest tmp_path cleanup can rm the tree.
+        if sys.platform != "win32" and gates_dir.exists():
+            gates_dir.chmod(original_mode)
+    # The synthetic fail GateResult is still produced; no second exception
+    # escaped through _write_gate_error.
+    assert len(trace) == 1
+    assert trace[0].verdict == "fail"
+    assert trace[0].failure_reason is not None
+    assert "gate-internal-error" in trace[0].failure_reason
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +371,21 @@ def test_compute_final_status_no_traces_is_no_improvement(tmp_path: Path) -> Non
     cand = _make_candidate()
     baseline = _make_baseline()
     assert harness._compute_final_status(None, [cand], baseline) == "no_improvement"
+
+
+def test_compute_final_status_promoted_precedes_fail_trace(tmp_path: Path) -> None:
+    # A non-None ``promoted`` MUST short-circuit BEFORE the fail-trace check.
+    # A regression flipping the order would mis-classify a promoted candidate
+    # as ``rejected_by_gate`` whenever its trace also contains a fail (e.g.
+    # an earlier GEPA iteration's candidate failed before the promoted one).
+    harness = OfflineHarness(workspace=tmp_path, gates=[])
+    cand = _make_candidate()
+    baseline = _make_baseline()
+    fail_trace = [_fail_result("1-fail", cand, baseline)]
+    status = harness._compute_final_status(
+        cand, [cand], baseline, gate_traces={cand.content_hash: fail_trace}
+    )
+    assert status == "promoted_to_pr"
 
 
 # ---------------------------------------------------------------------------

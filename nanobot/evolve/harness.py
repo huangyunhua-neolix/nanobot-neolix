@@ -109,11 +109,19 @@ class OfflineHarness:
     """
 
     def __init__(self, *, workspace: Path, gates: Optional[list[Gate]] = None) -> None:
+        """Construct an OfflineHarness over ``workspace``.
+
+        ``gates`` is an optional dependency-injection seam — tests substitute
+        stub gate lists here instead of mutating the module-level ``GATES``
+        registry. Note: only the *list* is shallow-copied; the Gate instances
+        themselves are shared by reference. Per §6.4.1 determinism intent,
+        injected Gate instances MUST be stateless across ``_run_gates``
+        invocations, otherwise mutable per-run state on a stub will leak
+        between sibling harnesses that share the same gate list.
+        """
         if not workspace.is_dir():
             raise ConfigError(f"workspace not a directory: {workspace}")
         self._workspace = workspace
-        # Optional dependency-injection seam — tests substitute stub gate lists
-        # here instead of mutating the module-level ``GATES`` registry.
         self._gates: list[Gate] = list(gates) if gates is not None else list(GATES)
 
     # --- gate execution --------------------------------------------------
