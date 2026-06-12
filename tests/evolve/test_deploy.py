@@ -342,6 +342,48 @@ def test_assemble_pr_body_internal_invariant_holds_under_safe_input() -> None:
     assert headers == list(PR_BODY_SECTIONS)
 
 
+def test_assemble_pr_body_raises_runtime_error_if_assembled_body_drops_section(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R4-1: mutation test pinning the RAISE branch of the post-assembly
+    self-check at deploy.py L324-329.
+
+    The happy path is exercised by the test above; this test forces the
+    assembled body to be missing the trailing ``Rollback plan`` section by
+    monkey-patching ``re.findall`` in the deploy module so the structural
+    invariant comparison fails. We then assert the RuntimeError fires and
+    that the missing section name appears in the diagnostic message (it must
+    appear because ``list(PR_BODY_SECTIONS)`` is rendered into the message
+    via ``{...!r}`` formatting).
+    """
+    import nanobot.evolve.deploy as _deploy_mod
+
+    real_findall = _deploy_mod.re.findall
+
+    def _drop_last_section(pattern, string, *args, **kwargs):  # type: ignore[no-untyped-def]
+        # Mutate ONLY the call shape used by the self-check (pattern + flags).
+        # The harness for assemble_pr_body uses exactly one re.findall call;
+        # to be robust, restrict the drop to results that look like header
+        # lists so unrelated callers (none today) wouldn't break.
+        result = real_findall(pattern, string, *args, **kwargs)
+        if pattern == r"^## (.+)$" and isinstance(result, list) and result:
+            return result[:-1]
+        return result
+
+    monkeypatch.setattr(_deploy_mod.re, "findall", _drop_last_section)
+
+    manifest = _make_run_manifest()
+    with pytest.raises(RuntimeError) as exc_info:
+        assemble_pr_body(manifest, [])
+    msg = str(exc_info.value)
+    # The dropped section name must surface in the diagnostic — it appears
+    # via the expected-list side of the comparison.
+    assert "Rollback plan" in msg
+    # And the message must read as a structural-invariant failure, not some
+    # other RuntimeError that incidentally mentions the section.
+    assert "internal invariant violated" in msg
+
+
 # ---------------------------------------------------------------------------
 # R3-2: _validate_no_newlines charset expansion (Unicode line separators)
 # ---------------------------------------------------------------------------
