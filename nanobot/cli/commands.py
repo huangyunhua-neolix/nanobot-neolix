@@ -2039,5 +2039,38 @@ def _login_github_copilot() -> None:
         raise typer.Exit(1)
 
 
+# ============================================================================
+# Evolve subcommand (M4 t-16)
+#
+# The evolve surface is defined as a pure ``argparse`` subcommand tree in
+# ``nanobot.cli.evolve``. This typer shim routes ``nanobot evolve ...`` into
+# that argparse parser so the spec's required ``register/dispatch`` signatures
+# stay authoritative without forking parsing logic.
+# ============================================================================
+
+
+@app.command(
+    "evolve",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        "help_option_names": [],  # let argparse own --help below
+    },
+)
+def evolve(ctx: typer.Context) -> None:
+    """Offline skill evolution (M4)."""
+    import argparse as _argparse
+
+    from nanobot.cli import evolve as _evolve
+
+    # The argparse parser is the authoritative surface (spec §5.3). The typer
+    # command exists only to slot ``evolve`` into the nanobot top-level CLI.
+    parser = _argparse.ArgumentParser(prog="nanobot", add_help=False)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    _evolve.register(subparsers)
+    args = parser.parse_args(["evolve", *ctx.args])
+    raise typer.Exit(_evolve.dispatch(args))
+
+
 if __name__ == "__main__":
     app()
