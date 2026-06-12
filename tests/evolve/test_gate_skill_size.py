@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import pytest
+
+from nanobot.evolve.exceptions import GateInternalError
 from nanobot.evolve.gates.skill_size import SkillSizeGate, count_lines
 
 
@@ -145,3 +148,45 @@ def test_result_echoes_hashes_and_gate_name():
 
 def test_gate_is_deterministic():
     assert SkillSizeGate.NONDETERMINISTIC is False
+
+
+def test_precondition_missing_lines_key_raises():
+    """Missing 'lines' key in size_metrics raises GateInternalError, not bare KeyError."""
+    cand = _FakeCandidate(size_metrics={})  # no "lines" key
+    base = _FakeBaseline(size_metrics={"lines": 100.0})
+    with pytest.raises(GateInternalError) as exc:
+        SkillSizeGate().evaluate(cand, base)
+    assert "malformed-candidate" in str(exc.value)
+    assert "lines" in str(exc.value)
+
+
+def test_precondition_missing_baseline_lines_key_raises():
+    cand = _FakeCandidate(size_metrics={"lines": 100.0})
+    base = _FakeBaseline(size_metrics={})
+    with pytest.raises(GateInternalError) as exc:
+        SkillSizeGate().evaluate(cand, base)
+    assert "malformed-baseline" in str(exc.value)
+
+
+def test_count_lines_pure_lf():
+    assert count_lines("a\nb\nc") == 3
+
+
+def test_count_lines_mixed_crlf_and_lf():
+    # Real-world skill content often mixes; both must normalize to LF.
+    assert count_lines("a\r\nb\nc\r\nd") == 4
+
+
+def test_count_lines_u2028_splits_per_str_splitlines():
+    """count_lines uses str.splitlines() under the hood, which DOES split on U+2028.
+
+    Documents current behavior — if a skill's JSON contains a literal U+2028
+    (valid JSON, common in LLM-generated content), the line count diverges
+    from `wc -l`. Locked in to surface deliberate future changes.
+    """
+    assert count_lines("a\u2028b\u2028c") == 3
+
+
+def test_count_lines_form_feed_splits():
+    """str.splitlines also treats \\f, \\v, etc as line-breaks — documented."""
+    assert count_lines("a\fb\vc") == 3

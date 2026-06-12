@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from time import perf_counter
 from typing import TYPE_CHECKING, ClassVar
 
+from nanobot.evolve.exceptions import GateInternalError
 from nanobot.evolve.gates import Gate, GateResult
 from nanobot.evolve.gates._constants import SKILL_LINE_DELTA_CAP, SKILL_LINE_HARD_CAP
 
@@ -48,8 +49,18 @@ class SkillSizeGate(Gate):
     def evaluate(self, candidate: Candidate, baseline: Baseline) -> GateResult:
         start = perf_counter()
 
-        cl = int(candidate.size_metrics["lines"])
-        bl = int(baseline.size_metrics["lines"])
+        sm_c = candidate.size_metrics
+        sm_b = baseline.size_metrics
+        if "lines" not in sm_c:
+            raise GateInternalError(
+                "malformed-candidate: size_metrics missing required key 'lines'"
+            )
+        if "lines" not in sm_b:
+            raise GateInternalError(
+                "malformed-baseline: size_metrics missing required key 'lines'"
+            )
+        cl = int(sm_c["lines"])
+        bl = int(sm_b["lines"])
         delta = cl - bl
 
         verdict: str = "pass"
