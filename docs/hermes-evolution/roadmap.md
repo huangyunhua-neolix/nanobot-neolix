@@ -42,7 +42,7 @@ M1 Foundations  ──┬──> M2 skill_manage ──> M3 Curator
 | **M1** | provenance 字段 + skill 目录分层 + telemetry 计数 + auxiliary provider 配置形态 | — | ✅ 已完成 (2026-06-11, PR #1+#2) | [`specs/m1-foundations.md`](specs/m1-foundations.md) | [`plans/m1-foundations.md`](plans/m1-foundations.md) | [`retros/m1-foundations.md`](retros/m1-foundations.md) |
 | **M2** | `skill_manage` 工具(create/patch/edit/delete) + 触发规则 + Dream 整合点 | M1 | ✅ 已完成 (2026-06-12, PR #4) | [`specs/m2-skill-manage.md`](specs/m2-skill-manage.md) | [`plans/m2-skill-manage.md`](plans/m2-skill-manage.md) | [`retros/m2-skill-manage.md`](retros/m2-skill-manage.md) |
 | **M3** | Curator Phase 1(确定性状态机) + Phase 2(aux-model 审议) + dry-run + `/curator` 命令 + protect-list | M2 | 待启动 | `specs/m3-curator.md` | `plans/m3-curator.md` | — |
-| **M4** | DSPy + GEPA 接入 + 评测数据 4 级分层 + LLM-as-judge rubric + 5 道闸门的前 3 道（测试/大小/cache 兼容） | M1 | 🚧 进行中 (2026-06-12, PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/6, @ f8a496bf) | `specs/m4-offline-skeleton.md` | `plans/m4-offline-skeleton.md` | — |
+| **M4** | DSPy + GEPA 接入 + 评测数据 4 级分层 + LLM-as-judge rubric + 5 道闸门的前 3 道（测试/大小/cache 兼容） | M1 | ✅ 已完成 (2026-06-12, PR #6) | [`specs/m4-offline-skeleton.md`](specs/m4-offline-skeleton.md) | [`plans/m4-offline-skeleton.md`](plans/m4-offline-skeleton.md) | retro 待补 |
 | **M5** | 接入外部 Darwinian Evolver CLI + AGPL 许可隔离 + PR-only 部署 + 完整 5 道闸门 | M4 | 待启动 | `specs/m5-darwinian-evolver.md` | `plans/m5-darwinian-evolver.md` | — |
 
 依赖与并行：
