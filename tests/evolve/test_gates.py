@@ -44,8 +44,12 @@ def test_gate_subclass_must_declare_nondeterministic():
 
 
 def test_subclasses_registry_dedups_on_repeat_subclass_definition():
-    """Repeat subclass declarations (importlib.reload, pytest re-collection)
-    must NOT double-register in Gate._subclasses."""
+    """The __init_subclass__ dedup guard must hold against manual re-registration.
+
+    Class-statement registration is exercised by the surrounding tests; here we
+    additionally re-invoke the underlying ``__init_subclass__`` body to prove
+    the ``if cls not in Gate._subclasses`` guard short-circuits the second call.
+    """
 
     class _DedupProbe(Gate):
         NONDETERMINISTIC: ClassVar[bool] = False
@@ -57,14 +61,19 @@ def test_subclasses_registry_dedups_on_repeat_subclass_definition():
         def evaluate(self, candidate: "Candidate", baseline: "Baseline") -> GateResult:
             raise NotImplementedError
 
-    # Manually re-trigger __init_subclass__ by appending again — dedup must hold.
-    Gate.__init_subclass__.__func__(_DedupProbe) if hasattr(
-        Gate.__init_subclass__, "__func__"
-    ) else None
-    # The classmethod path above is a no-op for some Python versions; the
-    # real check is that one declaration yields exactly one entry.
-    count = sum(1 for s in Gate._subclasses if s is _DedupProbe)
-    assert count == 1, f"_DedupProbe registered {count} times; expected 1"
+    count_before = sum(1 for s in Gate._subclasses if s is _DedupProbe)
+    assert count_before == 1, f"_DedupProbe registered {count_before}x at declaration"
+
+    # Re-trigger the hook. ``Gate.__init_subclass__(cls=_DedupProbe)`` is rejected
+    # by CPython 3.11+ ("got multiple values for argument 'cls'") because the
+    # classmethod descriptor already binds ``cls``; call the underlying function
+    # directly instead. This DOES re-enter the body — verified by clearing the
+    # registry locally in a probe — so a regression that removes the dedup guard
+    # would observe count_after == 2.
+    Gate.__init_subclass__.__func__(_DedupProbe)
+
+    count_after = sum(1 for s in Gate._subclasses if s is _DedupProbe)
+    assert count_after == 1, f"dedup failed: re-trigger produced {count_after} entries"
 
 
 def test_gateresult_validation_rejects_bad_verdict():
