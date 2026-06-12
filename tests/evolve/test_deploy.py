@@ -583,6 +583,50 @@ def test_build_branch_name_rejects_newline_in_component() -> None:
         build_branch_name("run\n1", "demo-skill", "deadbeef")
 
 
+def test_build_branch_name_rejects_trailing_dot() -> None:
+    """R4-2: cover deploy.py L84-85 (refname rule: no trailing dot).
+
+    Drive via ``skill_name`` because that field reaches the leaf validator
+    without being constrained by other shape rules (run_id has more
+    historical assertions; short_sha has a strict 8-hex shape that would
+    trip first).
+    """
+    with pytest.raises(ValueError) as exc_info:
+        build_branch_name("run-1", "evolve.", "deadbeef")
+    msg = str(exc_info.value)
+    # Loose substring assertion (avoids brittle regex coupling — see CF-R4-h).
+    assert "skill_name" in msg
+    assert "ends with '.'" in msg
+
+
+def test_build_branch_name_rejects_double_slash() -> None:
+    """R4-2: cover deploy.py L95-96 (no embedded ``//``).
+
+    Note: ``/`` is NOT in ``_FORBIDDEN_BRANCH_CHARS`` (it's a path
+    separator), so ``//`` is allowed past the charset loop and must be
+    caught explicitly by the substring check.
+    """
+    with pytest.raises(ValueError) as exc_info:
+        build_branch_name("run-1", "evolve//bad", "deadbeef")
+    msg = str(exc_info.value)
+    assert "skill_name" in msg
+    assert "//" in msg
+
+
+def test_validate_branch_component_rejects_leading_slash() -> None:
+    """R4-2 (correctness echo): cover deploy.py L80-81.
+
+    Leading ``/`` would let ``evolve/<run_id>-...`` resolve into an
+    absolute-looking refname. Counterpart to the existing trailing-slash
+    test.
+    """
+    with pytest.raises(ValueError) as exc_info:
+        build_branch_name("run-1", "/abs", "deadbeef")
+    msg = str(exc_info.value)
+    assert "skill_name" in msg
+    assert "starts with '/'" in msg
+
+
 def test_build_branch_name_happy_path_still_works() -> None:
     """Positive pin: regression guard so the validation layer doesn't break the
     existing concatenation contract."""
