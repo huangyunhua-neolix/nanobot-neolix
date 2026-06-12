@@ -182,3 +182,55 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Defer reason**: 当前仅 1 of 5 notes 为 meta-typed，relocate 至专用 module docstring（如 `nanobot/evolve/gates/__init__.py` 或 sidecar `_governance.md`）属 premature optimization；inline RF-6 forward-guard（"M5+ 追加同类 self-referential trigger note 必须先在 §12 register CF entry"）已足够防止 drift。第二条同类 note 抵达即触发 housekeeping pass，提前 relocate 不偿
 - **Future close criterion**: 二选一闭合 —— **(a)** M5（或更晚 milestone）追加第二条 self-referential ABC trigger note → housekeeping pass 把所有 meta-typed notes 迁出 §3.6 docstring 至专用 governance 模块（`nanobot/evolve/gates/__init__.py` docstring **或** sidecar `_governance.md` 邻接文件），§3.6 docstring 仅保留 `Gate` 消费者 contract notes；**或** **(b)** CF-C-rev15-5 hard deadline 触发并迁移 §12 整章（path-b GitHub Issues），本 CF 作为 sibling issue 随之迁移（co-closure semantic 同 CF-C-rev16-1 path-b carve-out）
 - **Closure note (C-rev18)**: CF-C-rev15-5 触发的是 **close-path (a)**（§12 整章物理迁移至本 sibling file），不是 path (b) GitHub Issues。本 entry 原有 path-(b) co-closure clause 的精神是"§12 整章 relocation event 触发 CF-C-rev17-1 co-closure"；path (a) 等同满足该 forward-trigger（"§12 整章 relocation" 已发生 —— 本 entry 物理从 M4 spec §12.7 迁至本文件 §7，§3.6 docstring meta-note 风险的 governance forward-guard 由 RF-6 inline note 与本文件 sibling status 共同承接）。CF-C-rev17-1 CLOSED；§3.6 docstring Note 4 RF-6 forward-guard 在 M4 spec 中维持不动；若 M5+ 抵达 path-(a) future close criterion（第二条 self-referential note 出现），届时直接执行 docstring relocation（不依赖本 CF entry）
+
+## 8. C-rev18 user-sanctioned carry-forward entries (C-rev19 round close-out)
+
+本批次 6 条 entry 来自 C-rev18 §7–§14 起草后 4-reviewer round 中 50–60% confidence YELLOW advisory 观察。C-rev19 RED-only fix round 闭合 7 REDs inline（CORR-1..6 + COH-1）；6 YELLOWs 按 sanctioned 路线（"YELLOW 走 carry-forward 至 sibling file per established C-rev10..C-rev17 precedent"）保留为 register entries，等待真实 trigger 验证后再决定关闭或上升为 must-fix。
+
+### CF-C-rev19-1 — GateResult.evidence typing for int seed（Corr Y-7）
+
+- **Source**: C-rev18 Corr reviewer / CORR-7（60% YELLOW advisory）
+- **Confidence**: 60% advisory
+- **Conflict**: None（与其它 reviewer judgment 无冲突）
+- **Defer reason**: §10 不变量 7 提到 nondeterministic gates persist `seed: int` in `GateResult.evidence`，但 `evidence: dict[str, str] | None`（决策 #116）类型签名只接受 str。`str(int)` round-trip 是 operationally safe 的（`int(str(n)) == n`），消费侧 cast 一行即可恢复；type-system precision 是 YAGNI 改进（M4 三 gate 全 deterministic，本字段在 M4 无 active runtime 消费者）
+- **Future close criterion**: M5 widens `evidence` 类型至 `dict[str, str | int | float]`（per 决策 #114 forward-look in §11 "GateResult.metrics 类型放宽"）时，把 seed typing 一并 fold 入该 widening；或 M5 gate-4 (LLM-judge) 落地时若发现 `str(int)` round-trip 在 audit log 解析路径上引入 bug → 升级为 must-fix
+
+### CF-C-rev19-2 — Re-calibration trigger 缺 provider-host / API-version（Corr Y-8）
+
+- **Source**: C-rev18 Corr reviewer / CORR-8（55% YELLOW advisory）
+- **Confidence**: 55% advisory
+- **Conflict**: None
+- **Defer reason**: §7.4 re-calibration trigger 列表（5 条）包含 `aux_provider.model` field diff 但不含 `aux_provider.base_url` / `aux_provider.api_version` diff。In-scope 但 not breaking —— user 典型行为是在 `aux_provider` 中声明完整 provider 配置（model + base_url + api_version 同步变），跨 host swap 而 model string 不变的场景在 M4 cooperative threat model 下不常见。下次 §7 housekeeping pass 时一并加入 trigger 列表
+- **Future close criterion**: §7.4 trigger 1 扩展为包含 `aux_provider.base_url` 与 `aux_provider.api_version` field diff（spec edit 一行）；**OR** M5 引入 provider-pinning lockfile（每条 calibration run 记录完整 `(provider_name, base_url, api_version, model_id)` quadruple，diff 任一字段触发 re-calibration）
+
+### CF-C-rev19-3 — κ mean 掩盖 single-axis collapse（Corr Y-9）
+
+- **Source**: C-rev18 Corr reviewer / CORR-9（50% YELLOW advisory）
+- **Confidence**: 50% advisory
+- **Conflict**: None
+- **Defer reason**: §7.4 Agreement metric "逐 axis 计算 then mean across axes" 在原 4-axis 设计下存在"单 axis（safety）collapse 到 κ ≈ 0 但 mean 仍 ≥ 0.6"的隐藏风险。C-rev19 / RED-1 fix 后 rubric 收敛至 3-axis (process / output / token)，safety axis collapse pattern 不再适用；风险显著降低但未完全消除（任一 axis κ 单独 collapse 时 3-axis mean 仍可能 ≥ 0.6 if 其它两 axis κ ≈ 0.9）。per-axis floor 仍有 defense-in-depth 价值
+- **Future close criterion**: M5 gate-4 SemanticFidelityGate 引入第 4 axis（§11 deferred）→ axis 数增加再评估 collapse 风险；**OR** M4 首月生产 retro 显示任一 single-axis κ < 0.4 → §7.4 引入 κ_min ≥ 0.4 floor 作为 κ_mean ≥ 0.6 的并列约束（两者同时满足才视为 calibration PASS）
+
+### CF-C-rev19-4 — §8.4 gate re-verification CI 过早（Scope Y）
+
+- **Source**: C-rev18 Scope reviewer / §8.4 observation（50% YELLOW advisory）
+- **Confidence**: 50% advisory
+- **Conflict**: None
+- **Defer reason**: §8.4 "Gate re-verification" GitHub Actions 第二次跑 gate 链服务于 §10 不变量 7（gate determinism），独立有价值（catch 本地 vs CI 环境差异引发的 verdict mismatch）。CI 接线细节（Actions workflow 形态 / 触发条件 / 失败处置）可推迟至 M5 5-gate CI 装配时一并起草，避免 M4 时锁定后 M5 改一次的 churn
+- **Future close criterion**: M5 plan-writer 决定 (a) 保留 M4 re-verification 独立 workflow，**或** (b) fold 入 M5 5-gate full CI workflow（5 gates 集中 verify，gate 4/5 也走 re-verification）
+
+### CF-C-rev19-5 — CF-C-rev15-1 sub-criteria (a)/(c) 未关闭（Arch Y）
+
+- **Source**: C-rev18 Arch reviewer（60% YELLOW advisory）
+- **Confidence**: 60% advisory
+- **Conflict**: None
+- **Defer reason**: CF-C-rev15-1 future close criterion 包含三条 sub-criteria：(a) §10 显式引用决策 #117 + inheritance-via-MRO discovery 形式、(b) harness 双跑 conditional `NONDETERMINISTIC` guard、(c) 与 STRUCTURED_KWARGS / MUST_PRECEDE registry 语义对比释明。C-rev18 §10 不变量 7 落地后覆盖 sub-criterion (b)；sub-criteria (a) MRO discovery 与 (c) STRUCTURED_KWARGS contrast 仍未显式交叉引用。Low risk because C-rev19 / RED-3 fix 在 §14 显式 clarify "STRUCTURED_KWARGS / MUST_PRECEDE 是 EvolveError 概念，不适用于 Gate subclass"，部分填补 (c) 的 contrast gap
+- **Future close criterion**: M4 plan-writer 添加 explicit test `test_gate_nondeterministic_mro_discovery`（验证 `getattr(gate, "NONDETERMINISTIC", False)` 在子类未 override 时返回基类默认 `False`，与 STRUCTURED_KWARGS 的 strict-own `cls.__dict__.get(...)` 形式对比）；**OR** M5 round-A Arch reviewer audit Gate ABC vs EvolveError ClassVar 边界 一次性闭合 (a) + (c)
+
+### CF-C-rev19-6 — §9.3 audit-log retention enforcement（Arch Y）
+
+- **Source**: C-rev18 Arch reviewer（≤60% YELLOW advisory）
+- **Confidence**: 60% advisory
+- **Conflict**: None
+- **Defer reason**: §9.3 "12-week rotation" + "weekly rotated `redaction.log.YYYY-WW`" 是 prose-only 描述，无 enforcement test（rotation logic 实现细节散落 in `nanobot evolve` CLI startup lazy trigger）。Fold 入 CF-C-rev15-4 lint-script umbrella（同为"规则定义 prose-only / 无 CI 强制"的 governance hygiene 类）
+- **Future close criterion**: lint script (CF-C-rev15-4 owner = M5 in-scope `scripts/lint_decision_log.py`) 增加 audit-log rotation 检查（验证 `redaction.log.*` 文件 mtime 与命名 week stamp 一致 + 12-week-stale 文件自动 prune）；**OR** housekeeping retro 把 retention 转化为单元测试（`test_redaction_log_rotation_drops_stale`）
