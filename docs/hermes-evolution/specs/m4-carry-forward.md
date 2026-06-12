@@ -619,6 +619,31 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Defer reason**: `_print_err(category, exc)` 输出 `evolve: <category> error: <msg>` 到 stderr，但所有现有测试 assert 的是 mock-call 参数（`captured["category"] == "config"`），没有任何 test 用 capsys 验证实际写到 stderr 的字符串。日志抓取的 operator 若把 wording 当 contract（grep 这个前缀），format string 被静默改写会让监控悄悄断
 - **Future close criterion**: 加 `test_print_err_stderr_format_pinned(capsys)` —— 直接 call `_print_err("config", ValueError("bad"))`，capsys 抓取 stderr，assert `"evolve: config error: bad"` literal 出现
 
+### CF-T18-a — module-import-time lazy-guard test for `nanobot.evolve` package
+**Source**: ce-correctness-reviewer round 1 on t-18 (`7170f931`)
+**Confidence**: 55%
+**Conflict**: t-18 added `test_pipeline_post_run_no_dspy_or_gepa_in_sys_modules`
+  which exercises the `_run_gates` code path. The fixture pops `dspy`/`gepa`
+  from sys.modules BEFORE the test, then asserts absence AFTER. This catches
+  any lazy import triggered during gate evaluation, but would NOT catch a
+  regression where `nanobot/evolve/__init__.py` (or `harness.py`, `gates/*`)
+  grows an eager top-level `import dspy` — the fixture's pre-test pop would
+  hide it, then no re-import happens during `_run_gates`. A complementary
+  test that does a fresh `import nanobot.evolve` in an isolated subprocess
+  (or via importlib.reload after fixture pop) and asserts sys.modules cleanliness
+  would close that gap.
+**Defer reason**: subprocess-based assertion is fiddly; current test covers
+  the realistic regression vector (someone adds `import dspy` to a gate
+  module's `evaluate()`). Belongs alongside the other "import-time contract"
+  tests in a future round that touches `nanobot/evolve/__init__.py`.
+**Related testing gap (not pinned today)**: a `gate-1 fail` test would also
+  pin the `_run_gates` `break`-on-fail short-circuit semantics for the
+  first-position gate (current cache-mismatch test pins it at the last position
+  by virtue of `len == 3`). Defer to same future round.
+**Future close criterion**: next round that adds/modifies a top-level import
+  in `nanobot/evolve/__init__.py` or `nanobot/evolve/harness.py` ships the
+  subprocess-import contract test in the same commit.
+
 > **Meta-note (handler-order pinning)**: 两位 reviewer 初稿都怀疑 dispatch 表的 handler order 缺 documentary pin；trace MRO 后确认 order 已经被 Python 继承链自然 pin（`ApplyTerminalError ISA ValueError`、`JudgeError`/`ManifestPrivacyViolation`/`EvolveEnvironmentError`/`GateInternalError` ISA `RuntimeError`），加之 `EvolveError.MUST_PRECEDE` 已 documented + sibling order test 已 cover，无需额外 CF entry。本节因此为 7 条（a–g）而非 8 条。
 
 ### CF-T17-a — substring-extraction invariant for mixed-token `sk-ant-` shapes

@@ -118,10 +118,11 @@ def test_pipeline_cache_mismatch_last_gate_fails(
 
     trace = harness._run_gates(candidate, baseline)
 
-    # Either gate-1 short-circuits (impossible here — its inputs are clean),
-    # OR the cache-mismatch fail surfaces at gate-3. Per spec the latter is
-    # the deterministic outcome with these inputs; pin both invariants from
-    # the task definition-of-done.
+    # With these inputs gates 1 + 2 pass deterministically (tier counters meet
+    # floors, line counts within caps), so the only reachable outcome is
+    # `len(trace) == 3` with `trace[-1]` = the 3-cache-compat fail.
+    # If `_run_gates` ever changes to short-circuit on PASS too, this test
+    # would catch the regression via the strict len/order/verdict asserts below.
     assert trace, "trace must not be empty"
     assert trace[-1].verdict == "fail"
     # With aligned size_metrics, gate-3 is the one that catches this.
