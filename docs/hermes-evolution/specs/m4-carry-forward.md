@@ -620,3 +620,18 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Future close criterion**: 加 `test_print_err_stderr_format_pinned(capsys)` —— 直接 call `_print_err("config", ValueError("bad"))`，capsys 抓取 stderr，assert `"evolve: config error: bad"` literal 出现
 
 > **Meta-note (handler-order pinning)**: 两位 reviewer 初稿都怀疑 dispatch 表的 handler order 缺 documentary pin；trace MRO 后确认 order 已经被 Python 继承链自然 pin（`ApplyTerminalError ISA ValueError`、`JudgeError`/`ManifestPrivacyViolation`/`EvolveEnvironmentError`/`GateInternalError` ISA `RuntimeError`），加之 `EvolveError.MUST_PRECEDE` 已 documented + sibling order test 已 cover，无需额外 CF entry。本节因此为 7 条（a–g）而非 8 条。
+
+### CF-T17-a — substring-extraction invariant for mixed-token `sk-ant-` shapes
+**Source**: ce-security-reviewer round 1 on t-17 (`89b6f9ab`)
+**Confidence**: 55%
+**Conflict**: tested invariant (model-id false-positive) is prefix-boundary;
+  substring-extraction (e.g. `noise-claude-3-5-sonnet-sk-ant-<key>`) is a
+  different invariant — ANTHROPIC_KEY_RE has no left word-boundary, so it
+  correctly extracts the embedded key. A regression pin for this safe
+  behavior would catch a future maintainer who adds `\b` "for cleanliness"
+  and silently breaks credential-extraction from concatenated tokens.
+**Defer reason**: out of scope for §9.2 stage-2 false-positive task; one
+  test is cheap but belongs in a `test_redact_substring_extraction.py`
+  alongside other regex-boundary pins, not in `test_redact_no_false_positive.py`.
+**Future close criterion**: next round that touches `nanobot/evolve/privacy/redact.py`
+  regex internals adds the substring-extraction pin in the same commit.

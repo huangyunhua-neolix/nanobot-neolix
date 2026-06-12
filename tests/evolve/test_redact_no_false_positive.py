@@ -41,6 +41,17 @@ def test_claude_haiku_model_id_not_redacted():
     assert r.matches.get("apikey:anthropic", 0) == 0
 
 
+def test_claude_4_family_versioned_model_id_not_redacted():
+    """Current Anthropic naming (claude-sonnet-4, claude-opus-4, claude-haiku-4)
+    with date suffix — production shape as of 2025. Pin so any future regex
+    drift that widens beyond `sk-` prefix still catches the model-id slip.
+    """
+    r = redact("benchmark: claude-sonnet-4-20250514 vs claude-opus-4-1-20250805")
+    assert "claude-sonnet-4-20250514" in r.text
+    assert "claude-opus-4-1-20250805" in r.text
+    assert r.matches.get("apikey:anthropic", 0) == 0
+
+
 # ---------------------------------------------------------------------------
 # Positive case: actual sk-ant-* key still gets redacted
 # ---------------------------------------------------------------------------
