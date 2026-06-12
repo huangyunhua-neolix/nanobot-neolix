@@ -145,3 +145,65 @@ def test_load_tier_orphan_expected_raises(tmp_path: Path) -> None:
 def test_load_tier_missing_files_raise(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_tier("A", "no_such_skill", tmp_path)
+
+
+def test_load_tier_missing_input_file_raises(tmp_path: Path) -> None:
+    """Only expected.jsonl present — the input.jsonl arm must trip first."""
+    skill_dir = tmp_path / "skill_x" / "A"
+    skill_dir.mkdir(parents=True)
+    _write_jsonl(skill_dir / "expected.jsonl", [_expected_row("r1", {"answer": "x"})])
+    with pytest.raises(FileNotFoundError, match="input.jsonl"):
+        load_tier("A", "skill_x", tmp_path)
+
+
+def test_load_tier_missing_expected_file_raises(tmp_path: Path) -> None:
+    """Only input.jsonl present — the expected.jsonl arm must trip independently."""
+    skill_dir = tmp_path / "skill_x" / "A"
+    skill_dir.mkdir(parents=True)
+    _write_jsonl(skill_dir / "input.jsonl", [_base_input_row("r1", {"q": "x"})])
+    with pytest.raises(FileNotFoundError, match="expected.jsonl"):
+        load_tier("A", "skill_x", tmp_path)
+
+
+def test_load_tier_b_raises_not_implemented(tmp_path: Path) -> None:
+    """Tier B has a dedicated session-jsonl layout (§3.1.3); generic loader refuses."""
+    with pytest.raises(NotImplementedError, match="Tier B"):
+        load_tier("B", "any_skill", tmp_path)
+
+
+def test_load_tier_d_raises_not_implemented(tmp_path: Path) -> None:
+    """Tier D has a per-task JSON-triple layout (§3.1.5); generic loader refuses."""
+    with pytest.raises(NotImplementedError, match="Tier D"):
+        load_tier("D", "any_skill", tmp_path)
+
+
+def test_load_tier_in_row_tier_mismatch_raises(tmp_path: Path) -> None:
+    """Row carrying a wrong tier label MUST hard-fail, not silently pass through."""
+    skill = "skill_x"
+    drifted_row = _base_input_row("rec-001", {"q": "x"})
+    drifted_row["tier"] = "C"  # path context will say "A"
+    _make_fixture(
+        tmp_path,
+        skill,
+        "A",
+        [drifted_row],
+        [_expected_row("rec-001", {"answer": "x"})],
+    )
+    with pytest.raises(ValueError, match="disagrees with path-context tier"):
+        load_tier("A", skill, tmp_path)
+
+
+def test_load_tier_in_row_skill_name_mismatch_raises(tmp_path: Path) -> None:
+    """Row carrying a wrong skill_name MUST hard-fail too."""
+    skill = "skill_x"
+    drifted_row = _base_input_row("rec-001", {"q": "x"})
+    drifted_row["skill_name"] = "other_skill"
+    _make_fixture(
+        tmp_path,
+        skill,
+        "A",
+        [drifted_row],
+        [_expected_row("rec-001", {"answer": "x"})],
+    )
+    with pytest.raises(ValueError, match="disagrees with path-context skill_name"):
+        load_tier("A", skill, tmp_path)

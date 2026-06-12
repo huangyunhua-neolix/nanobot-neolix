@@ -69,6 +69,13 @@ def load_tier(tier: Tier, skill_name: str, root: Path) -> list[EvalRecord]:
 
     Return order is the order of records in ``input.jsonl``.
     """
+    if tier in ("B", "D"):
+        raise NotImplementedError(
+            f"Tier {tier} requires a dedicated loader per spec §3.1.3/§3.1.5 "
+            f"(Tier B uses session-jsonl-by-date; Tier D uses per-task JSON triples); "
+            f"pending t-11 harness wiring."
+        )
+
     tier_dir = Path(root) / skill_name / tier
     input_path = tier_dir / "input.jsonl"
     expected_path = tier_dir / "expected.jsonl"
@@ -115,8 +122,25 @@ def load_tier(tier: Tier, skill_name: str, root: Path) -> list[EvalRecord]:
         # Loader fills tier + skill_name from path context if record omits them,
         # making fixture writing less verbose and aligning with the on-disk
         # convention (tier directory IS the source of truth for tier label).
-        merged.setdefault("tier", tier)
-        merged.setdefault("skill_name", skill_name)
+        # If the row carries an explicit value, it MUST match path-context;
+        # silent drift would let a mis-curated corpus pass through to the harness.
+        if "tier" in merged:
+            if merged["tier"] != tier:
+                raise ValueError(
+                    f"{input_path}:rid={rid!r}: in-row tier={merged['tier']!r} "
+                    f"disagrees with path-context tier={tier!r}"
+                )
+        else:
+            merged["tier"] = tier
+
+        if "skill_name" in merged:
+            if merged["skill_name"] != skill_name:
+                raise ValueError(
+                    f"{input_path}:rid={rid!r}: in-row skill_name={merged['skill_name']!r} "
+                    f"disagrees with path-context skill_name={skill_name!r}"
+                )
+        else:
+            merged["skill_name"] = skill_name
 
         out.append(EvalRecord.model_validate(merged))
 
