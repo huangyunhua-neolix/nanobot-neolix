@@ -512,7 +512,7 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Source**: R3+R3.5 convergence correctness reviewer / YELLOW~50%
 - **Confidence**: 50%
 - **Conflict**: None；当前 verdict 仅依赖 kappa_mean
-- **Defer reason**: `_KAPPA_EPSILON = 1e-9` tolerance 当前仅应用于 `kappa_mean` 与阈值 `0.7` 的比较；per-axis κ（process / output / token / aggregate）若被下游引入"reject if any axis κ < 0.6"判定，会重新引入边界 fragility 而本 tolerance 不会生效
+- **Defer reason**: `_KAPPA_EPSILON = 1e-9` tolerance 当前仅应用于 `kappa_mean` 与阈值 `0.6`（`CALIBRATION_KAPPA_THRESHOLD`）的比较；per-axis κ（process / output / token / aggregate）若被下游引入"reject if any axis κ < 0.6"判定，会重新引入边界 fragility 而本 tolerance 不会生效
 - **Future close criterion**: M5 若加 per-axis floor verdict，抽 `_passes_with_tolerance(value, threshold, *, eps=_KAPPA_EPSILON)` helper 复用于所有 κ-vs-阈值比较点（kappa_mean + per-axis）
 
 ### CF-R4-f — `1e-9` epsilon 比实际 FP error floor 宽 ~7 个量级（R3+R3.5 convergence / correctness）
