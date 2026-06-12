@@ -15,6 +15,7 @@ and the GitHub REST API at a higher layer.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,27 +31,140 @@ if TYPE_CHECKING:
 PROTECTED_BRANCHES: frozenset[str] = frozenset({"main", "master"})
 
 
+# Charset rejected by ``_validate_no_newlines``. Beyond raw ``\n`` / ``\r``,
+# markdown renderers (GitHub, GitLab, CommonMark.js) also split on the Unicode
+# line-separators U+2028 / U+2029 and the NEL (U+0085) character — any of these
+# in an interpolated field could forge a fake ``## `` header and break the
+# 5-section invariant pinned by §8.2. NUL is added for defense in depth (git
+# refnames + most parsers reject it, but it's free).
+_FORBIDDEN_NEWLINE_CHARS: frozenset[str] = frozenset(
+    {"\n", "\r", "\u2028", "\u2029", "\u0085", "\x00"}
+)
+
+
+# §8.1: per git-check-ref-format, forbid characters that confuse the refname
+# parser, command-line flag parsing, or downstream markdown rendering. Listed
+# explicitly here (rather than negated charset) so reviewers can audit.
+_FORBIDDEN_BRANCH_CHARS: frozenset[str] = frozenset(
+    {
+        " ",  # spaces break ``git rev-parse``
+        "~",
+        "^",
+        ":",
+        "?",
+        "*",
+        "[",
+        "\\",
+        "\x00",
+    }
+)
+
+
+def _validate_branch_component(name: str, *, component: str) -> None:
+    """Reject obviously-unsafe inputs that would later confuse git or markdown.
+
+    Mirrors the most relevant subset of ``git-check-ref-format`` rules plus the
+    newline / control-char guard from :func:`_validate_no_newlines`. Raises
+    :class:`ValueError` naming both ``component`` and the violation so callers
+    can debug. Empty values, leading dash (flag injection into git CLI),
+    ``..`` / ``@{`` substrings, ``.lock`` suffix, leading or trailing slash,
+    embedded ``//``, and ASCII control chars are all rejected.
+    """
+    if not name:
+        raise ValueError(f"build_branch_name: {component!r} must not be empty")
+    if name.startswith("-"):
+        raise ValueError(
+            f"build_branch_name: {component!r}={name!r} starts with '-' "
+            f"(would be parsed as a flag by git)"
+        )
+    if name.startswith("/"):
+        raise ValueError(f"build_branch_name: {component!r}={name!r} starts with '/'")
+    if name.endswith("/"):
+        raise ValueError(f"build_branch_name: {component!r}={name!r} ends with '/'")
+    if name.endswith("."):
+        raise ValueError(f"build_branch_name: {component!r}={name!r} ends with '.'")
+    if name.endswith(".lock"):
+        raise ValueError(
+            f"build_branch_name: {component!r}={name!r} ends with '.lock' "
+            f"(reserved by git-check-ref-format)"
+        )
+    if ".." in name:
+        raise ValueError(f"build_branch_name: {component!r}={name!r} contains '..'")
+    if "@{" in name:
+        raise ValueError(f"build_branch_name: {component!r}={name!r} contains '@{{'")
+    if "//" in name:
+        raise ValueError(f"build_branch_name: {component!r}={name!r} contains '//'")
+    for ch in name:
+        if ch in _FORBIDDEN_BRANCH_CHARS:
+            raise ValueError(
+                f"build_branch_name: {component!r}={name!r} contains forbidden "
+                f"char {ch!r} (U+{ord(ch):04X})"
+            )
+        if ch in _FORBIDDEN_NEWLINE_CHARS:
+            raise ValueError(
+                f"build_branch_name: {component!r}={name!r} contains line-break "
+                f"char U+{ord(ch):04X}"
+            )
+        # ASCII control chars (0x00-0x1F + 0x7F) — covers any newline / NEL
+        # already enumerated above, plus less-common DEL / SOH / etc.
+        if ord(ch) < 0x20 or ord(ch) == 0x7F:
+            raise ValueError(
+                f"build_branch_name: {component!r}={name!r} contains ASCII "
+                f"control char U+{ord(ch):04X}"
+            )
+
+
 def build_branch_name(run_id: str, skill_name: str, candidate_short_sha: str) -> str:
     """Return the deterministic evolve branch name per §8.1.
 
-    Format: ``evolve/<run_id>-<skill_name>-<candidate_short_sha>``. The caller
-    is responsible for trimming ``candidate_short_sha`` to the spec-mandated
-    8 hex chars (§8.1) — this helper does not re-trim so the test layer can
-    pin the exact concatenation contract.
+    Format: ``evolve/<run_id>-<skill_name>-<candidate_short_sha>``.
+
+    Validates each component against git-check-ref-format (via
+    :func:`_validate_branch_component`) and additionally enforces that
+    ``candidate_short_sha`` is exactly 8 lowercase hex chars (the spec §8.1
+    short-SHA contract — previously delegated to the caller, now enforced at
+    the leaf so downstream code cannot accidentally pass full SHAs or upper-
+    case digests). Raises :class:`ValueError` on any violation.
     """
+    _validate_branch_component(run_id, component="run_id")
+    _validate_branch_component(skill_name, component="skill_name")
+    _validate_branch_component(candidate_short_sha, component="candidate_short_sha")
+    if len(candidate_short_sha) != 8:
+        raise ValueError(
+            f"build_branch_name: candidate_short_sha={candidate_short_sha!r} "
+            f"must be exactly 8 chars (spec §8.1), got len={len(candidate_short_sha)}"
+        )
+    if not all(c in "0123456789abcdef" for c in candidate_short_sha):
+        raise ValueError(
+            f"build_branch_name: candidate_short_sha={candidate_short_sha!r} "
+            f"must be lowercase hex [0-9a-f]"
+        )
     return f"evolve/{run_id}-{skill_name}-{candidate_short_sha}"
 
 
 def assert_not_main(branch: str, *, manifest_path: Path, final_status: str) -> None:
     """Refuse to operate on a protected branch (§8.1 no-main invariant).
 
+    Normalizes ``branch`` before comparison (strip whitespace, strip
+    ``refs/heads/`` prefix, case-fold) so common bypasses — ``MAIN``,
+    ``" main "``, ``"main\\n"``, ``"refs/heads/main"`` — are all blocked.
+    Substring matches like ``feature/main-thing`` or
+    ``evolve/run-1-main-deadbeef`` correctly pass because normalization
+    does not strip path components.
+
     Raises :class:`ApplyTerminalError` (exit 8 per §4.6) carrying the structured
     ``final_status`` / ``manifest_path`` kwargs so the CLI can persist the
     abort state into the run manifest before exiting.
     """
-    if branch in PROTECTED_BRANCHES:
+    # Casefold BEFORE prefix-strip so uppercase variants like
+    # ``REFS/HEADS/MAIN`` are recognized.
+    normalized = branch.strip().casefold()
+    if normalized.startswith("refs/heads/"):
+        normalized = normalized[len("refs/heads/") :]
+    if normalized in PROTECTED_BRANCHES:
         raise ApplyTerminalError(
-            f"refuse to push to protected branch: {branch}",
+            f"refuse to push to protected branch: {branch!r} "
+            f"(normalized: {normalized!r})",
             final_status=final_status,
             manifest_path=manifest_path,
         )
@@ -70,19 +184,23 @@ PR_BODY_SECTIONS: tuple[str, ...] = (
 def _validate_no_newlines(**fields: str) -> None:
     """Defense-in-depth leaf guard for ``assemble_pr_body``.
 
-    A single ``\\n`` smuggled into ``skill_name`` / ``final_status`` /
-    ``run_id`` / ``gate_name`` / ``failure_reason`` would let the caller forge
-    extra ``## `` headers and break the 5-section invariant pinned by §8.2.
-    Caller-side validation (slug enforcement on skill names, manifest writer
-    schemas) is the first line; this leaf check guarantees the contract no
-    matter what reached us.
+    A single line-break character smuggled into ``skill_name`` /
+    ``final_status`` / ``run_id`` / ``gate_name`` / ``failure_reason`` would
+    let the caller forge extra ``## `` headers and break the 5-section
+    invariant pinned by §8.2. The rejected charset is
+    :data:`_FORBIDDEN_NEWLINE_CHARS` — ASCII LF/CR, Unicode line/paragraph
+    separators (U+2028 / U+2029), NEL (U+0085), and NUL. The error message
+    names both the offending field and the specific code point so callers
+    can debug.
     """
     for name, value in fields.items():
-        if "\n" in value or "\r" in value:
-            raise ValueError(
-                f"assemble_pr_body: field {name!r} contains newline — "
-                f"would break the 5-section markdown invariant"
-            )
+        for ch in value:
+            if ch in _FORBIDDEN_NEWLINE_CHARS:
+                raise ValueError(
+                    f"assemble_pr_body: field {name!r} contains line-break "
+                    f"char U+{ord(ch):04X} — would break the 5-section "
+                    f"markdown invariant"
+                )
 
 
 def assemble_pr_body(
@@ -186,4 +304,16 @@ def assemble_pr_body(
         "\n".join(diff_lines),
         "\n".join(rollback_lines),
     ]
-    return "\n\n".join(blocks) + "\n"
+    body = "\n\n".join(blocks) + "\n"
+
+    # Self-check: spec §8.2 5-section invariant. Inputs are already newline-
+    # validated upstream so user data cannot inject ``## `` headers; this
+    # post-assembly assertion catches STRUCTURAL drift from future edits to
+    # this function (e.g. accidentally dropping or renaming a section).
+    headers = re.findall(r"^## (.+)$", body, flags=re.MULTILINE)
+    if headers != list(PR_BODY_SECTIONS):
+        raise RuntimeError(
+            f"assemble_pr_body internal invariant violated: "
+            f"rendered headers={headers!r} vs expected={list(PR_BODY_SECTIONS)!r}"
+        )
+    return body

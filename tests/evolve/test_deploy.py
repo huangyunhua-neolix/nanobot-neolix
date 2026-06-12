@@ -264,7 +264,7 @@ def test_assemble_pr_body_rejects_newline_in_skill_name() -> None:
         assemble_pr_body(manifest, [])
     msg = str(exc_info.value)
     assert "skill_name" in msg
-    assert "newline" in msg
+    assert "line-break" in msg
 
 
 def test_assemble_pr_body_rejects_carriage_return_in_final_status() -> None:
@@ -273,7 +273,7 @@ def test_assemble_pr_body_rejects_carriage_return_in_final_status() -> None:
         assemble_pr_body(manifest, [])
     msg = str(exc_info.value)
     assert "final_status" in msg
-    assert "newline" in msg
+    assert "line-break" in msg
 
 
 def test_assemble_pr_body_rejects_newline_in_run_id() -> None:
@@ -282,7 +282,7 @@ def test_assemble_pr_body_rejects_newline_in_run_id() -> None:
         assemble_pr_body(manifest, [])
     msg = str(exc_info.value)
     assert "run_id" in msg
-    assert "newline" in msg
+    assert "line-break" in msg
 
 
 def test_assemble_pr_body_rejects_newline_in_gate_name() -> None:
@@ -292,7 +292,7 @@ def test_assemble_pr_body_rejects_newline_in_gate_name() -> None:
         assemble_pr_body(manifest, gates)
     msg = str(exc_info.value)
     assert "gate_name" in msg
-    assert "newline" in msg
+    assert "line-break" in msg
 
 
 def test_assemble_pr_body_rejects_newline_in_failure_reason() -> None:
@@ -304,7 +304,7 @@ def test_assemble_pr_body_rejects_newline_in_failure_reason() -> None:
         assemble_pr_body(manifest, gates)
     msg = str(exc_info.value)
     assert "failure_reason" in msg
-    assert "newline" in msg
+    assert "line-break" in msg
 
 
 def test_assemble_pr_body_accepts_none_failure_reason() -> None:
@@ -328,3 +328,186 @@ def test_assemble_pr_body_5_section_invariant_holds_under_safe_input() -> None:
     headers = _section_headers_in_order(body)
     assert len(headers) == 5
     assert headers == list(PR_BODY_SECTIONS)
+
+
+def test_assemble_pr_body_internal_invariant_holds_under_safe_input() -> None:
+    """R3-5: post-assembly structural invariant uses re.findall over the
+    rendered body. Pin that the happy-path output passes the self-check by
+    independently re-running the same re.findall on the assembled body."""
+    import re as _re
+
+    manifest = _make_run_manifest()
+    body = assemble_pr_body(manifest, [])
+    headers = _re.findall(r"^## (.+)$", body, flags=_re.MULTILINE)
+    assert headers == list(PR_BODY_SECTIONS)
+
+
+# ---------------------------------------------------------------------------
+# R3-2: _validate_no_newlines charset expansion (Unicode line separators)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "char,codepoint_hex",
+    [
+        ("\n", "000A"),
+        ("\r", "000D"),
+        ("\u2028", "2028"),  # LINE SEPARATOR
+        ("\u2029", "2029"),  # PARAGRAPH SEPARATOR
+        ("\u0085", "0085"),  # NEL
+        ("\x00", "0000"),  # NUL
+    ],
+)
+def test_assemble_pr_body_rejects_each_forbidden_line_break_char(
+    char: str, codepoint_hex: str
+) -> None:
+    """Spec §8.2 5-section invariant defense: every char in
+    ``_FORBIDDEN_NEWLINE_CHARS`` is rejected with a message naming the offending
+    field AND the specific code point."""
+    manifest = _make_run_manifest().model_copy(
+        update={"skill_name": f"foo{char}bar"}
+    )
+    with pytest.raises(ValueError) as exc_info:
+        assemble_pr_body(manifest, [])
+    msg = str(exc_info.value)
+    assert "skill_name" in msg
+    assert f"U+{codepoint_hex}" in msg
+
+
+def test_assemble_pr_body_accepts_safe_punctuation_and_spaces() -> None:
+    """Boundary pin: regular spaces, quotes, ampersands, and other 'looks weird
+    but is fine in markdown' chars must NOT be rejected."""
+    manifest = _make_run_manifest().model_copy(
+        update={"skill_name": "demo 'quoted' & ok"}
+    )
+    body = assemble_pr_body(manifest, [])
+    assert "demo 'quoted' & ok" in body
+
+
+# ---------------------------------------------------------------------------
+# R3-3: assert_not_main normalization (case + whitespace + refs/heads/ prefix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bypass",
+    [
+        "MAIN",
+        "Main",
+        "MASTER",
+        " main",
+        "main ",
+        "main\n",
+        "main\t",
+        "refs/heads/main",
+        "refs/heads/master",
+        "REFS/HEADS/MAIN",
+    ],
+)
+def test_assert_not_main_blocks_common_bypasses(
+    tmp_path: Path, bypass: str
+) -> None:
+    """R3-3: normalize before comparing so case / whitespace / refs/heads/
+    prefix bypasses are blocked."""
+    with pytest.raises(ApplyTerminalError):
+        assert_not_main(
+            bypass,
+            manifest_path=tmp_path / "m.json",
+            final_status="harness_error",
+        )
+
+
+@pytest.mark.parametrize(
+    "safe",
+    [
+        "feature/main-thing",  # substring false-positive guard
+        "evolve/run-1-main-deadbeef",  # main appears INSIDE component
+        "fix/maintainer-typo",
+        "feature/master-recipe",
+    ],
+)
+def test_assert_not_main_does_not_false_positive_on_substring(
+    tmp_path: Path, safe: str
+) -> None:
+    assert (
+        assert_not_main(
+            safe,
+            manifest_path=tmp_path / "m.json",
+            final_status="promoted_to_pr",
+        )
+        is None
+    )
+
+
+# ---------------------------------------------------------------------------
+# R3-4: build_branch_name refname validation
+# ---------------------------------------------------------------------------
+
+
+def test_build_branch_name_rejects_empty_run_id() -> None:
+    with pytest.raises(ValueError, match="run_id"):
+        build_branch_name("", "demo-skill", "deadbeef")
+
+
+def test_build_branch_name_rejects_leading_dash() -> None:
+    """A leading ``-`` could be parsed as a git CLI flag."""
+    with pytest.raises(ValueError, match="starts with '-'"):
+        build_branch_name("-run", "demo-skill", "deadbeef")
+
+
+@pytest.mark.parametrize(
+    "bad_char", [" ", "~", "^", ":", "?", "*", "[", "\\"]
+)
+def test_build_branch_name_rejects_forbidden_chars_in_skill_name(
+    bad_char: str,
+) -> None:
+    with pytest.raises(ValueError, match="forbidden char"):
+        build_branch_name("run-1", f"demo{bad_char}skill", "deadbeef")
+
+
+def test_build_branch_name_rejects_double_dot() -> None:
+    with pytest.raises(ValueError, match=r"contains '\.\.'"):
+        build_branch_name("run..1", "demo-skill", "deadbeef")
+
+
+def test_build_branch_name_rejects_at_brace() -> None:
+    with pytest.raises(ValueError, match="@"):
+        build_branch_name("run@{0}", "demo-skill", "deadbeef")
+
+
+def test_build_branch_name_rejects_lock_suffix() -> None:
+    with pytest.raises(ValueError, match=r"\.lock"):
+        build_branch_name("run.lock", "demo-skill", "deadbeef")
+
+
+def test_build_branch_name_rejects_trailing_slash() -> None:
+    with pytest.raises(ValueError, match="ends with '/'"):
+        build_branch_name("run/", "demo-skill", "deadbeef")
+
+
+def test_build_branch_name_rejects_short_sha_wrong_length() -> None:
+    with pytest.raises(ValueError, match="exactly 8 chars"):
+        build_branch_name("run-1", "demo-skill", "dead")
+    with pytest.raises(ValueError, match="exactly 8 chars"):
+        build_branch_name("run-1", "demo-skill", "deadbeef00112233")
+
+
+def test_build_branch_name_rejects_non_hex_short_sha() -> None:
+    with pytest.raises(ValueError, match="lowercase hex"):
+        build_branch_name("run-1", "demo-skill", "DEADBEEF")
+    with pytest.raises(ValueError, match="lowercase hex"):
+        build_branch_name("run-1", "demo-skill", "zzzzzzzz")
+
+
+def test_build_branch_name_rejects_newline_in_component() -> None:
+    with pytest.raises(ValueError, match="line-break"):
+        build_branch_name("run\n1", "demo-skill", "deadbeef")
+
+
+def test_build_branch_name_happy_path_still_works() -> None:
+    """Positive pin: regression guard so the validation layer doesn't break the
+    existing concatenation contract."""
+    assert (
+        build_branch_name("run-1", "demo-skill", "deadbeef")
+        == "evolve/run-1-demo-skill-deadbeef"
+    )
