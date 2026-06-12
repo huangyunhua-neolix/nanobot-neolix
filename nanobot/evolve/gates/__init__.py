@@ -33,6 +33,21 @@ class Gate(ABC):
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
+        # Spec §6.4.1: every Gate subclass MUST declare NONDETERMINISTIC in its
+        # OWN class body. Inheriting the Gate default is forbidden so reviewers
+        # can audit the property at the declaration site of every gate.
+        if "NONDETERMINISTIC" not in cls.__dict__:
+            raise TypeError(
+                f"{cls.__name__}: Gate subclass must declare NONDETERMINISTIC: "
+                f"ClassVar[bool] in its own class body (spec §6.4.1 — inheriting "
+                f"the default is forbidden so reviewers can audit the property at "
+                f"the declaration site)."
+            )
+        if not isinstance(cls.__dict__["NONDETERMINISTIC"], bool):
+            raise TypeError(
+                f"{cls.__name__}.NONDETERMINISTIC must be `bool`, got "
+                f"{type(cls.__dict__['NONDETERMINISTIC']).__name__}"
+            )
         # Dedup against repeat imports / importlib.reload / pytest re-collection so
         # the contract test's iteration over _subclasses doesn't observe duplicates.
         if cls not in Gate._subclasses:

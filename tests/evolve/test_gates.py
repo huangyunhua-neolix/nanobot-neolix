@@ -24,23 +24,52 @@ def test_gate_abc_not_directly_instantiable():
 
 
 def test_gate_subclass_must_declare_nondeterministic():
-    """Spec §6.4.1 contract: every Gate subclass declares NONDETERMINISTIC ClassVar.
+    """Spec §6.4.1 contract: every Gate subclass declares NONDETERMINISTIC ClassVar
+    in its OWN class body (inheriting the Gate default is forbidden).
 
-    The base class provides a default of False; concrete gates MUST override
-    it explicitly. This test enumerates _subclasses and asserts each one has
-    the attribute set in its own __dict__ OR (for the in-test subclass below)
-    explicitly via class body — i.e. NONDETERMINISTIC is reachable as a
-    ClassVar on the subclass.
+    Gate.__init_subclass__ enforces this at class-definition time; this test
+    additionally pins the post-condition by walking _subclasses and asserting
+    every entry has NONDETERMINISTIC directly in its own __dict__.
     """
     for sub in Gate._subclasses:
-        # Reachable as a class attribute (either own or inherited from Gate
-        # default False). The §6.4.1 contract test in the harness package
-        # additionally enforces own-attribute declaration; here we sanity-
-        # check the registry surface that contract iterates over.
-        assert hasattr(sub, "NONDETERMINISTIC"), (
-            f"{sub.__name__} missing NONDETERMINISTIC (spec §6.4.1)"
+        assert "NONDETERMINISTIC" in sub.__dict__, (
+            f"{sub.__name__} must declare NONDETERMINISTIC in its own class body "
+            f"(spec §6.4.1)"
         )
-        assert isinstance(sub.NONDETERMINISTIC, bool)
+        assert isinstance(sub.__dict__["NONDETERMINISTIC"], bool)
+
+
+def test_gate_subclass_without_nondeterministic_raises():
+    """Defining a Gate subclass without NONDETERMINISTIC must raise TypeError at
+    class-definition time (spec §6.4.1 own-declaration enforcement)."""
+    with pytest.raises(TypeError, match="NONDETERMINISTIC"):
+
+        class _Missing(Gate):  # noqa: F841 — class-body raises before binding
+            @property
+            def name(self) -> str:
+                return "_missing"
+
+            def evaluate(
+                self, candidate: "Candidate", baseline: "Baseline"
+            ) -> GateResult:
+                raise NotImplementedError
+
+
+def test_gate_subclass_nondeterministic_must_be_bool():
+    """Declaring NONDETERMINISTIC with a non-bool value must raise TypeError."""
+    with pytest.raises(TypeError, match="must be `bool`"):
+
+        class _BadType(Gate):  # noqa: F841
+            NONDETERMINISTIC: ClassVar[int] = 1  # type: ignore[assignment]
+
+            @property
+            def name(self) -> str:
+                return "_bad_type"
+
+            def evaluate(
+                self, candidate: "Candidate", baseline: "Baseline"
+            ) -> GateResult:
+                raise NotImplementedError
 
 
 def test_subclasses_registry_dedups_on_repeat_subclass_definition():
