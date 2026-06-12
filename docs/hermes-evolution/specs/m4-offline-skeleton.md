@@ -2,7 +2,7 @@
 
 > **Milestone**：M4（离线进化骨架）。属于 [Hermes 风格自我进化能力路线图](../roadmap.md) 的第四阶段。
 >
-> **状态**：草稿中（2026-06-12，C-rev14 §6 fix pass：闭合 C-rev13 4-reviewer Round D 全部 4 RED + 12 must-fix YELLOW（A-RED-1..4 / B-Y1..12）；4 条 advisory YELLOW (50% confidence) 沿用 C-rev10/11 sanctioned 路线 carry-forward 至 §12.4（CF-C-rev13-1..4）；新增决策 #115–#121（共 7 条）。§0 决策已锁定，§0–§5 已 4-reviewer 收敛 PASS，body §6 已 7-subsection drafted + C-rev14 reviewer-fix 落地，§6 仍 待 4-reviewer C-rev14 收敛验收，§7+ 待 Round E 起草。前轮 C-rev13 落地 §6 Gate 详细定义 7-subsection draft + 6 新决策（#109–#114）；C-rev12 banner 同步；C-rev11 闭合 1 RED + 6 YELLOW + 2 tighten（决策 #107 / #108 + CF-C-rev11-1/2）。
+> **状态**：草稿中（2026-06-12，C-rev15 §6 fix pass：闭合 C-rev14 reviewer round 中 3 条 ≥60% confidence must-fix YELLOW（C-Y1 `GATE_TIMEOUT_MS_HARD` 未定义 / C-Y2 `test_no_orphan_gate_subclass` scope 不全 / C-Y3 `gepa_iteration` cross-link 行号漂移）；6 条 50–55% confidence advisory YELLOW 按 C-rev10/11/13 sanctioned 路线 carry-forward 至新增 §12.5（CF-C-rev15-1..6）；新增决策 #122（`Gate.__init_subclass__` 注册表，承载 RF-2 选项 b）。本轮触发 CF-C-rev11-1 hard threshold（§12 register 累计 ≥10 未关闭 entry，post-rev15 ≈ 14），已登记于 CF-C-rev15-5 待 C-rev16 / 下一非-§6 round 执行抽离选项。§0 决策已锁定，§0–§5 已 4-reviewer 收敛 PASS，body §6 已 7-subsection drafted + C-rev14/15 reviewer-fix 双轮落地，§6 仍待 4-reviewer C-rev15 收敛验收，§7+ 待 Round E 起草。前轮 C-rev14 闭合 4 RED + 12 must-fix YELLOW（决策 #115–#121）；C-rev13 §6 7-subsection draft（决策 #109–#114）；C-rev11 闭合 1 RED + 6 YELLOW + 2 tighten（决策 #107 / #108 + CF-C-rev11-1/2）。
 >
 > **依赖**：M1（[`m1-foundations.md`](./m1-foundations.md)）—— 需要 provenance 字段（`origin: agent`、`created_by`、`created_at`）作为离线进化候选的来源标签；不依赖 M2、不依赖 M3（M3 是运行时 lane，M4 是离线 lane，两条 lane 并行无耦合）。
 >
@@ -78,6 +78,7 @@
 | 119 | **Helper module location: `nanobot/evolve/_skill_sandbox.py`（C-rev14 / B-Y10）**：§6.1.2 用到的 `_invoke_skill_in_sandbox(record)` + env-strip subprocess wrapper helper 落在 **`nanobot/evolve/_skill_sandbox.py`** 单文件 helper（与 `_atomic_swap.py` / `_cache_key.py` 并列；下划线前缀 internal namespace）。Gate 1 (`gates/test_pass.py`) 通过 `from nanobot.evolve._skill_sandbox import invoke_skill_in_sandbox` 引用。本决策同步触发**决策 #93 forward-looking trigger 满足条件检查**：`_skill_sandbox.py` 是 evolve 子系统第二个跨模块 helper（除 `_atomic_swap.py` 外），但 #93 forward-looking 触发条件是"第二个**跨模型 validator helper**"（schema validator，如 weight-bounds checker）—— `_skill_sandbox.py` 是 runtime helper 而非 validator，**不**触发抽取至 `validators.py`。`_skill_sandbox.py` 自己作为独立 helper module 存在，与 #93 forward-looking 范围正交。**Alternative 未采纳**：(A) gate-private（落在 `gates/test_pass.py` 内）→ 未来 gate 4 LLM-judge 也需 isolated subprocess invocation 时无法复用；(C) 落 `nanobot/evolve/validators.py` → 误用 #93 forward-looking 触发条件，validator 与 sandbox 是两类关注点 | §6.1.2 / §0.3 (#93 trigger 检查) | C-rev14 闭合 B-Y10：helper 模块归属 ambiguity |
 | 120 | **`tier_*_total == 0` 触发 fail（C-rev14 / A-RED-4）**：§6.1.4 中 "total=0 → rate=1.0" 除零 convention 在 fixture loader 回归（Tier C 数据集为空）时让 gate 1 trivially-pass，defeats §1.1 "≥5 core golden = gate 1 lower bound"。修复：`tier_c_total == 0 OR tier_a_total == 0 → verdict='fail'` + `failure_reason='tier-{a,c}-empty: gate-1 requires ≥1 record'`。同时把 §1.1 narrative 中"≥5 core golden"从 prose 提升为 §6.1.2 runtime precondition assert：gate 1 进入 evaluate body 第一步 `if len(tier_c_records) < 5: raise GateInternalError('tier-c-below-floor')`（gate-internal-error → §6.0 point 3 path → `verdict='fail'`），让 fixture 回归 fail-loud 而非 silent vacuous-pass。**Alternative 未采纳**：(B) 保留 `total=0 → rate=1.0` 但加 warn-log → log-only 不阻断，pipeline 仍 promoted_to_pr，破坏 hard gate 性质；(C) 把 floor 5 移到 `EvolveDefaults` 暴露为 user-tunable → 与决策 #111 spec-locked 哲学冲突 | §6.1.2 / §6.1.4 | C-rev14 闭合 A-RED-4：tier-c-empty silent vacuous-pass |
 | 121 | **Gate 1 hard timeout 机制：post-hoc warning + per-record deadline（C-rev14 / A-RED-3）**：§6.0 point 5 原"`duration_ms > GATE_TIMEOUT_MS_HARD` 由 harness 主动 cancel"在 sync `evaluate()` + thread-executor 模型下不可实现（`Future.cancel()` for running thread is no-op；threads 不可强 kill；check after return → cancel 无效）。修复：(a) Hard timeout 由 **gate 内部** per-record deadline 累加 + 显式 budget check 实现 —— gate 1 在每条 record 完成后 `if time.perf_counter() - gate_start_ns/1e9 > GATE_TIMEOUT_MS_HARD/1000: break loop, set verdict='fail', failure_reason='timeout-hard:<elapsed>ms'`；剩余 record 跳过但已跑 record 的 metrics 保留（partial signal 给 GEPA）；(b) Gate 2/3 是 O(1)，timeout 不适用；(c) Harness `_run_gates` 仍记 wall-clock `duration_ms`，但**不**再尝试 cancel —— 仅在 gate 返回 verdict 后 post-hoc 写 warn 日志（"gate exceeded soft 5min"），不改 verdict。SIGTERM/SIGKILL 仅作用于**单 record subprocess**（§6.1.2 step 5 既有），不作用于整 gate。**Alternative 未采纳**：(b) 把 long-running gate 全部改 subprocess（让 harness `os.kill()` 可达）→ 引入 multiprocessing IPC 复杂度 + pickle 限制，M4 仅 1 个 long-running gate 不值得；(c) 用 POSIX `signal.alarm` → not thread-safe（harness 跑在 asyncio loop + executor thread 上，signal 仅 main thread 可达），跨平台 Windows 不支持 | §6.0 / §6.1.2 | C-rev14 闭合 A-RED-3：thread-cancel impossible → 重新定义 hard-timeout SoT |
+| 122 [NEW C-rev15 / RF-2] | **`Gate.__init_subclass__` 子类注册表（C-rev15 / C-Y2）**：§3.6 `Gate` ABC 增加 `_subclasses: ClassVar[list[type["Gate"]]] = []` + `__init_subclass__` hook，每个具体 `Gate` 子类在 class-body 执行时自动 append 到 `_subclasses`。`tests/evolve/test_gates_registry.py::test_no_orphan_gate_subclass` 改用 `assert {type(g) for g in GATES} >= set(Gate._subclasses)` 闭合 B-Y9 covering hole —— 原 `inspect.getmembers(nanobot.evolve.gates, ...)` 仅遍历 package object 上 re-export 的属性，新增 `gates/foo.py` 但忘 `__init__.py` re-export 的 orphan 子类逃出检测。**Alternative 未采纳**：(a) 用 `pkgutil.iter_modules(...) + importlib.import_module(...)` 在测试中递归加载每个 submodule 后再 `getmembers` → 引入 import 副作用 / 顺序敏感（依 importlib cache 状态）；(b) 改用 entry-point 注册（pyproject.toml `[project.entry-points]`） → 跨进程发现机制对 `Gate` 这种 in-process registry 过重。形态对齐决策 #117 `NONDETERMINISTIC` ClassVar + #95 `STRUCTURED_KWARGS` ClassVar，无 import-time 副作用，与 `GATES` explicit ordered list 角色正交（`GATES` 是 ordered execution；`_subclasses` 是 declaration registry） | §3.6 / §6.4.1 | C-rev15 闭合 C-Y2：B-Y9 contract test scope 不全（仅遍历 package re-exports） |
 | *待 §7+ 起追加* | | | |
 
 ### 0.3.1 决策日志约定（C-rev6 / 决策 #97 / YELLOW-Y8 / Y-arch-6）
@@ -819,6 +820,18 @@ class Gate(ABC):
     # 决策 #117 / C-rev14 / B-Y11：默认 deterministic（双跑等价 assert 适用）；
     # 未来 LLM-judge / human-PR async gate 显式 override 为 True 跳过等价检查。
     NONDETERMINISTIC: ClassVar[bool] = False
+
+    # 决策 #122 / C-rev15 / C-Y2：subclass declaration registry。
+    # 任何 `class FooGate(Gate)` 在 class-body 执行时自动追加到 `_subclasses`，
+    # 让 §6.4.1 contract test 不依赖 `nanobot.evolve.gates` 包对象上的 re-export
+    # （即使新增 `gates/foo.py` 但忘 `__init__.py` re-export，orphan 也被捕获）。
+    # 与 `GATES` ordered execution list 角色正交：`GATES` 是顺序执行清单；
+    # `_subclasses` 是 declaration-time registry（不影响 evaluate 调用顺序）。
+    _subclasses: ClassVar[list[type["Gate"]]] = []
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        Gate._subclasses.append(cls)
 
     @property
     @abstractmethod
@@ -2871,10 +2884,10 @@ __all__ = [
    - 网络 hardening 是 **cooperative leak prevention**：proxy block 仅防止"诚实 skill 在执行 toolcall 时**意外**触达真实 endpoint"；candidate skill 若主动 import socket 仍可绕过 —— M4 spec 不防御 adversarial candidate（all candidates 均由 GEPA 在我方 prompt 模板控制下生成，trust boundary 在 GEPA 而非 gate）。M5 若引入 third-party-evolved candidate（外部 Darwinian Evolver subprocess）需重新评估威胁模型。
 3. **Failure mode 分类**：`evaluate` 抛任何 `Exception` 子类（**不**含 `BaseException` 直系如 `KeyboardInterrupt` / `SystemExit` / `asyncio.CancelledError`，这些 MUST 透传至 harness top-level 并由 `OfflineHarness.run()` 顶层 try/except 捕获后映射为 `final_status='harness_error'` + 上抛供 CLI handler 转 SIGINT/exit 130 / 标准退出语义；harness 内 `_run_gates` 不得 swallow 这三类）→ harness 把该 gate 视为 `verdict="fail"`，`failure_reason = f"gate-internal-error: {type(exc).__name__}: {str(exc)[:200]}"`，traceback 写到 **`<run_id>/gates/<candidate-hash-prefix>/<N>-<name>.error.txt`**（决策 #116 / B-Y5；与 §6.4.4 既有 per-candidate sub-dir `*.json` 路径对齐，避免同 run 多 candidate gate 失败的 traceback 互相覆盖）。Cleanup policy: 文件持久至 run 全程结束，由 `nanobot evolve report <run-id>` 输出 "internal-error candidates" appendix 表列举。Gate 内部异常**不**冒泡为 `EvolveError` —— gate 的对外语义只有 `pass` / `fail`，不区分"业务 fail"与"实现 bug"。CI 监控可通过扫描 `*.error.txt` 文件检测实现 bug 累积（决策 #109）。
 4. **`metrics` / `evidence` 字段稳定性公约**：每个 gate 的 `metrics: dict[str, float]` 含一个**契约**键集（必填，schema 锁定）+ 任意**诊断**键（可选，自由扩展）；新增 `evidence: Optional[dict[str, str]]`（决策 #116）承载非数值 audit-trail 标识，亦区分契约键 vs 诊断键。两 dict 角色正交：`metrics` 仅承载可参与 fitness aggregation / report 数值聚合的浮点量，`evidence` 仅承载只读字符串标识（hex hash / 路径 / external job-id）。契约键集是 SoT —— 跨 milestone 对外 contract 仅承诺契约键的语义稳定性。M4 三 gate 的契约键集见 §6.1.4 / §6.2.4 / §6.3.4。
-5. **Gate execution telemetry + hard timeout**（决策 #121 / C-rev14 / A-RED-3）：harness 在调用 `evaluate` 前后记 `time.perf_counter_ns()`，差值 / 1e6 写入 `GateResult.duration_ms`（int）。**Hard timeout 的 SoT 在 gate 内部** —— sync `evaluate()` 在 thread executor 中无法被 harness 强 cancel（`Future.cancel()` 对已开跑的 thread 是 no-op；threads 不可强 kill）。约定：
+5. **Gate execution telemetry + hard timeout**（决策 #121 / C-rev14 / A-RED-3）：harness 在调用 `evaluate` 前后记 `time.perf_counter_ns()`，差值 / 1e6 写入 `GateResult.duration_ms`（int）。**Hard timeout 的 SoT 在 gate 内部** —— sync `evaluate()` 在 thread executor 中无法被 harness 强 cancel（`Future.cancel()` 对已开跑的 thread 是 no-op；threads 不可强 kill）。**常量定义位置**（C-rev15 / C-Y1 / RF-1）：`GATE_TIMEOUT_MS_HARD: int = 600_000`（10 分钟），module-level constant 落在 `nanobot/evolve/gates/test_pass.py`，与 `PER_RECORD_TIMEOUT_S = 30` 同位放置（§6.1.2 line ~2945）。Sourcing rationale：5 records × 30s `PER_RECORD_TIMEOUT_S` × ~4× slack ≈ 10min — 与原决策 #121 hard timeout intent 一致（GEPA 单候选 gate-1 不应吞噬 CI runner 半小时以上）。Gate 2/3 不需要此常量（O(1) 操作）。约定：
    - **Gate 1 (long-running)** MUST 在每条 record 完成后 budget-check：`if (time.perf_counter() - gate_start) * 1000 > GATE_TIMEOUT_MS_HARD: break loop, set verdict='fail', failure_reason='timeout-hard:<elapsed>ms'`；剩余 record 跳过但已跑 record 的 metrics 保留（partial signal 给 GEPA）。
    - **Gate 2/3 (O(1))**：timeout 不适用（hash compare / int compare 永远 < ms 级）；budget-check 省略。
-   - **Harness 端**：`_run_gates` 仍记 wall-clock `duration_ms`，但**不**再尝试 cancel；仅在 gate 返回 verdict 后 post-hoc：若 `duration_ms > GATE_TIMEOUT_MS_HARD` 但 verdict 已 pass / fail（gate 内部 budget-check 未触发即收尾），写 warn-log "gate exceeded hard timeout but completed (suspicious)"；不改 verdict。
+   - **Harness 端**：`_run_gates` 仍记 wall-clock `duration_ms`，但**不**再尝试 cancel；仅在 gate 返回 verdict 后 post-hoc：若 `duration_ms > GATE_TIMEOUT_MS_HARD`（同 SoT 常量，import from `nanobot.evolve.gates.test_pass`）但 verdict 已 pass / fail（gate 内部 budget-check 未触发即收尾），写 warn-log "gate exceeded hard timeout but completed (suspicious)"；不改 verdict。
    - SIGTERM / SIGKILL 仅作用于 §6.1.2 step 5 的**单 record subprocess**（per-record 30s deadline），不作用于整 gate。
    - Per-gate soft timeout（warn 但不 cancel）见各 gate 子节。
 
@@ -2925,7 +2938,7 @@ for each record in (Tier C ∪ Tier A):
                           per record.match_mode (§3.1, default 'loose')
     4. record per-record telemetry into metrics["records"][record_id]
        (诊断键，非契约键)
-    5. budget-check (决策 #121 / hard-timeout SoT)：
+    5. budget-check (决策 #121 / hard-timeout SoT；常量定义 §6.0 point 5 + 本节末 module-level)：
        if (time.perf_counter() - gate_start) * 1000 > GATE_TIMEOUT_MS_HARD:
            break loop, set verdict='fail',
            failure_reason='timeout-hard:<elapsed>ms (records done: N/M)'
@@ -2943,6 +2956,8 @@ verdict:
 **Per-record 失败隔离**：单条 record 的 subprocess crash / timeout / exception → 该条记 `outcome=False`，gate 不因单条 outcome 终止 —— 全部 record 跑完才计 `tier_*_rate`。理由：partial metrics 才让 GEPA-iteration loop 拿到稳定 fitness（gate 1 短路全停 → metrics 缺失 → 后续 GEPA round 无 signal）。这与 §3.6 line 825 "首个 fail 即 short-circuit" 的**跨 gate** 短路不冲突 —— 短路是 gate 之间，gate 1 内部全跑（决策 #112）。
 
 **Per-record timeout**：`PER_RECORD_TIMEOUT_S = 30`（module-level constant，与 6.1.1 阈值同放置 reasoning）。subprocess 超过 30s 即 SIGTERM → 5s 后 SIGKILL → 该条 `outcome=False`，写诊断键 `metrics["timeouts"][record_id] = duration_ms`。
+
+**Hard-timeout 常量同位声明**（C-rev15 / C-Y1 / RF-1）：`GATE_TIMEOUT_MS_HARD: int = 600_000` 同放 `nanobot/evolve/gates/test_pass.py` module top（紧邻 `PER_RECORD_TIMEOUT_S` / `TIER_*_PASS_RATE_FLOOR_BPS`）；`from nanobot.evolve.gates.test_pass import GATE_TIMEOUT_MS_HARD` 是 §6.0 point 5 harness post-hoc warn-check 的 import 来源。Sourcing：5 records × 30s × ~4× slack ≈ 10min，与决策 #121 hard timeout intent 一致。
 
 #### 6.1.3 失败归因（`failure_reason`）
 
@@ -3094,7 +3109,7 @@ verdict:
 **Registry contract test**（C-rev14 / B-Y9）：手动维护的 `GATES` list 与"name 前缀按位置对齐"约定靠 `tests/evolve/test_gates_registry.py` 强制：
 
 - `test_gates_ordering_matches_name_prefix`：MUST 断言 `for i, gate in enumerate(GATES): assert gate.name.startswith(f"{i+1}-")`，防止 list 位置与 name 前缀漂移。
-- `test_no_orphan_gate_subclass`：MUST 断言 `inspect.getmembers(nanobot.evolve.gates, predicate=lambda c: isinstance(c, type) and issubclass(c, Gate) and c is not Gate)` 返回的全部具体 `Gate` 子类都已在 `GATES` 中实例化，没有遗漏的 `class FooGate(Gate): ...` 定义但未注册的孤儿类。
+- `test_no_orphan_gate_subclass`（C-rev15 / 决策 #122 / C-Y2 / RF-2）：MUST 断言 `set(Gate._subclasses) <= {type(g) for g in GATES}`（§3.6 `Gate._subclasses` registry 经 `__init_subclass__` 在 class-body 执行时自动 populate）—— 任何具体 `Gate` 子类（无论是否被 `nanobot/evolve/gates/__init__.py` re-export）若未在 `GATES` 中实例化即 fail。原 C-rev14 草稿 `inspect.getmembers(nanobot.evolve.gates, ...)` 仅遍历 package object 上的 re-export 属性 —— 新增 `gates/foo.py` 但忘 `__init__.py` re-export 的 orphan 子类逃出检测；`_subclasses` registry 闭合该 covering hole（B-Y9 真正闭合）。测试需在 `from nanobot.evolve.gates import *` 之后断言（确保所有 submodule 在 `__init__.py` 已被 import 一次，触发各 submodule 的 class-body → `__init_subclass__` 副作用）。
 
 理由：introspection-derived `GATES`（自动按 name 前缀排序）虽更"自动"但破坏 `GATES` 作为 explicit ordered list 的可读性 + 让"加 gate 4 时显式 append"的 audit trail 模糊；contract test 是更轻量级的执行（决策 #104 enforcement 精神镜像 —— 让规则机械化但不引入 introspection 副作用）。M5 加 gate 4 / gate 5 时这两条测试自动覆盖。
 
@@ -3126,7 +3141,7 @@ GEPA 优化器内部有"低 fitness 候选不进 gate"机制：候选若 `judge_
 
 #### 6.4.4 全 candidate 失败下的 `gate_verdicts` 选取
 
-§3.7 line 875–876 已锁定：`RunManifest.gate_verdicts` 只记**一个** candidate 的 trace —— promoted candidate（若有）；全员 reject 时记 fitness 最高者的 trace。本节 normative 重申：harness 选取规则是 stable-sort by `judge_consensus.aggregate desc, candidate.gepa_iteration asc`，取 top-1 写入 `gate_verdicts`。**`gepa_iteration` cross-link**（C-rev14 / B-Y7）：本字段定义在 §3.2 line 434 `Candidate` schema（`gepa_iteration: int  # GEPA 迭代序号（≥1）`）；本节 tiebreak 规则的 SoT 即 §3.2 该字段，确保 reviewer / 实现者能 trace 到字段定义。其余候选 trace 仍落 per-candidate `<run_id>/gates/<candidate-hash-prefix>/*.json`（每候选一组 sub-dir，从 §2.2 line 250 既有目录约定派生；与 §6.0 point 3 traceback 落库路径同前缀对齐）。
+§3.7 line 875–876 已锁定：`RunManifest.gate_verdicts` 只记**一个** candidate 的 trace —— promoted candidate（若有）；全员 reject 时记 fitness 最高者的 trace。本节 normative 重申：harness 选取规则是 stable-sort by `judge_consensus.aggregate desc, candidate.gepa_iteration asc`，取 top-1 写入 `gate_verdicts`。**`gepa_iteration` cross-link**（C-rev14 / B-Y7；C-rev15 / C-Y3 / RF-3：line-number cite 删除，改 stable anchor）：本字段定义在 §3.2 `Candidate` schema（`gepa_iteration: int  # GEPA 迭代序号（≥1）`）；本节 tiebreak 规则的 SoT 即 §3.2 该字段，确保 reviewer / 实现者能 trace 到字段定义。原 C-rev14 落地的 `§3.2 line 434` 行号引用在 §3.2 schema 内字段排序变更时即漂移（line 434 实际是 `Baseline.loaded_from`），改用章节锚点避免 in-spec cross-ref 行号刚性绑定。其余候选 trace 仍落 per-candidate `<run_id>/gates/<candidate-hash-prefix>/*.json`（每候选一组 sub-dir，从 §2.2 line 250 既有目录约定派生；与 §6.0 point 3 traceback 落库路径同前缀对齐）。
 
 ### 6.5 Gate 输出 → `final_status` 映射
 
@@ -3194,7 +3209,7 @@ def _compute_final_status(promoted, all_candidates, baseline):
 | `final_status == 'promoted_to_pr'` ⇒ `len(gate_verdicts) == len(GATES) and all(pass)` | §6.5.2 `_select_promoted` | M5 加 gate 4–5 时 `len(GATES)=5`，`promoted_to_pr` 自动要求 5-pass |
 | Gate 实现 deterministic + offline | §6.0 point 1 | M5 `SemanticFidelityGate` 调 LLM judge → 非 deterministic → 例外条款必须在 §14 显式 carve-out（gate 4 是计划中第一个例外，M5 spec 必须正面处理） |
 
-> §6 Gate 详细定义完。本章 C-rev13 引入决策 #109–#114（6 条），C-rev14 闭合 4 RED + 12 must-fix YELLOW 后追加决策 #115–#121（7 条），4 条 advisory YELLOW 至 §12.4（CF-C-rev13-1..4）。下一节 §7 Judge rubric 与 calibration。
+> §6 Gate 详细定义完。本章 C-rev13 引入决策 #109–#114（6 条），C-rev14 闭合 4 RED + 12 must-fix YELLOW 后追加决策 #115–#121（7 条），4 条 advisory YELLOW 至 §12.4（CF-C-rev13-1..4）。C-rev15 闭合 3 条 ≥60% confidence must-fix YELLOW（C-Y1 `GATE_TIMEOUT_MS_HARD` 常量定义 / C-Y2 `_subclasses` 注册表 / C-Y3 `gepa_iteration` stable anchor）后追加决策 #122（1 条，承载 RF-2 `__init_subclass__` 选项），6 条 advisory YELLOW 至 §12.5（CF-C-rev15-1..6）。下一节 §7 Judge rubric 与 calibration。
 
 ## 7. Judge rubric 与 calibration
 
@@ -3323,6 +3338,58 @@ M5+ 启动 retro 时 MUST review §12 全部未关闭 entry；满足 close crite
 - **Conflict**: Coh / Corr / Scope GREEN on 决策 #109 既有 1→2→3 ordering（metrics 完整性优先 over wall-clock）；Arch-Y6 顾虑是"gate-3 fails for free（O(1) hash compare），花 gate-1 数分钟 subprocess 时间在 cache-broken candidates 上是浪费"在 §6.4.1 既有 trade-off 分析中未被显式承认 —— 论证只覆盖了 metrics 完整性但未列出 wall-clock 浪费的具体量级
 - **Defer reason**: 决策 #109 既有 trade-off 分析在质性层面覆盖了 wall-clock cost（§6.4.3 GEPA-layer early termination 部分缓解），但未给定量数据 —— 实际 GEPA candidate 中 cache-key-broken 比例需 M5 实测才知。若实测 ≥ 40% candidates fail gate-3，"花 gate-1 时间在必然 reject 的 candidate 上"成本显著，可能 outweigh metrics 完整性收益；若 ≤ 5%，cost 可忽略。M4 阶段无实测数据 → 按 advisory 保留 trade-off 决策不变
 - **Future close criterion**: M5 retro 检视 M4 完整 run 的 gate-3 fail rate。若 ≥ 40% → re-evaluate ordering 至 3→1→2（即 cheap-first），即便牺牲部分 partial-test-metrics 给 GEPA；同步新增 M5 决策 amend 决策 #109，把 ordering 改为 conditional（基于实测 fail rate）。若 < 40% → 本 entry 闭合，决策 #109 ordering 保留。Decision close criterion 是可观测的实测百分比阈值，非自循环
+
+### 12.5 C-rev14 user-sanctioned carry-forward entries (C-rev15 round close-out)
+
+本批次 6 条 entry 来自 C-rev14 §6 reviewer round 中 50–55% confidence advisory 观察。C-rev15 fix pass 中按 C-rev10/11/13 sanctioned 路线（"全部修复，多轮直到没有 red/yellow；advisory YELLOW (50–55% confidence) 走 sanctioned carry-forward 至 §12 per established precedent"）保留为 register entries，等待真实 trigger 验证后再决定关闭或上升为 must-fix。**本批次触发 CF-C-rev11-1 hard threshold**（§12 register 累计未关闭 entry 数：12.2 (3) + 12.3 (2) + 12.4 (3 active；CF-C-rev13-1 已 CLOSED) + 12.5 (6) ≈ 14，跨过 ≥10 评估线），见 CF-C-rev15-5。
+
+#### CF-C-rev15-1 — 决策 #117 forward-looking semantics gap（cluster: A-Y1 + C-Y5 + Scope-Y1）
+
+- **Source**: C-rev14 reviewer round / Arch-Y1 + Corr-Y5 + Scope-Y1（cluster collapse；3 reviewer 同源观察）
+- **Confidence**: 50%
+- **Conflict**: §6.0 point 1 + 决策 #117 GREEN-on-form（ClassVar opt-out 形态对齐 #95 `STRUCTURED_KWARGS`）；advisory 顾虑是 forward-looking 实施细节 —— (i) discovery semantics 未声明（`getattr(gate, "NONDETERMINISTIC")` MRO inheritance vs `cls.__dict__.get("NONDETERMINISTIC")` strict-own），spec 未文档化 inheritance-via-MRO 是 intended（默认 `False` 经 MRO 继承到子类，与 STRUCTURED_KWARGS strict-own registry 语义有意区分）；(ii) double-run assertion 推迟到 §10 不变量章节，C-rev15 期 `NONDETERMINISTIC` ClassVar 仍是纯 declarative（无运行时消费者）；(iii) §10 stub 当前未交叉引用决策 #117，drafter 起草时漏 conditional `NONDETERMINISTIC=False` guard 风险存在
+- **Defer reason**: 三个 sub-finding 均为 forward-looking 实施细节，须在 §10 实际起草（Round H）时解决；C-rev15 round 是 §6 fix pass，§10 仍 stub 未起草，提前规定 §10 内部结构是 over-prescriptive。M4 落地时 `NONDETERMINISTIC=False` 默认值在三 gate 全继承（无 override），无 active 行为分歧
+- **Future close criterion**: §10 (Round H) drafter MUST 满足三条全部：(a) 显式引用决策 #117 与 inheritance-via-MRO discovery 形式（推荐 `getattr` w/ default `False`）；(b) 编码 harness 双跑等价 assert 的 conditional `if not gate.NONDETERMINISTIC:` guard；(c) 与 STRUCTURED_KWARGS / MUST_PRECEDE registry 语义对比释明（避免新贡献者误解为同质 strict-own registry）。三条任一缺失 → 本 CF reopen 为 RED，需在 §10 round 内闭合
+
+#### CF-C-rev15-2 — 决策 #117 × GEPA fitness-signal 交互未规定（A-Y2）
+
+- **Source**: C-rev14 reviewer round / Arch-Y2
+- **Confidence**: 50%
+- **Conflict**: §6.0 point 1 GREEN on `NONDETERMINISTIC=True` opt-out 路径；advisory 顾虑是当 M5 gate 4 (`SemanticFidelityGate` LLM-judge) 引入 `NONDETERMINISTIC=True` 时，gate 的 `metrics: dict[str, float]` 可能携带 noisy / 跨调用 unreproducible 的浮点值（如 LLM judge score 受 sampling 抖动影响）。GEPA fitness aggregation 若直接消费这些 metrics → 单候选跨 GEPA round 的 fitness 时序信号被 LLM 噪声污染，优化方向漂移。C-rev15 spec 未声明 nondeterministic gate metrics 是否参与 fitness aggregation
+- **Defer reason**: M4 三 gate 全部 `NONDETERMINISTIC=False`，M4 范围内 fitness aggregation 不会触及该 case；属 M5 gate 4 落地时的 design space。提前在 M4 spec 锁定"nondeterministic metrics 是否参与 fitness"会过度规定 M5 调和方案（averaging / seeded / 独立通道等多个候选，需实测 LLM judge 噪声分布后再选）
+- **Future close criterion**: M5 gate 4 spec 起草（`m5-darwinian-evolver.md` §gate-4 章节）MUST 显式 carve-out `NONDETERMINISTIC=True` gate metrics 的 fitness aggregation 政策。默认 proposal：从 GEPA fitness aggregation **排除** `NONDETERMINISTIC=True` 的 gate metrics（仅作为 audit / report-only 信号）；若选择**包含**则 MUST 指定 averaging / seeding / variance-bounding 策略并跨链 CF-C-rev13-3（GEPA fitness-signal 顺序理由）。两路任一落地，本 CF 关闭
+
+#### CF-C-rev15-3 — Gate ABC budget-check 义务在 ABC 外文档化（A-Y3）
+
+- **Source**: C-rev14 reviewer round / Arch-Y3
+- **Confidence**: 50%
+- **Conflict**: §6.0 point 5 GREEN on hard timeout SoT 重定义（决策 #121）；advisory 顾虑是 §3.6 `Gate` ABC docstring（line ~830 `"同步评估；不允许调网络"`）只描述 sync + offline 两条，不提 `GATE_TIMEOUT_MS_HARD` budget-check 义务。Hard-timeout SoT 实际生活在 §6.0 point 5 散文中 —— 抽象层泄漏：M5 LLM-judge gate 4 实现者必须读 §6.0 prose 才能发现 budget-check 责任，单看 ABC 签名 / docstring 无法推导
+- **Defer reason**: M4 仅 1 个 long-running gate（gate 1），budget-check 义务在 §6.1.2 主体已显式编码 + §6.0 point 5 跨 gate 公约描述清楚。M5 gate 4 是真实 trigger（首个新 long-running gate），届时再决定是否将义务上提到 ABC 形态。提前 over-engineering 风险：(i) 在 ABC 加 docstring 段易被忽略；(ii) 引入 `LONG_RUNNING: ClassVar[bool]` 多此一举（gate 2/3 是 O(1) 已天然不需 budget-check）；(iii) cross-ref 形态 vs ClassVar 形态选择本身有 trade-off，需结合 M5 实际经验决策
+- **Future close criterion**: 至 M5 spec-writing（gate 4 章节起草）或更早，三选一闭合：(a) 在 §3.6 `Gate.evaluate` docstring 加一行 "若 gate 是 long-running，MUST 在每条 record 后 budget-check `GATE_TIMEOUT_MS_HARD`，跨 §6.0 point 5"；(b) 引入 `LONG_RUNNING: ClassVar[bool] = False` 形态（同决策 #117 `NONDETERMINISTIC` 形）+ harness `_run_gates` 在 invoke 前 conditional 注入 `gate_start = time.perf_counter()` 的协议；(c) 加一行 §3.6 → §6.0 point 5 cross-ref。三条任一落地本 CF 关闭；advisory 不阻塞 M4 实现
+
+#### CF-C-rev15-4 — 决策 #115 self-application + #115/#121 own-cell overage（cluster: A-Y4-a + Coh-Y1）
+
+- **Source**: C-rev14 reviewer round / Arch-Y4-a + Coh-Y1（cluster collapse；同源观察）
+- **Confidence**: 50%
+- **Conflict**: §0.3.1 sub-rule 4（决策 #115）GREEN on form （度量 SoT 单一化）；advisory 顾虑是 (i) "≤ 8 逻辑单元 + 1500-char 硬上限" 是 spec 文本约定，无 CI lint 强制 —— `scripts/lint_decision_log.py` 不存在，rule 静默漂移风险存在；(ii) 决策 #115 自身 rationale 按 alternative-block 边界严格切分约 9 单元（超过它定义的 8 单元 cap by 1）；决策 #121 rationale 长度 ≥ 1500 chars 临界。两条决策都是 *规则定义自身* 与规则冲突
+- **Defer reason**: rule 定义本身的 self-application 是程序化合规问题，不影响读者对决策内容的理解（决策 #115 / #121 文本含义清晰）；提前在 C-rev15 强制 grandfather marker 或 lint 脚本会让 §0.3 改写量超出 RF 三条修复 scope。属 advisory governance hygiene
+- **Future close criterion**: 至下一次决策日志 grooming round（或 M5 spec start retro），二选一闭合：(i) 落地 `scripts/lint_decision_log.py` 作为 M5 in-scope 任务（CI 上 enforce ≤8 单元 + ≤1500 char）；(ii) 在决策 #115 / #121 标题行追加 `[GRANDFATHERED PRE-RULE-FINALIZATION]` marker（保留 audit 可见）。任一落地本 CF 关闭
+
+#### CF-C-rev15-5 — §12 register threshold trip + sub-section proliferation（cluster: A-Y4-b + Scope-Y2 + CF-C-rev11-1 trigger）
+
+- **Source**: C-rev14 reviewer round / Arch-Y4-b + Scope-Y2（cluster collapse；同时是 CF-C-rev11-1 hard threshold trip）
+- **Confidence**: 50%
+- **Conflict**: §12.1 / 决策 #106 GREEN on register format；CF-C-rev11-1 已声明 ≥10 未关闭 entry 是 hard threshold；C-rev15 后实际计数：§12.2 (3) + §12.3 (2) + §12.4 (3 active；CF-C-rev13-1 已 CLOSED) + §12.5 (6) ≈ **14 未关闭 entry**（含本 CF 自身），跨过阈值。同时 sub-section 形态（§12.2 / 12.3 / 12.4 / 12.5 per-round）对决策 #106 强制的 `Source` 字段（已承载轮次 chronology）冗余，导航开销上升
+- **Defer reason**: C-rev15 是 §6 fix pass，scope 仅限 RF-1/2/3 + CF 登记。§12 整章重组（CF-C-rev11-1 闭合方案）属 spec 结构化重排，会跨章节大量 churn，不应在 C-rev15 round 内执行；同时也是 CF-C-rev11-1 自身的 future close criterion 触发，二者一起在 C-rev16 / 下一非-§6 round 处理更经济
+- **Future close criterion**: 至 C-rev16（或下一非-§6 round），执行 CF-C-rev11-1 既定的两选项：**(a) 推荐**：抽离 `docs/hermes-evolution/specs/m4-carry-forward.md` 独立 tracking 文件 —— 按 chronological list（保留 Source 字段承载轮次归属），spec 内仅留 cross-link 占位 §12，废弃 per-round sub-sections。**(b)**：迁移 active CFs 至 GitHub Issues（labels: `m4` / `carry-forward` / `confidence-50`），spec 内 §12 仅保留 closed entry audit trail 与 link template。任一落地后本 CF + CF-C-rev11-1 共同闭合
+
+#### CF-C-rev15-6 — SIGINT → exit 130 mapping ambiguity（C-Y4）
+
+- **Source**: C-rev14 reviewer round / Corr-Y4
+- **Confidence**: 55%
+- **Conflict**: §4.6 dispatch table 当前**无** KeyboardInterrupt / exit 130 行；§5.3 line ~1772 表达 "SIGINT 不映射到固定 exit code"；§6.0 point 3 line ~2872 表达 "CLI handler 转 SIGINT/exit 130 / 标准退出语义"。两处 phrasing 留下两种合理读法：(i) harness 不显式 map，让 Python interpreter SIGINT 默认 handler 透传产生 130；(ii) CLI handler 显式 map exit 130。实现者分歧风险存在
+- **Defer reason**: M4 单元测试与 §6.0 point 3 traceback 落库路径已定义，KeyboardInterrupt 在 `_run_gates` 内不被 swallow（透传至 harness top-level）这一点 §6.0 point 3 已锁；上层 mapping ambiguity 仅影响 CLI 表面 exit code 一致性，不影响 gate / harness 数据完整性。属 §4-§5 dispatch 章节的小 cleanup，留待下一次 §4-§5 fix round 一并处理更高效
+- **Future close criterion**: 下一次 §4-§5 fix round（Round F 或更晚），二选一闭合：(a) §4.6 dispatch 表追加行 `130 | KeyboardInterrupt 透传 / SIGINT 默认行为 | 用户 Ctrl-C | 是` + §10 不变量章节为 KeyboardInterrupt 添加 carve-out（不参与"任何异常都被 dispatch 表覆盖"普遍量化）；(b) 改写 §6.0 point 3 句式为 "CLI handler 让 KeyboardInterrupt 透传至 Python 默认 SIGINT 处理（exit 130 由 interpreter 默认提供，harness 不显式 map）"。任一落地本 CF 关闭；不允许 M4 ship 仍同时存在两 phrasings
 
 ## 13. 决策日志
 
