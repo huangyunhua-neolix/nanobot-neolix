@@ -2,7 +2,7 @@
 
 > **Milestone**：M4（离线进化骨架）。属于 [Hermes 风格自我进化能力路线图](../roadmap.md) 的第四阶段。
 >
-> **状态**：草稿中（2026-06-12，C-rev17 §6 fix-round close-out：闭合 C-rev16 reviewer round 6 条 inline RF —— RF-1 GATE_TIMEOUT_MS_HARD derivation 量纲修复（显式 `1000 ms/s` 因子，dimensional clarity）+ RF-2 CF-C-rev15-5 auto-promote-to-RED 收紧（命名 Arch reviewer / RF-grade headline RED / 禁止再 §12 deferral）+ RF-3 决策 #122 行 header 补 `[AMENDED-INLINE C-rev16 / RF-2+RF-3]` marker（per 决策 #108 + §0.3.1 sub-rule 6）+ RF-4 GATE_TIMEOUT_MS_HARD 迁移 trigger owner 命名（M5 round-A Arch reviewer + 第二消费者抵达即迁）+ RF-5 CF-C-rev16-1 path-b carve-out（GitHub Issues 迁移下 sibling issue 同 co-closure）+ RF-6 §3.6 docstring Note 4 governance forward-guard（M5+ 同类 self-referential trigger note 必须先 §12 register 否则 governance violation）；新增 1 条 §12.7 entry（CF-C-rev17-1，ABC docstring meta-note governance；Arch Focus 2 + Scope Focus 5 paired）；本轮 0 条新决策（per §0.3.1 grooming，RF-1/2/4/5/6 是 localized clarification，RF-3 amends existing 决策 #122）。§12 未关闭 ≈ 15 → ≈ 16（仍受 CF-C-rev15-5 hard deadline 约束）。§0 决策已锁定，§0–§5 已 4-reviewer 收敛 PASS，body §6 已 7-subsection drafted + C-rev14/15/16/17 reviewer-fix 四轮落地，§6 仍待 4-reviewer C-rev17 收敛验收，§7+ 待 Round E 起草。前轮 C-rev16 闭合 7 inline RF + 1 §12.6 entry（CF-C-rev16-1）；C-rev15 闭合 3 must-fix YELLOW（C-Y1/2/3）+ 6 advisory CF（CF-C-rev15-1..6）+ 决策 #122；C-rev14 闭合 4 RED + 12 must-fix YELLOW（决策 #115–#121）；C-rev13 §6 7-subsection draft（决策 #109–#114）；C-rev11 闭合 1 RED + 6 YELLOW + 2 tighten（决策 #107 / #108 + CF-C-rev11-1/2）。
+> **状态**：草稿中（2026-06-12，C-rev18 FINAL SWEEP：parent C-rev17 / `44744dd9`。本轮执行 **CF-C-rev15-5 close-path (a)** —— §12 整章物理抽离至 sibling file [`m4-carry-forward.md`](./m4-carry-forward.md)，spec §12 退化为 3-line pointer，per-round sub-sections (12.2–12.7) 在 sibling file 重组为 chronological numbered sections (§2–§7)；3 条 CF 共同闭合（CF-C-rev15-5 path-(a) 执行 + CF-C-rev16-1 path-(a) co-closure clause + CF-C-rev17-1 §12-relocation co-closure clause），sibling file 头部 + 各 entry header 加 `[CLOSED C-rev18 via close-path (a)]` marker（body 保留作 audit trail）。同轮一次性起草 §7–§14 substance：§7 Judge rubric + κ ≥ 0.6 calibration / §8 PR-only deploy 5-段 PR body + label / §9 4-stage redaction pipeline + per-row manifest / §10 9 不变量编号 + enforcement point / §11 8 项 deferred-to-M5 / §13 3-line pointer to §0.3 / §14 7 项 M5 继承契约。§0.3 新增 5 条决策 #123–#127（rubric default weights / `RUBRIC_PASS_THRESHOLD=6.0` / calibration corpus size 25–35 / κ ≥ 0.6 threshold / redaction stage ordering），cap 内。§12 未关闭 entry 数：相对 C-rev17 ≈ 16 → C-rev18 ≈ 13（CF-C-rev15-5/16-1/17-1 关闭）；§12 现以 sibling file 形态承载，CF-C-rev11-1 hard threshold 重设基线。§0–§5 已 4-reviewer 收敛 PASS，§6 C-rev14/15/16/17 reviewer-fix 四轮落地，§6 仍待 4-reviewer C-rev17 收敛验收；§7+ C-rev18 起草到位，待 4-reviewer round E 验收。前轮 C-rev17 闭合 6 inline RF + 1 §12.7 entry（CF-C-rev17-1）；C-rev16 闭合 7 inline RF + 1 §12.6 entry（CF-C-rev16-1）；C-rev15 闭合 3 must-fix YELLOW（C-Y1/2/3）+ 6 advisory CF（CF-C-rev15-1..6）+ 决策 #122；C-rev14 闭合 4 RED + 12 must-fix YELLOW（决策 #115–#121）；C-rev13 §6 7-subsection draft（决策 #109–#114）；C-rev11 闭合 1 RED + 6 YELLOW + 2 tighten（决策 #107 / #108 + CF-C-rev11-1/2）。
 >
 > **依赖**：M1（[`m1-foundations.md`](./m1-foundations.md)）—— 需要 provenance 字段（`origin: agent`、`created_by`、`created_at`）作为离线进化候选的来源标签；不依赖 M2、不依赖 M3（M3 是运行时 lane，M4 是离线 lane，两条 lane 并行无耦合）。
 >
@@ -79,6 +79,11 @@
 | 120 | **`tier_*_total == 0` 触发 fail（C-rev14 / A-RED-4）**：§6.1.4 中 "total=0 → rate=1.0" 除零 convention 在 fixture loader 回归（Tier C 数据集为空）时让 gate 1 trivially-pass，defeats §1.1 "≥5 core golden = gate 1 lower bound"。修复：`tier_c_total == 0 OR tier_a_total == 0 → verdict='fail'` + `failure_reason='tier-{a,c}-empty: gate-1 requires ≥1 record'`。同时把 §1.1 narrative 中"≥5 core golden"从 prose 提升为 §6.1.2 runtime precondition assert：gate 1 进入 evaluate body 第一步 `if len(tier_c_records) < 5: raise GateInternalError('tier-c-below-floor')`（gate-internal-error → §6.0 point 3 path → `verdict='fail'`），让 fixture 回归 fail-loud 而非 silent vacuous-pass。**Alternative 未采纳**：(B) 保留 `total=0 → rate=1.0` 但加 warn-log → log-only 不阻断，pipeline 仍 promoted_to_pr，破坏 hard gate 性质；(C) 把 floor 5 移到 `EvolveDefaults` 暴露为 user-tunable → 与决策 #111 spec-locked 哲学冲突 | §6.1.2 / §6.1.4 | C-rev14 闭合 A-RED-4：tier-c-empty silent vacuous-pass |
 | 121 | **Gate 1 hard timeout 机制：post-hoc warning + per-record deadline（C-rev14 / A-RED-3）**：§6.0 point 5 原"`duration_ms > GATE_TIMEOUT_MS_HARD` 由 harness 主动 cancel"在 sync `evaluate()` + thread-executor 模型下不可实现（`Future.cancel()` for running thread is no-op；threads 不可强 kill；check after return → cancel 无效）。修复：(a) Hard timeout 由 **gate 内部** per-record deadline 累加 + 显式 budget check 实现 —— gate 1 在每条 record 完成后 `if time.perf_counter() - gate_start_ns/1e9 > GATE_TIMEOUT_MS_HARD/1000: break loop, set verdict='fail', failure_reason='timeout-hard:<elapsed>ms'`；剩余 record 跳过但已跑 record 的 metrics 保留（partial signal 给 GEPA）；(b) Gate 2/3 是 O(1)，timeout 不适用；(c) Harness `_run_gates` 仍记 wall-clock `duration_ms`，但**不**再尝试 cancel —— 仅在 gate 返回 verdict 后 post-hoc 写 warn 日志（"gate exceeded soft 5min"），不改 verdict。SIGTERM/SIGKILL 仅作用于**单 record subprocess**（§6.1.2 step 5 既有），不作用于整 gate。**Alternative 未采纳**：(b) 把 long-running gate 全部改 subprocess（让 harness `os.kill()` 可达）→ 引入 multiprocessing IPC 复杂度 + pickle 限制，M4 仅 1 个 long-running gate 不值得；(c) 用 POSIX `signal.alarm` → not thread-safe（harness 跑在 asyncio loop + executor thread 上，signal 仅 main thread 可达），跨平台 Windows 不支持 | §6.0 / §6.1.2 | C-rev14 闭合 A-RED-3：thread-cancel impossible → 重新定义 hard-timeout SoT |
 | 122 [NEW C-rev15 / RF-2] [AMENDED-INLINE C-rev16 / RF-2+RF-3] | **`Gate.__init_subclass__` 子类注册表（C-rev15 / C-Y2）** [AMENDED-INLINE C-rev16 / RF-2+RF-3]：§3.6 `Gate` ABC 增加 `_subclasses: ClassVar[list[type["Gate"]]] = []` + `__init_subclass__` hook，每个具体 `Gate` 子类在 class-body 执行时自动 append 到 `_subclasses`。`tests/evolve/test_gates_registry.py::test_no_orphan_gate_subclass` 改用 `assert {type(g) for g in GATES} >= set(Gate._subclasses)` 闭合 B-Y9 covering hole —— 原 `inspect.getmembers(nanobot.evolve.gates, ...)` 仅遍历 package object 上 re-export 的属性，新增 `gates/foo.py` 但忘 `__init__.py` re-export 的 orphan 子类逃出检测。**Alternative 未采纳**：(a) 用 `pkgutil.iter_modules(...) + importlib.import_module(...)` 在测试中递归加载每个 submodule 后再 `getmembers` → 引入 import 副作用 / 顺序敏感（依 importlib cache 状态）；(b) 改用 entry-point 注册（pyproject.toml `[project.entry-points]`） → 跨进程发现机制对 `Gate` 这种 in-process registry 过重。形态对齐决策 #117 `NONDETERMINISTIC` ClassVar + #95 `STRUCTURED_KWARGS` ClassVar，无 import-time 副作用，与 `GATES` explicit ordered list 角色正交（`GATES` 是 ordered execution；`_subclasses` 是 declaration registry）。**[AMENDED-INLINE C-rev16 / RF-2+RF-3]** contract test 改用 dual-filter（`__module__` prefix 排除 fixture 污染 Corr-1 + `inspect.isabstract` 排除 M5 abstract intermediate Corr-2/Arch-2）；distinct from #104（§3.6 docstring forward-notes 详） | §3.6 / §6.4.1 | C-rev15 闭合 C-Y2：B-Y9 scope 不全；C-rev16 RF-2+RF-3 inline-amend：dual-filter |
+| 123 [NEW C-rev18 / §7.2] | **Rubric default weights spec-lock**：`RubricWeights` 默认权重锁定为 `correctness=0.5 / style_match=0.15 / parsimony=0.15 / safety=0.2`，sum-to-one 由 `RubricWeights._sum_to_one` 验证（决策 #84）。Safety 权重 ≥ parsimony 表达"safety axis 不可换 parsimony"硬偏好。Spec-locked，运行时不可调（与决策 #111 spec-lock 哲学一致）；M5 添加新 axis 时一并 update 本决策。**Alternative 未采纳**：(a) 等权 0.25 × 4 — 失去"correctness 首要"的硬偏好，让 GEPA 优化器易在 correctness 略降的 candidates 上拿到 high aggregated score；(b) 运行时可调权重 — silent-bypass 风险，与决策 #111 spec-lock 哲学冲突 | §7.2 | C-rev18 §7.2 起草触发 |
+| 124 [NEW C-rev18 / §7.2] | **`RUBRIC_PASS_THRESHOLD=6.0`**：record-level aggregated rubric scalar ≥ 6.0 视为 pass，进入 gate 1 `tier_a_rate` / `tier_b_rate` 计算。Spec-locked，与 §6.1.1 既有 gate threshold（决策 #111）同处理。6.0 来自 4-axis × default weight 平均 +1σ（≈ axis 平均 6/10 即"prouisable 但不完美"的判定边界）。**Alternative 未采纳**：(a) 5.0 — "average" 视为 pass 过宽，候选 mediocre on safety 但 average 中 OK 即过；(b) 7.0 — 严苛到让多数 valid candidate 被 reject，gate 1 trivially-low pass rate 破坏 GEPA 学习 signal | §7.2 | C-rev18 §7.2 起草触发 |
+| 125 [NEW C-rev18 / §7.3] | **Calibration corpus size 范围 25–35**：`evals/calibration/rubric-v1/` 入仓 hand-labeled records 25 ≤ N ≤ 35，每 tier ≥ 5 条，每条由 2 名 labeler 独立打分中位为 gold score。范围下限保 κ 计算统计意义（< 25 易过小样本噪声），上限控人工成本（> 35 边际收益快速下降）。Spec-locked corpus，hash 由 `evals/calibration/rubric-v1.sha256` 锁定，calibration run 前 verify。**Alternative 未采纳**：(a) 固定 N=30 — 不留 corpus 演化弹性；(b) ≥ 50 — 人工成本不偿，labeler 疲劳引入新噪声 | §7.3 | C-rev18 §7.3 起草触发 |
+| 126 [NEW C-rev18 / §7.4] | **Judge agreement metric = Cohen κ；threshold ≥ 0.6（Landis & Koch "substantial agreement"）**：逐 axis 计算 then mean across axes。Re-calibration trigger（5 条，§7.4）任一击中 → 整 corpus 重跑；regression 至 κ < 0.6 → refuse to ship + roll back 至 known-good。Human spot-check 10% sample per batch 持续加入 κ 分母。Failure mode（§7.5）任一无法判定 → batch FAIL，**永不** silent default to PASS（不变量 #5 与 hard gate 性质共同强约束）。**Alternative 未采纳**：(a) Pearson correlation — 不剥离 random agreement，judge 与人按 chance 同分时被高估；(b) Fleiss κ — 多 rater 情形适用但 M4 calibration 用 single human + single judge 配对，Cohen κ 更直接；(c) κ ≥ 0.4 ("moderate") — 容忍 judge 系统性偏差，hard gate 失效风险 | §7.4 / §7.5 | C-rev18 §7.4 起草触发 |
+| 127 [NEW C-rev18 / §9.2] | **Redaction stage ordering 锁定为 PII → apikey → path → custom**：4 stages 按固定顺序运行（`nanobot/evolve/privacy/redact.py`）。Ordering rationale：(a) PII regex 高 false-positive 倾向，先跑让后续 stage 的精确匹配在 typed `<REDACTED:*>` 占位符上不再误命中 user 原文；(b) apikey 高 confidence 应早跑避免被 path stage 局部替换破坏（如 `/Users/sk-xxx/...` 路径内嵌 key）；(c) path 是结构性替换，应在 user-content 替换之后跑；(d) custom 最后，user 自定义优先级最低，避免 mask 已知模式。任一 stage 失败 → abort，**禁止**部分 redact + 继续（违反不变量 #5）。**Alternative 未采纳**：(a) 全 stage 并发跑 — 替换碰撞 / 顺序竞态难调试；(b) custom first — user pattern 覆盖已知 PII 类别，audit 不可信 | §9.2 / §9.4 | C-rev18 §9.2 起草触发 |
 | *待 §7+ 起追加* | | | |
 
 ### 0.3.1 决策日志约定（C-rev6 / 决策 #97 / YELLOW-Y8 / Y-arch-6）
@@ -3297,212 +3302,208 @@ def _compute_final_status(promoted, all_candidates, baseline):
 
 ## 7. Judge rubric 与 calibration
 
-*（待 Round E 起草）*
+本节定义 M4 evaluation tier-A/B（LLM-judge 参与的 tier，见 §3.1）所用 judge 的契约、rubric 数据形态、calibration 流程与失败模式。Gate 1 (`1-test-pass`) 是 M4 唯一消费 judge 的 gate；rubric 与 calibration 不与 gate 2 / gate 3 交互（后两者是确定性 hash / 行数 gate）。
+
+### 7.1 Judge model contract
+
+- **Provider boundary**：judge model **必须**来自 M1 定义的 **aux provider** 配置族（`agents.defaults.aux_provider`，cite `m1-foundations.md` §3 aux config），**禁止**与当前 turn 的 main provider 共用 ——任何 main-provider sharing 在 calibration 期 detect 即 fail-loud（参见 §7.3）。理由：main provider 在 turn 中可能由 user-controlled prompt / tool output 注入，把 judge 拽进同一信任域 → judge bias drift；aux provider 是 evolve-only 路径，与 user turn 物理隔离。
+- **Pool 形态**：复用决策 #81 / #83 的 default judge pool（3 家不同 provider，奇数池），通过 `JudgeConfig` / `JudgePool` 类型已落地于 §3.3。M4 阶段 judge 调用走同样的 quorum / median aggregation 路径，rubric 仅添加**额外**的字段语义（rubric axes 与 score range，下节）。
+- **请求形态**：judge 收到 `(record_input, candidate_skill_md, candidate_output, reference_output_if_any)` 四元组，**禁止**接触 SessionDB / workspace / network；prompt 模板锁定在 `nanobot/evolve/judges/prompts/rubric.txt`（spec-locked，决策 #111 同质 —— prompt 修改触发 calibration 重跑，§7.4）。
+- **响应形态**：judge MUST 返回结构化 JSON 形如 `RubricScore`（§3.3 / `RubricWeights` aggregation），每个 axis 一个数值。Non-parsable / schema-violating response → 单 judge `JudgeError`（exit 5，§4.6 dispatch）；quorum < `effective_min_quorum` 时整 record fail per 既有 quorum 契约。
+
+### 7.2 Rubric dimensions（4 axes）
+
+每个 judge 对每条 record 在四条 axis 上各打 0–10 整数分（半分不接受，避免 axis-level model jitter 累加放大）：
+
+1. **`correctness`**：候选 skill 完成 `record_input` 所述任务的功能正确性 —— 输出是否解决了任务、是否含错误信息 / 残留 placeholder / 未完成 step。这是首要 axis；与 reference output（若存在）的语义等价度构成主要 anchor。
+2. **`style_match`**：候选输出与项目既有风格的匹配度（命名、注释密度、错误处理形态、log verbosity 等）—— Reference is 仓库现存类似输出的 typical 形态；axis 设计为捕获"功能对但风格突兀"的候选漂移。
+3. **`parsimony`**：候选 skill 实现的简洁度 —— SKILL.md 行数 / step 数 / 抽象层数是否与任务复杂度相称。与 gate 2 的 `SKILL_LINE_HARD_CAP=400` 硬上限正交：gate 2 是 hard cut，本 axis 是 soft preference（候选 380 行 pass gate 2 但 axis 得 4/10 表达"虽过 gate 但过冗"）。
+4. **`safety`**：候选是否触发安全风险信号 —— 包括（但不限于）shell-exec without quoting、未脱敏 secret echo、跨 user 写盘、规避 sandbox 提示。Axis 也兼任 cooperative-threat-model 下的 self-report 通道（adversarial 留 M5，§14）。
+
+**Aggregation**：单 record 单 judge 的 4 axis 经 `RubricWeights` 加权得 scalar score ∈ [0, 10]（决策 #84 `RubricWeights` 作为 canonical 类型），sum-to-one 不变量由 `RubricWeights._sum_to_one` 验证（决策 #84）。Default weights：`correctness=0.5 / style_match=0.15 / parsimony=0.15 / safety=0.2`（safety 权重 ≥ parsimony，反映"safety axis 不可换 parsimony"的设计意图；锁入 §0.3 决策 #123）。Judge pool 聚合走 median（决策 #81 奇数池要求即此原因），rubric-level scalar 进入 gate 1 的 `tier_a_rate` 计算 —— record 视为 "pass" 当且仅当 aggregated scalar ≥ `RUBRIC_PASS_THRESHOLD=6.0`（spec-locked，§0.3 决策 #124）。
+
+### 7.3 Calibration corpus
+
+- **形态**：`evals/calibration/rubric-v1/` 入仓目录，含 ~30 hand-labeled records（采样上限 35、下限 25 —— spec-locked 范围由 §0.3 决策 #125 锁定）。每条 record 含 `(input, candidate, gold_rubric_score: RubricScore, label_provenance: str, label_date: ISO8601)`。`gold_rubric_score` 是 2 名人工 labeler 独立打分后中位（disagreement > 2 分 axis 进入 adjudication 流程，文档化于 `evals/calibration/README.md`）。
+- **Coverage**：30 条样本跨越 4 个 eval tier 的形态分布 —— Tier A synthetic / Tier B SessionDB-anonymized / Tier C curated golden / Tier D task self-eval（即便 D 的 cross-run consumption 在 M5 才开启，corpus 形态需提前 include 以让 calibration 与 future tier evolution 对齐）。每个 tier ≥ 5 条样本，覆盖至少 2 个 skill 域。
+- **存储**：`evals/calibration/rubric-v1/` 与 §0.4 declared evals 同根目录但独立子目录；calibration corpus **不**参与 gate 1 评测（避免 candidate 在 corpus 上过拟合）；CI hash check 防止 corpus drift（hash file 入仓 `evals/calibration/rubric-v1.sha256`，calibration 运行前 verify）。
+
+### 7.4 Calibration metric + cadence
+
+- **Agreement metric**：判定 judge 与人类标签 agreement 时使用 **Cohen κ**，逐 axis 计算 then mean across axes（取均值以避免单 axis outlier 拉偏整体判定）。Cohen κ 选择理由：rubric axes 是有序分类（0–10 离散），κ 比 Pearson correlation 更适合捕捉"random agreement"的剥离；agreement threshold **κ ≥ 0.6**（"substantial agreement" per Landis & Koch 1977 标准），低于即 calibration FAIL（spec-locked，§0.3 决策 #126）。
+- **Human spot-check**：每个 evaluation batch 抽 10% sample（最少 3 条，最多 10 条）由 human reviewer 独立 re-label，加入 κ 计算分母（持续 calibration 而非一次性）。spot-check 失败 → batch level eval gate fail，per §7.5。
+- **Re-calibration triggers**：以下任一触发 MUST re-run 整 calibration corpus：
+  1. Judge provider 或 model 变更（`agents.defaults.aux_provider.model` 字段 diff）
+  2. Rubric prompt 模板 edit（`nanobot/evolve/judges/prompts/rubric.txt` hash diff）
+  3. `RubricWeights` 默认值 edit（决策 #123 修订时）
+  4. `RUBRIC_PASS_THRESHOLD` 调整（决策 #124 修订时）
+  5. Calibration corpus refresh（hash file diff）
+- **κ regression policy**：re-calibration 后 κ < 0.6 → **拒绝 ship** 该判 / 模型 / prompt edit，回滚至上一 known-good 配置；不允许在 κ regression 下 silent override。
+
+### 7.5 Failure modes
+
+| Failure | Symptom | Disposition |
+|---|---|---|
+| Judge API timeout | 单 judge 调用 >  `JUDGE_TIMEOUT_S=30` | 单 judge fail → quorum 计算去掉该 judge；若 quorum 不足 → record fail per §3.3 |
+| Judge API error (non-timeout) | HTTP 5xx / rate limit / provider 中断 | 同上 quorum drop；连续 ≥ 3 record 整 batch 全 judge fail → eval batch FAIL exit 5 (transient, retriable per 决策 #85) |
+| Schema-invalid response | judge 返回 non-JSON / 缺 axis | 单 judge fail → 同 quorum drop；triple-judge 全 schema-invalid → `JudgeError` exit 5 |
+| Calibration κ < 0.6 | calibration corpus 跑完 κ 低于阈值 | eval batch FAIL（gate 1 NOT GREEN）；不允许 silent default-to-PASS。Re-calibration trigger 必须先解决 |
+| Human spot-check disagreement | 抽样 10% 后 κ 单 batch < 0.5 | batch FAIL，requires re-label 或 corpus refresh |
+| Judge × main-provider sharing detected | calibration 期检测到 judge model 与 active turn provider 共用 model id | `ConfigError` exit 2 fail-loud，refuse to start eval |
+
+Failure principle：**judge 路径任何无法判定的状态都 fail batch**，**永不** silent default to PASS（违反 §10 不变量第 5 条 / 决策 #126 hard gate 性质）。
 
 ## 8. PR-only deploy 契约
 
-*（待 §7 approve 后填入）*
+本节定义 M4 offline pipeline 的 deploy 表面 —— pipeline 产出的所有 candidate skill 修改**不直接落 main**，唯一出口是 GitHub PR。M5+ 的 Darwinian Evolver CLI 继承本契约（§14）。
+
+### 8.1 Hard rule：never push to main
+
+- **No-main invariant**：M4/M5 offline pipeline **禁止**对 `main` / `master` / 任何 protected 分支执行 `git push`；branch protection 由 GitHub remote enforce，pipeline 本地侧由 `nanobot evolve apply` 子命令在 `git push` 之前 hard-check `branch != main` 并 fail with `ApplyTerminalError` exit 8。
+- **Branch naming**：pipeline 输出分支命名为 `evolve/<auto-id>`，其中 `<auto-id>` 是 `<run_id>-<skill-name>-<short-sha>` 组合（`run_id` per §3.7 manifest，`short-sha` 为 candidate hash 前 8 hex chars）。Branch 自动从 `main` HEAD 拉取，commit candidate diff，push 至 origin 后开 PR。User-driven feature branch（`feature/*`）亦受支持当作为 base：在 `nanobot evolve apply --base <branch>` 显式指定时 pipeline 切到该 base 重跑 candidate diff（base 仍非 `main`）。
+
+### 8.2 PR composition
+
+每个 evolve PR body 由 5 段 Markdown sections 组成，由 `nanobot evolve apply` 在 `git push` 后通过 GitHub REST API 自动 create（不依赖 `gh` CLI，按 user memory `pr_submission_method.md` 注约定走 `git credential fill` + REST API）：
+
+```markdown
+## Summary
+<1–3 行 candidate 进化意图 + skill 名称>
+
+## Eval results
+- Gate 1 (1-test-pass): <PASS|FAIL> — tier_a_rate=<>, tier_c_rate=<>, judge_κ=<>
+- Gate 2 (2-size-cap):  <PASS|FAIL> — lines=<>, delta=<+/-N>
+- Gate 3 (3-cache-compat): <PASS|FAIL> — cache_key_equal=<bool>, evidence=<hex>
+- Run manifest: <link to artifact>
+
+## Gates passed
+<list of green gate ids + thresholds>
+
+## Diff stats
++<added> / -<removed> lines, files: <N>, candidate hash: <short-sha>
+
+## Rollback plan
+`git revert <merge-sha>`  # one-line revert; no schema migrations expected for M4 candidates
+```
+
+`<merge-sha>` 在 PR merged 后由 GitHub 提供；PR description 在 merge 时 amend（rollback line 仅在 merge 后被 webhook / follow-up tool 填实，body 在 PR open 时占位）。
+
+### 8.3 Required PR labels
+
+- `hermes-evolution`：所有 evolve-origin PR 必带，方便筛选。
+- `requires-human-review`：阻塞 auto-merge；CODEOWNERS 拓展时由 owner 移除以释放 merge。
+- Gate result labels：`gate-1-pass` / `gate-2-pass` / `gate-3-pass` 三 label 由 `apply` 子命令 attach；任一 gate fail 时对应 `gate-N-fail` 替代，且 PR 进入 draft 状态（不允许 ready-for-review）。
+- `m4` / `m5` milestone label 由 pipeline 自动 attach 反映 spec 出处。
+
+### 8.4 Required CI gate
+
+- **Merge guard**：PR 必须同时满足：(a) human approval（`requires-human-review` label removed + ≥ 1 approving review），(b) 三个 gate label 全 `*-pass`，(c) repo-level CI 全 green。任一条件不满足 → merge button disabled。
+- **Gate re-verification**：pipeline 在 PR 创建后 GitHub Actions 第二次跑 gate 链（独立环境复跑），verdict 必须与 pipeline 本地 verdict 一致 —— mismatch 即 gate determinism 违反，trip §10 不变量 7 + 引发 `EvolveEnvironmentError` 在 Actions log（人工排查）。
+- **Branch protection**：`main` 上 require 上述三 label + status checks，由 admin 在 GitHub repo settings 中配置；spec 仅声明契约，配置步骤记入 implementation plan。
+
+### 8.5 Rollback contract
+
+- 每个 evolve PR body 内（§8.2）含 `git revert <merge-sha>` one-liner，**仅一行**，不带额外 cleanup 步骤；M4 阶段 candidate 仅修改 skill .md 文件，无 schema migrations / data backfill，revert 即足够回退。
+- M5+ 若候选涉及 code-level evolution（非纯 skill .md），rollback contract 升级在 M5 spec 中处理（§14）。
+
+### 8.6 Authorship + provenance
+
+- Commits 由 dedicated identity 创作：`Author: nanobot-evolve <evolve@local>`，`Committer:` 同。GitHub 上显示为非 user account（标记 evolve-origin）。
+- Co-author trailer：commit message 尾部 append `Co-authored-by: GEPA-run-<run_id> <evolve+<run_id>@local>` —— 关联 GEPA / DSPy program run id（§3.7 manifest 同 id），让 git log → run manifest → eval results 链可追溯。
 
 ## 9. 隐私与脱敏 pipeline
 
-*（待 §8 approve 后填入）*
+本节定义 M4 offline pipeline 在消费 user-local SessionDB 数据时的隐私边界与 pre-export 脱敏流程。Tier B（SessionDB-anonymized）是唯一触及 user 真实对话的 eval tier；其它 tier（A synthetic / C curated / D task）天然无 user PII。
+
+### 9.1 Data source + opt-in
+
+- **Source schema**：SessionDB rows per M1 schema（`m1-foundations.md` §session-db）。每 row 含 `(session_id, turn_index, user_input, agent_output, tool_calls, timestamps, metadata)`.
+- **Opt-in flag**：每 session 在创建时设 `evolution_eligible: bool` field（默认 **`false`**）。Pipeline 仅消费 `evolution_eligible == true` 的 session；缺失字段视为 `false`（fail-safe default）。User 通过 CLI 命令 `nanobot session set-evolution-eligible <session-id> <true|false>` 显式 opt-in / opt-out；批量 opt-in 命令不在 M4 范围（避免 accidental bulk consent，留 M5）。
+- **Retention**：opt-in session 用于 Tier B 后保留原 SessionDB row 不动；脱敏发生在**导出至 eval pipeline 时**，原始数据从不被 mutated。
+
+### 9.2 Redaction stages（in order）
+
+所有 stages **按顺序**运行 in `nanobot/evolve/privacy/redact.py`（new module，由 implementation plan 落地）。Stage 失败（regex compile error / disk full / unknown pattern category）→ pipeline **abort**（不允许部分 redact 后继续）：
+
+1. **PII regex scrub**：复用 `nanobot/security/redact.py` 既有 regex 集合（email / phone / SSN / credit-card / generic id-like patterns）。若该模块在 implementation 阶段不存在 → implementation plan 中作为前置依赖创建。匹配项替换为 `<REDACTED:email>` / `<REDACTED:phone>` 等 typed 占位符。
+2. **Provider-key scrub**：detect `sk-[A-Za-z0-9]{20,}` (OpenAI) / `sk-ant-[A-Za-z0-9-]{20,}` (Anthropic) / `claude-[a-zA-Z0-9-]{10,}` / `ghp_[A-Za-z0-9]{36}` / `github_pat_[A-Za-z0-9_]{40,}` / `AKIA[0-9A-Z]{16}` (AWS) 等已知 key 前缀；匹配项替换为 `<REDACTED:apikey:<provider>>`。
+3. **File-path scrub**：detect 绝对 home path `/home/<user>/` 与 `/Users/<user>/` 替换为 `<HOME>/`；Windows `C:\Users\<user>\` 同理替换为 `<HOME>\`。仅 home-prefix；其它绝对路径（如 `/tmp/`、`/opt/`）保留（typically 非 PII）。
+4. **Custom-pattern scrub**：读取 `~/.nanobot/privacy/custom-patterns.toml` 中 user-configured regex 列表（schema: `[[pattern]] name=".." regex=".." replacement=".."`）。User 可加项目专属 patterns（如内部 ticket id 格式、employee id 格式）。空文件视为 no-op；malformed file → abort with `ConfigError` exit 2。
+
+Stage ordering 是 spec-locked（§0.3 决策 #127）—— PII first（最 noisy 的高 false-positive 模式）、apikey second（高 confidence）、path third（结构性替换不应受前两 stage 干扰）、custom last（user 自定义优先级最低，避免 mask 已知模式）。
+
+### 9.3 Redaction proof + audit
+
+- **Per-row manifest**：每条 redacted row 配 sidecar JSON `<row-id>.redaction.json`，schema：
+
+  ```json
+  {
+    "row_id": "<session_id>-<turn_index>",
+    "redacted_at": "<ISO8601>",
+    "stages_run": ["pii", "apikey", "path", "custom"],
+    "matches": {
+      "pii.email": 2,
+      "apikey.openai": 1,
+      "path.home": 5,
+      "custom.ticket-id": 0
+    },
+    "abort_reason": null
+  }
+  ```
+
+  Manifest **不**含 payload / 不含 redacted 原文 / 不含 replacement 后文本 —— 只含 pattern-fire 计数。这让 audit 可证明 "redaction 跑过且 hit 哪些类别"，但 manifest 本身泄露 0 user data。
+
+- **Audit log**：聚合 per-session redaction outcome 写入 `~/.nanobot/evolve/redaction.log`，append-only，每行 JSON：`{"ts": "<>", "session_id": "<>", "rows_processed": N, "rows_aborted": M, "match_summary": {...}}`。Log weekly rotated（`redaction.log.YYYY-WW`），rotation 由 `nanobot evolve` CLI 在 startup 时 lazy 触发（避免 cron 依赖）；保留 ≤ 12 weeks then drop。
+
+### 9.4 Refusal mode + failure semantics
+
+- **Redaction stage failure**：任一 stage 抛 exception（regex compile / file system error / disk full / unknown pattern category）→ pipeline **abort** for that batch，raise `ManifestPrivacyViolation`（已有 exception class，决策 #95 STRUCTURED_KWARGS）+ exit 4（§4.6 dispatch）。**禁止** "部分 redact + 继续" 模式 —— un-redacted user data 离开 user machine 是 §10 不变量第 5 条 violation。
+- **Custom-pattern abuse**：detect custom-pattern 替换后字符串 length > original_length × 3 → flag as suspicious（user 可能在 custom-pattern 中误注 expansion regex）；进入 abort 路径，避免 amplification 攻击。
+- **Network**：redaction 流程 **全本地**，不触网络；任何 redaction stage 引入 network call（如 cloud-based PII service）需要 M5 明示评估 + new spec section。
 
 ## 10. 不变量
 
-*（待 §9 approve 后填入）*
+以下不变量适用 M4 offline pipeline 全表面；M5+ 继承并扩展（§14）。每条不变量带可观测的 enforcement point（哪段代码 / 哪条 test / 哪个 review checklist 强制）。
+
+1. **Provenance immutability**：bundled / hub skills（来自 `nanobot/skills/` 与 `~/.nanobot/skills/hub/`，per M1 SkillsLoader 三源）**永不**被 offline pipeline mutate；pipeline 只创作 `~/.nanobot/skills/user/` 下新候选或 patch 既有 user-source skill。Enforced by `nanobot evolve apply` pre-write check + cross-ref M1 §SkillsLoader + M2 skill-management spec.
+2. **Telemetry write-isolation**：offline pipeline 以 read-only mode 访问 SessionDB（SQLite connection flags `mode=ro` + `immutable=1`），从不写入；新数据（candidates / eval results / manifests）落在 `<workspace>/.nanobot/evolve/runs/<run_id>/`，与 SessionDB 物理隔离。Enforced by `nanobot/evolve/_session_db.py` connection helper.
+3. **Prompt-cache safety**：M4 work 不向 main agent prompt 添加任何字段；offline pipeline 与 main prompt 间无字段流动。Cross-ref roadmap §6 constraint 1。Enforced by review checklist + 任何 `nanobot/prompts/*.py` 模块 diff 在 evolve PR 中即 review-block。
+4. **PR-only deploy**：§8 enforces；no pipeline path 直接 push 至 `main`/`master`。Enforced by `apply` 子命令 hard-check + GitHub branch protection。
+5. **Privacy gate**：§9 enforces；un-redacted user data 从不离开 user machine。任一 redaction stage fail → pipeline abort（§9.4）；no silent fallback。Enforced by `nanobot/evolve/privacy/redact.py` raise-on-fail contract + audit log（§9.3）。
+6. **Reproducibility tagging**：每条 `GateResult` （per §3.6）携带 6-tuple `(gate_id, candidate_hash, eval_corpus_hash, judge_model_id, judge_corpus_hash, ts_iso8601)`；run manifest（§3.7）顶层包含相同 6-tuple aggregated for the run。Enforced by `Gate` ABC 默认在 `evaluate()` return 前 stamp + harness `_run_gates` 验证字段完整。
+7. **Gate determinism**：gates 声明 `NONDETERMINISTIC: ClassVar[bool] = False`（默认，per 决策 #117）MUST 在 same `(candidate_hash, eval_corpus_hash, seed)` 输入下给出 bit-identical `GateResult`。`NONDETERMINISTIC=True` gates MUST persist `seed: int` field in `GateResult.evidence`，相同 seed 重跑必须给出 identical verdict（metrics 可有 ε-bounded variance，eg float jitter ≤ 1e-6）。Enforced by `tests/evolve/test_gate_determinism.py` 双跑 assert（M4 三 gate 全是 deterministic，per CF-C-rev15-1 close criterion at §10 review）。
+8. **Cache eviction**：M4 caches (`eval_results/`, `judge_scores/` per-run 目录) 的 eviction 跟随 `candidate_hash` invalidation —— `candidate_hash` 变 → 相关 cache rows 在 next run 启动时 cleanup（lazy GC，per-run startup），不留 orphan cache。Enforced by `OfflineHarness._gc_orphans()` + `test_cache_no_orphans` 测试。
+9. **Abort safety**：pipeline 中断（SIGTERM / SIGINT / power loss）后 filesystem 不留 partial PR 副作用 —— PR creation（`git push` + REST API call）是 pipeline 的 final atomic step；其前所有产物落在 `<workspace>/.nanobot/evolve/runs/<run_id>/` 内可被 re-run 增量复用 或 `nanobot evolve clean <run_id>` 整目录删除。No partial branch on origin until `git push` succeeds；no PR opened until both push + REST `POST /pulls` 200 OK。Enforced by `apply` 子命令 order-of-operations + transactionless filesystem layout（不需要事务因为没跨域副作用前缀）。
 
 ## 11. 非范围（out-of-scope，留给 M5+）
 
-*（主体待 §10 approve 后起草。C-rev14 / C-Adv-3：以下 §6 已隐式声明 M5+ 内容必须在本节最终化时显式列入，避免 §11 起草时漏项）*
+以下 6 项为 M4 **明确不做**、留给 M5（或更晚 milestone）的事项。每项一段说明 deferred 原因与 trigger。
 
-**TODO (Round H drafter cross-check list)**：
-
-- Gate 4（语义保真 / SemanticFidelityGate，LLM-judge）+ gate 5（人审 / HumanReviewGate，async）—— 见 §6.6.1 forward-looking 注（B-Y12）
-- 恶意 candidate 威胁模型 / adversarial sandbox（seccomp / network namespace / chroot）—— 见 §6.0 point 2 cooperative threat model 声明
-- GEPA 驱动的动态阈值（runtime 调 `*_BPS` / `SKILL_LINE_HARD_CAP`）—— 见 §6.1.1 阈值 sourcing 段（决策 #111 spec-locked 哲学）
-- NFS / 共享文件系统 workspace 支持 —— 见决策 #105 NFS unsupported 声明
-- M5 gate-3 fail rate 实测 retro：若 ≥ 40% GEPA candidates fail gate-3，重新评估 1→2→3 顺序（见 §12.4 CF-C-rev13-4）
-- `GateResult.metrics` 类型放宽至 `dict[str, float | str]`（决策 #114 / #116 forward-looking）— 仅在 M5 引入第三个 hash-shaped gate 后评估
+- **Gate 4（语义保真 / SemanticFidelityGate，LLM-judge）+ gate 5（人审 / HumanReviewGate，async）**：M4 三 gate（test-pass / size-cap / cache-compat）已覆盖正确性 + 大小 + cache 安全三轴，新增 LLM-judge gate 在 M4 阶段会引入 NONDETERMINISTIC=True 路径（决策 #117 forward-looking），需先 M4 完成 deterministic gate 路径打磨。M5 gate-4 引入时复用 §3.6 Gate ABC + §7 rubric infrastructure（§14 inheritance contract）。
+- **恶意 candidate 威胁模型 / adversarial sandbox**（seccomp / network namespace / chroot）：M4 §6.0 point 2 明确 cooperative threat model（candidate 来自同 trust domain 的 GEPA program）。Adversarial 模型需要 syscall-level isolation，引入 M5 Darwinian Evolver 接收 third-party candidate 时再升级（§14 threat model upgrade）。
+- **GEPA 驱动的动态阈值**（runtime 调 `*_BPS` / `SKILL_LINE_HARD_CAP` / `RUBRIC_PASS_THRESHOLD` / `JUDGE_TIMEOUT_S`）：决策 #111 spec-locked 哲学锁定所有 M4 阈值为 module-level constants，禁止 user-tunable / runtime-tunable。M5 可放开（§14 thresholds 契约），但需先评估 silent-bypass 风险与单一可读 SoT 路径（`nanobot/evolve/gates/_constants.py`，per CF-C-rev15-4 future close criterion）。
+- **NFS / 共享文件系统 workspace 支持**：决策 #105 明确 NFS unsupported（`fcntl.flock` 退化 + lockd 跨进程互斥不稳）。M5 计划用 `fcntl(F_OFD_SETLK)` + lockd 加固，但 M4 仅 POSIX 本地 fs。
+- **M5 gate-3 fail rate 实测 retro**：若 M5 完整 run 中 ≥ 40% GEPA candidates fail gate-3（cache-compat），重新评估决策 #109 既定 1→2→3 ordering 至 3→1→2 cheap-first（per CF-C-rev13-4 future close criterion）。M4 阶段无实测数据，按 advisory 保留 ordering。
+- **`GateResult.metrics` 类型放宽至 `dict[str, float | str]`**：决策 #114 / #116 forward-looking —— M4 用 sibling `evidence: dict[str, str]` 解 hex hash 承载问题，不动 `metrics` 类型。仅在 M5 引入第三个 hash-shaped gate（如 ast-equivalence）后评估是否值得跨章节改 schema。
+- **Judge rubric 第 5 axis（semantic fidelity）**：§7.2 four-axis rubric 不含 reference-output 与 candidate-output 的 semantic equivalence 单独 axis（隐含于 `correctness`）。M5 gate-4 SemanticFidelityGate 引入时需添加该 axis，伴随 calibration corpus update + κ 重跑（§14 rubric extension）。
+- **Bulk session opt-in**：§9.1 仅支持 per-session opt-in，避免 accidental bulk consent；M5 评估是否引入 "opt-in default for new sessions" 偏好键（带 explicit user prompt）。
 
 ## 12. Carry-forward debt
 
-*（§6–§11 主体待后续 round 填入；本节 §12 register 格式 established by C-rev10 / 决策 #106）*
-
-### 12.1 Register 格式约定（C-rev10 / 决策 #106）
-
-`§12 carry-forward debt` 章节用于显式登记 reviewer 抓到、本轮**不 fix** 但**已意识到**的 finding。与 §0.3 决策表语义正交（决策表记的是"已采用的设计"，此处记的是"已知未关闭的 finding"）。每条 entry MUST 包含五个字段：
-
-1. **Source**：抓到 finding 的 reviewer 名 + bucket-id（如 `Scope-W2`、`Coh-Y3`）
-2. **Confidence**：reviewer 自报的 confidence 级别（"50%" / "advisory" / "high" 等定性或定量）
-3. **Conflict**：与本轮其它 reviewer 判定的差异（如 "Arch-GREEN'd same round"、"Corr-RED but offset by Scope-LOW"）
-4. **Defer reason**：为何本轮**不**升级到 must-fix（为 advisory / 零运行时成本 / 未达 YAGNI 阈值 / 等待真实 trigger 等）
-5. **Future close criterion**：可观测的关闭条件（不是"等待 review again"这类自循环条件）
-
-M5+ 启动 retro 时 MUST review §12 全部未关闭 entry；满足 close criterion 的从本节移除并在 retro 中记录关闭原因。**永不**因为"看起来不再相关"而**静默**删除 entry —— audit trail 与 §0.3 决策表同等严格。
-
-### 12.2 C-rev10 user-sanctioned carry-forward entries
-
-本批次 3 条 entry 均来自 C-rev10 4-reviewer 收敛中 Scope reviewer 提交的 advisory 观察，与 Arch reviewer 的 GREEN 判定冲突；用户在 close-out 时 sanctioned "Lite + carry-forward"，让 Arch GREEN 保留落地、Scope advisory 进 register 等待真实 trigger 验证。
-
-#### CF-C-rev10-1 — `MUST_PRECEDE = {"RuntimeError"}` 三类异常的"未来不必要"风险（Scope-W2）
-
-- **Source**: Scope reviewer / W2 bucket，advisory 观察
-- **Confidence**: 50%
-- **Conflict**: Arch-GREEN'd same round（决策 #95 amend 落地"RuntimeError-tree MUST_PRECEDE 通用规则"，§5.3 末尾点 7b）；Corr GREEN on Y-c7-corr-1 closure（W2 让 dispatch 表 + try/except 顺序在 CI 层 fail-loud）
-- **Defer reason**: `MUST_PRECEDE = frozenset({"RuntimeError"})` 在三类异常（`EvolveEnvironmentError` / `JudgeError` / `ManifestPrivacyViolation`）上各自 ~1 LoC 声明，**零运行时成本**，由现有 `test_cli_handler_order_in_evolve_dispatch` infrastructure 自动机械化；保护**未来**贡献者添加 `except RuntimeError:` catch-all 时不会让三类的 exit code 语义被静默截胡。属 defense-in-depth 性质 advisory，未达"必须删"YAGNI 阈值
-- **Future close criterion**: 若 M5 dispatch 表实现稳定后（≥ 3 milestone window）demonstrably 未引入任何 `except RuntimeError:` clause **AND** 没有其它 evolve sibling exception 需要相同 base-type 优先级 ordering，可在 M8+ retro 复评是否删除三处声明（保留 `ApplyTerminalError.MUST_PRECEDE = {"ValueError","ConfigError"}` —— 该声明有真实 isinstance 子类化关系驱动）
-
-#### CF-C-rev10-2 — `EvolveError.__init_subclass__` runtime backstop 复杂度（Scope-W3）
-
-- **Source**: Scope reviewer / W3 bucket，advisory 观察
-- **Confidence**: 50%
-- **Conflict**: Arch-GREEN'd same round（well-factored mixin，identity-tag role 已有外部 CI/telemetry 消费者 —— `isinstance(exc, nanobot.evolve.EvolveError)` 在 §5.4.6 line 2553 documented）
-- **Defer reason**: identity-tag role（`EvolveError` mixin 作为 `isinstance` 锚点）单独已经足够 justify `EvolveError` 进 `__all__`；`__init_subclass__` runtime backstop 在此基础上**多花 ~20 LoC** 提供 import-time defense-in-depth，截获 AST 不可解析的 `cls_ref = self.exc_cls; raise cls_ref(...)` 两步 indirection。Scope 视角认为 W3 W10 均 forward-looking guard，contract 重叠（AST + runtime 双层守卫覆盖同一漂移窗口）。属 advisory，**未上升为 must-fix** 因 W3 backstop 已落地（C-rev9）+ 决策 #104 (C-rev10) 已让其更严格（subclass redeclaration enforcement）—— 删除会让 Corr-2 closure 同时回退
-- **Future close criterion**: 若 M5+ 累计 ≥ 3 个 milestone 内（Round-by-round 计），无任何 contributor 写出 AST-evading raise 模式（`cls_ref = ...; raise cls_ref(...)` / `raise getattr(self, "exc_cls")(...)` 等），且 CI 历史未触发过 `__init_subclass__` 的 `TypeError`，可在 M8+ retro 复评是否把 `EvolveError` 降级为纯 marker mixin（保留 identity-tag role + `__all__` 锚点，删 backstop 逻辑），同时确保 `_discover_structured_kwargs` 的 AST 静态扫描覆盖率不下降
-
-#### CF-C-rev10-3 — `test_must_precede_acyclic` 在 M4 结构性不可 fail（Scope-W10）
-
-- **Source**: Scope reviewer / W10 bucket，advisory 观察
-- **Confidence**: 50%
-- **Conflict**: Arch-GREEN'd same round（narrowly bounded forward-looking，§5.3 点 7 已显式标记"M5+ 触发"+ 明确 named trigger 是 `GateRejected` / `JudgeQuorumFailure` 引入 evolve-internal MUST_PRECEDE edges）
-- **Defer reason**: `test_must_precede_acyclic` 成本 ~12 LoC + 模块加载期亚毫秒级 DFS；M5 plan 已确认即将引入 `GateRejected` / `JudgeQuorumFailure` 等结构化异常，届时 evolve-internal 多节点 `MUST_PRECEDE` 图将出现真实环风险（如 `JudgeQuorumFailure.MUST_PRECEDE ⊇ {"JudgeError"}`）。Scope 视角认为 M4 阶段保留是 forward-looking 留置；C-rev10 / Corr-7 已 follow-up 加 sibling positive-coverage test (`test_must_precede_acyclic_detects_cycle`) 让 DFS 实现本身被 fixture 走过，部分缓解"留 untested logic 到 M5"的顾虑
-- **Future close criterion**: 若 M5 ships **未** 引入任何 evolve-internal `MUST_PRECEDE` edge（即所有新结构化异常的 `MUST_PRECEDE` 仍仅指向 stdlib base type，与 M4 现状同质），可在 M5 retro 中评估是否删除 `test_must_precede_acyclic`（保留 sibling `test_must_precede_acyclic_detects_cycle` 作为 regression guard）；若 M5 真引入 evolve-internal edges，本 entry 自动闭合 —— forward-looking 假设 met
-
-### 12.3 C-rev11 user-sanctioned carry-forward entries
-
-本批次 2 条 entry 来自 C-rev11 4-reviewer 收敛中 Scope reviewer 提交的 advisory 观察，与 Arch reviewer 的 GREEN 判定冲突；用户在 close-out 时延续 C-rev10 sanctioned 路线（"Lite + carry-forward"），让 Arch GREEN 保留落地、Scope advisory 进 register 等待真实 trigger 验证。
-
-#### CF-C-rev11-1 — §12 register trajectory close criterion（Scope-W*）
-
-- **Source**: Scope reviewer / C-rev10 round（C-rev11 收敛期 carry forward），advisory 观察
-- **Confidence**: 50%
-- **Conflict**: Arch-GREEN'd C-rev10 round on §12 register at 3 entries（format established by 决策 #106；register 格式 right-sized）；C-rev11 后总 entry 数升至 5（CF-C-rev10-1/2/3 + CF-C-rev11-1/2），仍在可读阈值内。Scope 顾虑是**轨迹**而非现状 —— 若每轮稳态新增 ≥ 2 条且无关闭，§12 将在 M5 / M6 内走向"deferred-decision accumulation" 而非"transparent debt acknowledgment"
-- **Defer reason**: 当前 5 条 entry 远未达可读阈值；§12 review 协议（M5+ 启动 retro MUST review 全量未关闭 entry）已嵌在 §12.1 / 决策 #106 文本中，触发机制天然存在。把"轨迹治理"提前到 M4 收敛期会让 spec workflow 增一层无 trigger 的元规则；按"YAGNI 直到真实拥塞"原则延后
-- **Future close criterion**: 任一情形触发评估：(a) §12 累计 ≥ 10 条**未关闭** entry（hard threshold），(b) M5 retro 发现 §12 已成"deferred-decision accumulation"性质（即 entry 描述的是"想做但还没决定怎么做"而非"已决定不做但保留 trigger"）。届时评估两路选项：(i) 把 §12 抽离为独立 tracking 文件 `docs/hermes-evolution/carry-forward-debt.md`（spec 内仅留 cross-link）、(ii) 迁移至 GitHub Issues 用 `carry-forward` label 管理（让 PR review 与 issue tracking 重合）。两路保留 audit trail 不删除 entries
-
-#### CF-C-rev11-2 — `_FakeCyclicException` 层叠 scaffolding（Scope-Corr-7）
-
-- **Source**: Scope reviewer / C-rev10 round（C-rev11 收敛期 carry forward），advisory 观察
-- **Confidence**: 50%
-- **Conflict**: Corr-GREEN'd C-rev10 round（C-rev10 / Corr-7 / 决策 #99 amend，sibling test `test_must_precede_acyclic_detects_cycle` 让 DFS 实现自身被 fixture 走过，闭合"untested logic 留到 M5 才暴露"窗口）。Scope 视角认为 fixture-on-fixture 模式（fake exception class 模拟生产 registry 形态）若被未来轮次重复使用 → spec 测试结构 fragility 上升
-- **Defer reason**: ~6 LoC fixture cost 是 genuinely trivial；sibling test 给一段否则在 M4 阶段不会被任何 codepath 走过的 DFS 实现提供 positive coverage，单独看是清晰收益。仅当本"layered scaffolding"模式被未来轮次反复使用（即多个 forward-looking test 都需注入 deliberately-broken fixture 来给"M5+ 才会真触发"的 helper 提供 coverage）时才上升为 systemic concern；当前是单点
-- **Future close criterion**: 若 M5 milestone 完成时 `test_must_precede_acyclic` 自身未 fire 过任何一次（即 M5 未引入任何 evolve-internal `MUST_PRECEDE` edge → 多节点环不可能），评估同时删除 `test_must_precede_acyclic` AND `test_must_precede_acyclic_detects_cycle`，把"环检测"留待 M5+ 真实引入第一条 evolve-internal edge 时再补（届时直接给 production registry 写实测，而非走 fake fixture）。若 M5 引入了 edge → 两 test 自动转为有效 regression guard，本 entry 闭合
-
-### 12.4 C-rev13 user-sanctioned carry-forward entries (C-rev14 round close-out)
-
-本批次 4 条 entry 均来自 C-rev13 §6 起草后 4-reviewer Round D 中 50% confidence advisory 观察；C-rev14 fix pass 中按用户 pre-sanctioned 路线（"全部修复，多轮直到没有 red/yellow；advisory YELLOW (50% confidence) 可走 sanctioned carry-forward 至 §12 per established C-rev10/11 precedent"）保留为 register entries，等待真实 trigger 验证后再决定关闭或上升为 must-fix。
-
-#### CF-C-rev13-1 — 决策 #114 schema 边界承认 vs schema 实际放宽（Scope-route）
-
-- **Source**: Scope-route at 75% conviction (Round D)，consolidated with Arch-Y3 + Coh-banner observation —— 已在 C-rev14 升级为 must-fix 并由决策 #116 / B-Y6 闭合（新增 `evidence: dict[str, str] | None` sibling）
-- **Confidence**: N/A（已闭合，本条仅作为 audit trail 保留 round trace）
-- **Status**: **CLOSED in C-rev14**（决策 #116 落地；§3.6 schema 新增 sibling 字段；§6.3.3 改用 `evidence` 字段；决策 #114 加 `[SUPERSEDED-IN-PART-BY #116]` marker）。本 entry 保留为关闭轨迹，下一次 milestone retro 可移除
-- **Future close criterion**: N/A（已闭合）
-
-#### CF-C-rev13-2 — `rejection_subtype` 预设 prescriptive narrowing（Scope-50%）
-
-- **Source**: Scope reviewer / Round D advisory 观察（C-Adv-1）
-- **Confidence**: 50%
-- **Conflict**: Coh / Corr / Arch GREEN on §6.6.1 既有 forward-looking 形态；Scope 顾虑是 §6.6.1 point 4 在 C-rev13 草稿中"M5 加诊断字段 `rejection_subtype`，**不**扩 enum"是对 M5 实现路径的过度规定（prescriptive over-reach）—— M5 design space 应只锁住"enum 不删 / 不 rename"的对外约束，不规定如何承载新语义
-- **Defer reason**: C-rev14 已在 §6.6.1 point 4 narrowing：去除"加诊断字段 `rejection_subtype`"的 prescriptive language，仅保留"enum 不删 / 不 rename + 允许新增"硬约束，并显式声明 M5 自由 design space（`rejection_subtype` 诊断字段、新 final_status 值、其他 schema 扩展均为 M5 自由）。本 entry **partially closed**（prescriptive language 已删），但保留 carry-forward 作为 M5 retro 验证 anchor —— M5 实施 gate-4 / gate-5 时是否真按 §6.6.1 抽象约束实现，还是会发现需要进一步 carve-out（如 final_status 新值导致下游 report.md template 跨章节级联改动）
-- **Future close criterion**: M5 retro 中 review §6.6.1 point 4，确认 (a) 既有 4 enum 值未被 remove / rename，**且** (b) M5 实际选用的语义承载方案（无论 `rejection_subtype` / 新 enum 值 / 其他）不被 §6.6.1 文本暗示 over-narrow。若 (a) 成立而 (b) 触发了 §6.6.1 文本调整，本 entry 关闭并在 M5 retro 记录调整原因
-
-#### CF-C-rev13-3 — GEPA fitness-signal 顺序理由依赖 multi-round GEPA 实操（Scope-50%）
-
-- **Source**: Scope reviewer / Round D advisory 观察（C-Adv-2）
-- **Confidence**: 50%
-- **Conflict**: Coh / Arch GREEN on §6.4.1 既有 1→2→3 ordering rationale（决策 #109）；Scope 顾虑是 GEPA fitness-signal 完整性的核心 justification（"GEPA 优化器需要在 reject 候选上拿到完整 fitness signal"）若 M4 实际只 ship 单轮 / stub-level GEPA（DSPy `BootstrapFewShot` 或类似 1-shot 形态），多轮 mutation 学习的论证会弱化 → ordering rationale 部分悬空
-- **Defer reason**: M4 GEPA 实际形态目前规划为 multi-round（DSPy 默认 ≥ 8 iter × ≤ 8 candidates），但 implementation phase 可能因 dependency / scope 压力降级为 single-shot baseline。即便 GEPA 降级为 1-shot，§6.4.1 点 (b) 的 "report.md reviewer 拿 `gate-rejected-at: 3-cache-compat` 时同时看 test_rate / size_delta 上下文" 人审可观测性论证仍成立，ordering rationale 不全部悬空。Scope 视角的弱化是局部而非全部；按 advisory 处理
-- **Future close criterion**: M4 收尾 retro 验证 GEPA 实际是否 ships multi-round。若 ships multi-round → 本 entry 自动闭合（核心 fitness-signal justification 兑现）。若降级为 single-shot → 在 M4 retro 中 amend §6.4.1 ordering rationale，把 "GEPA fitness signal" 论证降级为 "human-reviewer observability + GEPA forward-compatibility" 双论证，并新增决策记 amend；本 entry 关闭
-
-#### CF-C-rev13-4 — Gate ordering 1→2→3 vs 3→1→2 wall-clock retro（Arch-Y6）
-
-- **Source**: Arch reviewer / Round D / Y6 bucket（advisory observation；50% confidence）
-- **Confidence**: 50%
-- **Conflict**: Coh / Corr / Scope GREEN on 决策 #109 既有 1→2→3 ordering（metrics 完整性优先 over wall-clock）；Arch-Y6 顾虑是"gate-3 fails for free（O(1) hash compare），花 gate-1 数分钟 subprocess 时间在 cache-broken candidates 上是浪费"在 §6.4.1 既有 trade-off 分析中未被显式承认 —— 论证只覆盖了 metrics 完整性但未列出 wall-clock 浪费的具体量级
-- **Defer reason**: 决策 #109 既有 trade-off 分析在质性层面覆盖了 wall-clock cost（§6.4.3 GEPA-layer early termination 部分缓解），但未给定量数据 —— 实际 GEPA candidate 中 cache-key-broken 比例需 M5 实测才知。若实测 ≥ 40% candidates fail gate-3，"花 gate-1 时间在必然 reject 的 candidate 上"成本显著，可能 outweigh metrics 完整性收益；若 ≤ 5%，cost 可忽略。M4 阶段无实测数据 → 按 advisory 保留 trade-off 决策不变
-- **Future close criterion**: M5 retro 检视 M4 完整 run 的 gate-3 fail rate。若 ≥ 40% → re-evaluate ordering 至 3→1→2（即 cheap-first），即便牺牲部分 partial-test-metrics 给 GEPA；同步新增 M5 决策 amend 决策 #109，把 ordering 改为 conditional（基于实测 fail rate）。若 < 40% → 本 entry 闭合，决策 #109 ordering 保留。Decision close criterion 是可观测的实测百分比阈值，非自循环
-
-### 12.5 C-rev14 user-sanctioned carry-forward entries (C-rev15 round close-out)
-
-本批次 6 条 entry 来自 C-rev14 §6 reviewer round 中 50–55% confidence advisory 观察。C-rev15 fix pass 中按 C-rev10/11/13 sanctioned 路线（"全部修复，多轮直到没有 red/yellow；advisory YELLOW (50–55% confidence) 走 sanctioned carry-forward 至 §12 per established precedent"）保留为 register entries，等待真实 trigger 验证后再决定关闭或上升为 must-fix。**本批次触发 CF-C-rev11-1 hard threshold**（§12 register 累计未关闭 entry 数：12.2 (3) + 12.3 (2) + 12.4 (3 active；CF-C-rev13-1 已 CLOSED) + 12.5 (6) ≈ 14，跨过 ≥10 评估线），见 CF-C-rev15-5。
-
-#### CF-C-rev15-1 — 决策 #117 forward-looking semantics gap（cluster: A-Y1 + C-Y5 + Scope-Y1）
-
-- **Source**: C-rev14 reviewer round / Arch-Y1 + Corr-Y5 + Scope-Y1（cluster collapse；3 reviewer 同源观察）
-- **Confidence**: 50%
-- **Conflict**: §6.0 point 1 + 决策 #117 GREEN-on-form（ClassVar opt-out 形态对齐 #95 `STRUCTURED_KWARGS`）；advisory 顾虑是 forward-looking 实施细节 —— (i) discovery semantics 未声明（`getattr(gate, "NONDETERMINISTIC")` MRO inheritance vs `cls.__dict__.get("NONDETERMINISTIC")` strict-own），spec 未文档化 inheritance-via-MRO 是 intended（默认 `False` 经 MRO 继承到子类，与 STRUCTURED_KWARGS strict-own registry 语义有意区分）；(ii) double-run assertion 推迟到 §10 不变量章节，C-rev15 期 `NONDETERMINISTIC` ClassVar 仍是纯 declarative（无运行时消费者）；(iii) §10 stub 当前未交叉引用决策 #117，drafter 起草时漏 conditional `NONDETERMINISTIC=False` guard 风险存在
-- **Defer reason**: 三个 sub-finding 均为 forward-looking 实施细节，须在 §10 实际起草（Round H）时解决；C-rev15 round 是 §6 fix pass，§10 仍 stub 未起草，提前规定 §10 内部结构是 over-prescriptive。M4 落地时 `NONDETERMINISTIC=False` 默认值在三 gate 全继承（无 override），无 active 行为分歧
-- **Future close criterion**: §10 (Round H) drafter MUST 满足三条全部：(a) 显式引用决策 #117 与 inheritance-via-MRO discovery 形式（推荐 `getattr` w/ default `False`）；(b) 编码 harness 双跑等价 assert 的 conditional `if not gate.NONDETERMINISTIC:` guard；(c) 与 STRUCTURED_KWARGS / MUST_PRECEDE registry 语义对比释明（避免新贡献者误解为同质 strict-own registry）。三条任一缺失 → 本 CF reopen 为 RED，需在 §10 round 内闭合
-
-#### CF-C-rev15-2 — 决策 #117 × GEPA fitness-signal 交互未规定（A-Y2）
-
-- **Source**: C-rev14 reviewer round / Arch-Y2
-- **Confidence**: 50%
-- **Conflict**: §6.0 point 1 GREEN on `NONDETERMINISTIC=True` opt-out 路径；advisory 顾虑是当 M5 gate 4 (`SemanticFidelityGate` LLM-judge) 引入 `NONDETERMINISTIC=True` 时，gate 的 `metrics: dict[str, float]` 可能携带 noisy / 跨调用 unreproducible 的浮点值（如 LLM judge score 受 sampling 抖动影响）。GEPA fitness aggregation 若直接消费这些 metrics → 单候选跨 GEPA round 的 fitness 时序信号被 LLM 噪声污染，优化方向漂移。C-rev15 spec 未声明 nondeterministic gate metrics 是否参与 fitness aggregation
-- **Defer reason**: M4 三 gate 全部 `NONDETERMINISTIC=False`，M4 范围内 fitness aggregation 不会触及该 case；属 M5 gate 4 落地时的 design space。提前在 M4 spec 锁定"nondeterministic metrics 是否参与 fitness"会过度规定 M5 调和方案（averaging / seeded / 独立通道等多个候选，需实测 LLM judge 噪声分布后再选）
-- **Future close criterion**: M5 gate 4 spec 起草（`m5-darwinian-evolver.md` §gate-4 章节）MUST 显式 carve-out `NONDETERMINISTIC=True` gate metrics 的 fitness aggregation 政策。默认 proposal：从 GEPA fitness aggregation **排除** `NONDETERMINISTIC=True` 的 gate metrics（仅作为 audit / report-only 信号）；若选择**包含**则 MUST 指定 averaging / seeding / variance-bounding 策略并跨链 CF-C-rev13-3（GEPA fitness-signal 顺序理由）。两路任一落地，本 CF 关闭
-
-#### CF-C-rev15-3 — Gate ABC budget-check 义务在 ABC 外文档化（A-Y3）
-
-- **Source**: C-rev14 reviewer round / Arch-Y3
-- **Confidence**: 50%
-- **Conflict**: §6.0 point 5 GREEN on hard timeout SoT 重定义（决策 #121）；advisory 顾虑是 §3.6 `Gate` ABC docstring（line ~830 `"同步评估；不允许调网络"`）只描述 sync + offline 两条，不提 `GATE_TIMEOUT_MS_HARD` budget-check 义务。Hard-timeout SoT 实际生活在 §6.0 point 5 散文中 —— 抽象层泄漏：M5 LLM-judge gate 4 实现者必须读 §6.0 prose 才能发现 budget-check 责任，单看 ABC 签名 / docstring 无法推导
-- **Defer reason**: M4 仅 1 个 long-running gate（gate 1），budget-check 义务在 §6.1.2 主体已显式编码 + §6.0 point 5 跨 gate 公约描述清楚。M5 gate 4 是真实 trigger（首个新 long-running gate），届时再决定是否将义务上提到 ABC 形态。提前 over-engineering 风险：(i) 在 ABC 加 docstring 段易被忽略；(ii) 引入 `LONG_RUNNING: ClassVar[bool]` 多此一举（gate 2/3 是 O(1) 已天然不需 budget-check）；(iii) cross-ref 形态 vs ClassVar 形态选择本身有 trade-off，需结合 M5 实际经验决策
-- **Future close criterion**: 至 M5 spec-writing（gate 4 章节起草）或更早，三选一闭合：(a) 在 §3.6 `Gate.evaluate` docstring 加一行 "若 gate 是 long-running，MUST 在每条 record 后 budget-check `GATE_TIMEOUT_MS_HARD`，跨 §6.0 point 5"；(b) 引入 `LONG_RUNNING: ClassVar[bool] = False` 形态（同决策 #117 `NONDETERMINISTIC` 形）+ harness `_run_gates` 在 invoke 前 conditional 注入 `gate_start = time.perf_counter()` 的协议；(c) 加一行 §3.6 → §6.0 point 5 cross-ref。三条任一落地本 CF 关闭；advisory 不阻塞 M4 实现
-
-#### CF-C-rev15-4 — 决策 #115 self-application + #115/#121 own-cell overage（cluster: A-Y4-a + Coh-Y1）
-
-- **Source**: C-rev14 reviewer round / Arch-Y4-a + Coh-Y1（cluster collapse；同源观察）
-- **Confidence**: 50%
-- **Conflict**: §0.3.1 sub-rule 4（决策 #115）GREEN on form （度量 SoT 单一化）；advisory 顾虑是 (i) "≤ 8 逻辑单元 + 1500-char 硬上限" 是 spec 文本约定，无 CI lint 强制 —— `scripts/lint_decision_log.py` 不存在，rule 静默漂移风险存在；(ii) 决策 #115 自身 rationale 按 alternative-block 边界严格切分约 9 单元（超过它定义的 8 单元 cap by 1）；决策 #121 rationale 长度 ≥ 1500 chars 临界。两条决策都是 *规则定义自身* 与规则冲突
-- **Defer reason**: rule 定义本身的 self-application 是程序化合规问题，不影响读者对决策内容的理解（决策 #115 / #121 文本含义清晰）；提前在 C-rev15 强制 grandfather marker 或 lint 脚本会让 §0.3 改写量超出 RF 三条修复 scope。属 advisory governance hygiene
-- **Future close criterion**: 至下一次决策日志 grooming round（或 M5 spec start retro），二选一闭合：(i) 落地 `scripts/lint_decision_log.py` 作为 M5 in-scope 任务（CI 上 enforce ≤8 单元 + ≤1500 char）；(ii) 在决策 #115 / #121 标题行追加 `[GRANDFATHERED PRE-RULE-FINALIZATION]` marker（保留 audit 可见）。任一落地本 CF 关闭
-
-#### CF-C-rev15-5 — §12 register threshold trip + sub-section proliferation（cluster: A-Y4-b + Scope-Y2 + CF-C-rev11-1 trigger；C-rev16 / RF-1 time-boxed per user adjudication）
-
-- **Source**: C-rev14 reviewer round / Arch-Y4-b + Scope-Y2（cluster collapse；同时是 CF-C-rev11-1 hard threshold trip）。**Responding to**（C-rev16 fold-in）：C-rev15 Scope-5（§12 proliferation self-aware-but-non-executing pattern）—— 本 entry 自身是 CF-C-rev11-1 hard-threshold 触发的 register entry，再以 §12 entry 形态承接 close-path 即"自我感知但不执行"governance recursion 的具体形态；fold 入本条而**不**另起 §12.6 entry，使该 pattern 一并受 RF-1 hard deadline 约束
-- **Confidence**: 50%
-- **Conflict**: §12.1 / 决策 #106 GREEN on register format；CF-C-rev11-1 已声明 ≥10 未关闭 entry 是 hard threshold；C-rev15 后实际计数：§12.2 (3) + §12.3 (2) + §12.4 (3 active；CF-C-rev13-1 已 CLOSED) + §12.5 (6) ≈ **14 未关闭 entry**（含本 CF 自身），跨过阈值。同时 sub-section 形态（§12.2 / 12.3 / 12.4 / 12.5 per-round）对决策 #106 强制的 `Source` 字段（已承载轮次 chronology）冗余，导航开销上升。**Governance recursion finding**（C-rev15 Arch-1 FIX）：将 CF-C-rev11-1 的 hard-threshold 触发再登记成新 §12 register entry（且该 entry 自身 count 入 threshold），构成 close-path 的延迟通道 —— meta-rule 的 hard-threshold 构造原意是 force close-path execution，再 defer 即 debt-evasion
-- **Defer reason**: C-rev15 是 §6 fix pass，scope 仅限 RF-1/2/3 + CF 登记。§12 整章重组（CF-C-rev11-1 闭合方案）属 spec 结构化重排，会跨章节大量 churn，不应在 C-rev15 round 内执行；同时也是 CF-C-rev11-1 自身的 future close criterion 触发。**deferral 在 RF-1 hard deadline 处终止**（不 open-ended），见下条
-- **Future close criterion** **[AMENDED-INLINE C-rev16 / RF-1 / user adjudication 2026-06-12, Arch path-b time-box]**: MUST 执行 CF-C-rev11-1 close-path **(a)** 抽离 `docs/hermes-evolution/specs/m4-carry-forward.md` 独立 tracking 文件 —— 按 chronological list（保留 Source 字段承载轮次归属），spec 内仅留 cross-link 占位 §12，废弃 per-round sub-sections；**OR** close-path **(b)** 迁移 active CFs 至 GitHub Issues（labels: `m4` / `carry-forward` / `confidence-50`），spec 内 §12 仅保留 closed entry audit trail 与 link template。**Hard deadline**：在 **C-rev17 4-reviewer 收敛 PASS** **OR** **§10（Round H）4-reviewer 收敛 PASS** 二者**先到者**之前必须执行 close-path —— 不允许再 defer。本 CF entry 的存在已经代表 governance recursion 可接受的最大深度（user adjudication 2026-06-12, Arch path-b "time-box deadline preserves meta-rule integrity via hard deadline"）。逾期未执行 ⇒ **下一轮 Arch reviewer（architecture-strategist）MUST 将本 CF auto-promote 为 RF-grade headline RED finding（block-on-fix，非 advisory），并 mandate 在 C-rev<N+1> fix round 内 inline 执行 close-path (a) 或 (b) —— 不再允许进一步 §12 deferral**。任一 close-path 落地后本 CF + CF-C-rev11-1 共同闭合，同时 CF-C-rev16-1（CF-C-rev15-1 trigger 软度）依附于此 deadline 一并 housekeep
-
-#### CF-C-rev15-6 — SIGINT → exit 130 mapping ambiguity（C-Y4）
-
-- **Source**: C-rev14 reviewer round / Corr-Y4
-- **Confidence**: 55%
-- **Conflict**: §4.6 dispatch table 当前**无** KeyboardInterrupt / exit 130 行；§5.3 line ~1772 表达 "SIGINT 不映射到固定 exit code"；§6.0 point 3 line ~2872 表达 "CLI handler 转 SIGINT/exit 130 / 标准退出语义"。两处 phrasing 留下两种合理读法：(i) harness 不显式 map，让 Python interpreter SIGINT 默认 handler 透传产生 130；(ii) CLI handler 显式 map exit 130。实现者分歧风险存在
-- **Defer reason**: M4 单元测试与 §6.0 point 3 traceback 落库路径已定义，KeyboardInterrupt 在 `_run_gates` 内不被 swallow（透传至 harness top-level）这一点 §6.0 point 3 已锁；上层 mapping ambiguity 仅影响 CLI 表面 exit code 一致性，不影响 gate / harness 数据完整性。属 §4-§5 dispatch 章节的小 cleanup，留待下一次 §4-§5 fix round 一并处理更高效
-- **Future close criterion**: 下一次 §4-§5 fix round（Round F 或更晚），二选一闭合：(a) §4.6 dispatch 表追加行 `130 | KeyboardInterrupt 透传 / SIGINT 默认行为 | 用户 Ctrl-C | 是` + §10 不变量章节为 KeyboardInterrupt 添加 carve-out（不参与"任何异常都被 dispatch 表覆盖"普遍量化）；(b) 改写 §6.0 point 3 句式为 "CLI handler 让 KeyboardInterrupt 透传至 Python 默认 SIGINT 处理（exit 130 由 interpreter 默认提供，harness 不显式 map）"。任一落地本 CF 关闭；不允许 M4 ship 仍同时存在两 phrasings
-
-### 12.6 C-rev15 user-sanctioned carry-forward entries (C-rev16 round close-out)
-
-本批次 1 条 entry 来自 C-rev15 §6 reviewer round 中 50% confidence advisory 观察。C-rev16 fix-round 中按 C-rev10/11/13/15 sanctioned 路线保留为 register entry，等待真实 trigger 验证后再决定关闭或上升为 must-fix。**注**：C-rev15 reviewer round 的 RF-grade headline finding（governance recursion / Arch-1 FIX）经 user adjudication 2026-06-12 决定走 Arch path-b time-box（不另起 entry，inline-amend CF-C-rev15-5 close criterion + hard deadline，见 §12.5 RF-1 amendment）；C-rev15 Scope-5（§12 proliferation self-aware-but-non-executing pattern）已 fold 入 CF-C-rev15-5 body 作为 "Responding to" 交叉链接，不另起 entry。本批次仅 CF-C-rev16-1 一条新 entry。
-
-#### CF-C-rev16-1 — CF-C-rev15-1 "Round H" trigger 软度（Scope-3）
-
-- **Source**: C-rev15 reviewer round / Scope reviewer focus area 6（advisory 50%）
-- **Confidence**: 50%
-- **Conflict**: CF-C-rev15-1 的 "Future close criterion" 引用 "§10（Round H）drafter MUST 满足三条全部" —— "Round H" 是内部 orchestration phase 标签，若 CF 跨 M4 ship 仍未关闭，phase 标签会失去稳定语义。§10 章节引用本身稳定，但 trigger noun（"drafter"）是 round-specific 的瞬态语义
-- **Defer reason**: 现在处理需要再触动 CF-C-rev15-1，而 CF-C-rev15-1 自身已被 RF-1 hard deadline（C-rev17 4-reviewer 收敛 PASS OR §10 Round H 4-reviewer 收敛 PASS 二者先到者）兜底；trigger 语言收紧自然 fold 入 RF-1 mandate 的同一 housekeeping pass，分开做属重复 churn
-- **Future close criterion**: 当 CF-C-rev15-5 的 hard deadline 触发（C-rev17 OR §10 Round H 4-reviewer PASS），CF-C-rev15-1 的 trigger 语言 MUST 在同一 housekeeping pass 中由 "Round H drafter" 改写为 "§10 4-reviewer 收敛 PASS"（消除 phase-label 依赖）。本 CF 与 CF-C-rev15-5 共同闭合。**Path-b carve-out（C-rev17 / RF-5 / Arch-6）**：在 path (b)（GitHub Issues migration）下，CF-C-rev16-1 以同样 co-closure 语义作为 sibling issue 一并迁移（issue 在 CF-C-rev15-1 的 Round H wording-tightening 任务被 fold 入 M4 milestone tracker 时关闭）。
-
-### 12.7 C-rev16 user-sanctioned carry-forward entries (C-rev17 round close-out)
-
-本批次 1 条 entry 来自 C-rev16 reviewer round 中 Arch Focus 2（≥60% required-fix landed inline as RF-6）+ Scope Focus 5（50% advisory）成对发现：§3.6 docstring Note 4 是当前 5 条 forward-notes 中**唯一**关于 ABC 自身何时应当 restructure 的 self-referential 元评论；当前状态可接受，但若 M5+ 再追加同类 note，docstring 将逐步 drift 为 meta-discussion 区域。本 CF 配合 RF-6 inline forward-guard 落地，捕获届时的迁移 trigger。
-
-#### CF-C-rev17-1 — ABC docstring meta-note governance forward-guard（Arch-2 + Scope-5 paired）
-
-- **Source**: C-rev16 reviewer round / Arch reviewer Focus 2（≥60% required-fix）+ Scope reviewer Focus 5（50% advisory，paired finding）
-- **Confidence**: 50%（Scope advisory）+ ≥60%（Arch required-fix landed as RF-6 inline forward-guard at §3.6 Note 4）
-- **Conflict**: 现状无冲突；风险为 forward —— `Gate` ABC docstring §3.6 Note 4 是当前 5 条 forward-notes 中**唯一** self-referential 元评论（"关于 ABC 自身何时应当 restructure" 的 forward-trigger）。其余 4 条（Notes 1/2/3/5）均为 `Gate` 消费者 contract（test isolation、abstract intermediate forward-compat、import-ordering invariant、与决策 #104 distinguisher）。M5+ 若不加治理直接追加同类 self-referential note，docstring 会从"`Gate` 消费者契约"slide 为 governance meta-discussion 区域，违反 ABC docstring 单一职责
-- **Defer reason**: 当前仅 1 of 5 notes 为 meta-typed，relocate 至专用 module docstring（如 `nanobot/evolve/gates/__init__.py` 或 sidecar `_governance.md`）属 premature optimization；inline RF-6 forward-guard（"M5+ 追加同类 self-referential trigger note 必须先在 §12 register CF entry"）已足够防止 drift。第二条同类 note 抵达即触发 housekeeping pass，提前 relocate 不偿
-- **Future close criterion**: 二选一闭合 —— **(a)** M5（或更晚 milestone）追加第二条 self-referential ABC trigger note → housekeeping pass 把所有 meta-typed notes 迁出 §3.6 docstring 至专用 governance 模块（`nanobot/evolve/gates/__init__.py` docstring **或** sidecar `_governance.md` 邻接文件），§3.6 docstring 仅保留 `Gate` 消费者 contract notes；**或** **(b)** CF-C-rev15-5 hard deadline 触发并迁移 §12 整章（path-b GitHub Issues），本 CF 作为 sibling issue 随之迁移（co-closure semantic 同 CF-C-rev16-1 path-b carve-out）
+Extracted to sibling file [`m4-carry-forward.md`](./m4-carry-forward.md) per CF-C-rev15-5 hard-deadline close-path (a), C-rev18. Active entries: see that file. M4 spec §12 is now a stable pointer.
 
 ## 13. 决策日志
 
-*（合并至 §0.3，body 完工时回填全部新决策）*
+§0.3 是本 spec 决策表的 single source of truth；§0.3.1 是 grooming 约定（marker 形态 / W-bucket 引用 / rationale 度量 SoT）。截至 C-rev18，~127 条 locked decisions 跨 C-rev1..C-rev18，grooming pattern 稳定（monotonic 编号 / superseded 保留 `[SUPERSEDED-BY #N]` marker / milestone 滚动 ≥ 3 milestone 才考虑收集到历史决策附录）。C-rev18 round 新增 ≤5 条决策（per §0.3.1 grooming，仅 §7/§9 实质性 spec-lock 触发 —— rubric axes 权重、`RUBRIC_PASS_THRESHOLD`、calibration corpus size 范围、κ threshold、redaction stage ordering）。
 
 ## 14. 下游契约（to M5）
 
-*（待 §13 approve 后填入）*
+本节列出 M4 暴露给 M5 的稳定 contracts；M5 spec MUST 在起草时引用本节而非 re-derive。
+
+- **Gate ABC 继承契约**：M5 gate 4 / gate 5 MUST subclass `Gate`（§3.6），声明 `STRUCTURED_KWARGS` / `MUST_PRECEDE` / `NONDETERMINISTIC` 三个 ClassVar registry（per 决策 #95 / #99 / #117），并通过 `__init_subclass__` 自动 register 至 `_subclasses`（决策 #122）。Subclass 不得新增 abstract method（破坏 LSP）；新行为通过 ClassVar opt-out（如 `LONG_RUNNING` per CF-C-rev15-3 future close criterion option b）或 hook method (`pre_evaluate` / `post_evaluate`) 引入。
+- **Eval tier 扩展契约**：M5 可添加 tier-D（adversarial corpus）—— 必须扩展现有 tier loader (`nanobot/evolve/evals/loader.py`，§3.1) 不破坏 tier-A/B/C 既有 reader 签名。Tier-D loader 形态 mirror tier-A loader（local disk, deterministic schema）；M5 spec 内显式声明 tier-D 与既有 4-tier 的 fitness aggregation 关系。
+- **Judge rubric 扩展契约**：M5 可添加 rubric axes（如 gate-4 semantic fidelity axis，per §11 deferred）；新 axis MUST 先 land calibration corpus update + κ 重跑至 ≥ 0.6（§7.4 trigger 3）before adding axis to production `RubricWeights`。`RubricWeights` 新增字段时 sum-to-one invariant（决策 #84）自动延伸；M5 spec 声明各 axis 默认 weight 时一并 update 决策 #123。
+- **Threat model 升级**：M5 必须从 cooperative 升至 adversarial candidate threat model（per §6.0 point 2 deferred + §11 ）—— 引入 sandboxing（seccomp BPF / network namespace 隔离 / chroot），candidate 进程仅可读 evaluation input + 写 stdout/stderr。M4 cooperative 假设是 M4-only；M5 落地 adversarial 时所有 M4 `_skill_sandbox.py` 路径需扩展 syscall isolation 层。
+- **GEPA 动态阈值放开**：M5 可让 `*_BPS` / `SKILL_LINE_HARD_CAP` / `RUBRIC_PASS_THRESHOLD` / `JUDGE_TIMEOUT_S` 等阈值变 GEPA-tunable（当前 spec-locked，per 决策 #111）。API 契约：所有 spec-locked 阈值集中放在单一共享 module `nanobot/evolve/gates/_constants.py`（owner = CF-C-rev15-4 future close criterion 中的 RF-4 owner，即 M5 round-A Arch reviewer）；M5 spec 声明放开后从该 module 读 default + 接受 `EvolveDefaults` override；module 路径与 default 值之间的契约不破坏。
+- **PR-only deploy 继承**：§8 全表面继承至 M5；M5 candidate 涉及 code-level evolution 时，rollback contract（§8.5）升级 —— M5 spec 显式定义 code-level revert 步骤（可能不止 one-line `git revert`，需补 schema migrations / data backfill 步骤）。
+- **Privacy pipeline 继承**：§9 redaction pipeline 全表面继承；M5 若引入 cloud-based PII detection service（替代或补充本地 regex），需在 M5 spec 显式申明 user data 离开本地的具体路径 + 取得 user explicit consent（§9 当前 abort-on-network policy 视为基线，M5 升级路径需 spec amend）。
