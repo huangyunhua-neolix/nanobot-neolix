@@ -58,3 +58,4 @@ class ToolContext:
     timezone: str = "UTC"
     workspace_sandbox: Any | None = None
     runtime_events: Any | None = None
+    provenance_tag: str = "agent"  # M2 §4.2 Option A

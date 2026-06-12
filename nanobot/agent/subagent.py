@@ -16,20 +16,33 @@ from nanobot.agent.tools.context import ToolContext
 from nanobot.agent.tools.file_state import FileStates
 from nanobot.agent.tools.loader import ToolLoader
 from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.bus.events import InboundMessage
+from nanobot.bus.queue import MessageBus
+from nanobot.config.schema import AgentDefaults, ToolsConfig
+from nanobot.providers.base import LLMProvider
 from nanobot.security.workspace_access import (
     WorkspaceScope,
     bind_workspace_scope,
     reset_workspace_scope,
     workspace_sandbox_status,
 )
-from nanobot.bus.events import InboundMessage
-from nanobot.bus.queue import MessageBus
-from nanobot.config.schema import AgentDefaults, ToolsConfig
-from nanobot.providers.base import LLMProvider
 from nanobot.utils.prompt_templates import render_template
 
 if TYPE_CHECKING:
     from nanobot.agent.skills_telemetry import SkillTelemetry
+
+
+@dataclass(slots=True)
+class _SubagentRuntimeState:
+    """Minimal RuntimeState for a spawned subagent (spec §5.2.1).
+
+    The runner's per-iteration reset and SkillManageTool's rate-cap gate both
+    touch only ``_runtime_vars``, so this dataclass deliberately exposes just
+    that field. Each subagent gets its OWN instance — the per-turn budget is
+    independent of the parent's counter.
+    """
+
+    _runtime_vars: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -127,15 +140,38 @@ class SubagentManager:
             restrict_to_workspace=self.restrict_to_workspace,
         )
 
-    def _build_tools(
+    @staticmethod
+    def _make_subagent_runtime_state() -> "_SubagentRuntimeState":
+        """Construct a FRESH RuntimeState for a subagent.
+
+        Spec §5.2.1 mandates each subagent receive its own per-turn rate-cap
+        budget independent of the parent's counter. The runner reads/writes
+        only ``_runtime_vars["skill_manage.mutations_this_turn"]`` and the
+        SkillManageTool's rate-cap path likewise touches only that dict, so
+        a minimal namespace satisfies the RuntimeState protocol's hot path.
+        """
+        return _SubagentRuntimeState()
+
+    def _build_subagent_tool_context(
         self,
+        *,
+        task_id: str,
         workspace: Path | None = None,
         tools_config: ToolsConfig | None = None,
-    ) -> ToolRegistry:
-        """Build an isolated subagent tool registry via ToolLoader."""
+        runtime_state: "_SubagentRuntimeState | None" = None,
+    ) -> ToolContext:
+        """Construct the per-spawn ``ToolContext`` for this subagent.
+
+        Carries the write-once ``subagent:<task_id>`` provenance tag (M2 §4.2)
+        and a freshly-allocated RuntimeState so the per-turn rate-cap counter
+        is isolated from the parent (spec §5.2.1).
+        """
         root = self.workspace if workspace is None else workspace
-        registry = ToolRegistry()
         cfg = tools_config if tools_config is not None else self._subagent_tools_config()
+        rt_state = (
+            runtime_state if runtime_state is not None
+            else self._make_subagent_runtime_state()
+        )
         ctx = ToolContext(
             config=cfg,
             workspace=str(root.resolve()),
@@ -144,7 +180,37 @@ class SubagentManager:
                 restrict_to_workspace=cfg.restrict_to_workspace,
                 workspace=root,
             ),
+            provenance_tag=f"subagent:{task_id}",
         )
+        # SkillManageTool.create reads ctx.runtime_state via getattr; attach the
+        # subagent's own RuntimeState so its rate-cap counter is isolated from
+        # the parent's per-turn budget (spec §5.2.1).
+        ctx.runtime_state = rt_state
+        return ctx
+
+    def _build_tools(
+        self,
+        workspace: Path | None = None,
+        tools_config: ToolsConfig | None = None,
+        *,
+        task_id: str,
+        runtime_state: "_SubagentRuntimeState | None" = None,
+    ) -> ToolRegistry:
+        """Build an isolated subagent tool registry via ToolLoader.
+
+        Each spawn carries its own provenance tag ``subagent:<task_id>`` so
+        that any SkillManageTool instance built from this ctx records the
+        correct origin in skill frontmatter (M2 §4.2). The tag is captured
+        write-once at tool construction (t-07), so later mutations to
+        ``ctx.provenance_tag`` cannot bleed into already-built tools.
+        """
+        ctx = self._build_subagent_tool_context(
+            task_id=task_id,
+            workspace=workspace,
+            tools_config=tools_config,
+            runtime_state=runtime_state,
+        )
+        registry = ToolRegistry()
         ToolLoader().load(ctx, registry, scope="subagent")
         return registry
 
@@ -230,7 +296,18 @@ class SubagentManager:
             if workspace_scope is not None:
                 cfg = self._subagent_tools_config()
                 cfg.restrict_to_workspace = workspace_scope.restrict_to_workspace
-            tools = self._build_tools(workspace=root, tools_config=cfg)
+            # Spec §5.2.1: subagent gets a FRESH 5-mutation budget each iteration
+            # regardless of parent counter — construct its own RuntimeState here
+            # and forward the SAME instance to both the tool registry (so
+            # SkillManageTool reads/writes this dict) and AgentRunSpec (so the
+            # runner resets the same dict at the top of each iteration).
+            sub_runtime_state = self._make_subagent_runtime_state()
+            tools = self._build_tools(
+                workspace=root,
+                tools_config=cfg,
+                task_id=task_id,
+                runtime_state=sub_runtime_state,
+            )
             system_prompt = self._build_subagent_prompt(workspace=root)
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
@@ -261,6 +338,10 @@ class SubagentManager:
                     session_key=sess_key,
                     workspace=root,
                     llm_timeout_s=llm_timeout,
+                    # Spec §5.2.1: subagent's OWN RuntimeState, never the
+                    # parent's — each iteration the runner resets this
+                    # subagent's mutations_this_turn independently.
+                    runtime_state=sub_runtime_state,
                 ))
             finally:
                 if token is not None:

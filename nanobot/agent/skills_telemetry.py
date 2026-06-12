@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import atexit
 import json
-import os
-import sys
+import os  # noqa: F401  # kept for monkeypatch hook (`st.os.fsync`) in M1 tests
 import threading
 import time
 from copy import deepcopy
@@ -16,7 +15,11 @@ from typing import Literal, TypedDict
 import filelock
 from loguru import logger
 
-BumpKind = Literal["view", "use", "patch"]
+from nanobot.agent._atomic_io import (  # noqa: F401  # M1 monkeypatch hook (M2 §8.5 Option A)
+    atomic_write as _atomic_write,
+)
+
+BumpKind = Literal["view", "use", "patch", "delete"]
 Writer = Literal["bump", "reconcile"]
 
 
@@ -73,25 +76,6 @@ _KIND_TO_LAST_TS: dict[BumpKind, Literal["last_view", "last_use"]] = {
     "view": "last_view",
     "use": "last_use",
 }
-
-
-def _atomic_write(path: Path, payload: dict) -> None:
-    """tmp + fsync(tmp) + os.replace + fsync(parent_dir) on POSIX."""
-    tmp = path.with_name(path.name + ".tmp")
-    data = json.dumps(payload, indent=2, sort_keys=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
-    try:
-        os.write(fd, data.encode("utf-8"))
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)
-    if sys.platform != "win32":
-        dir_fd = os.open(str(path.parent), os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
 
 
 def _safe_read_json(path: Path) -> dict | None:
@@ -174,6 +158,30 @@ def _rmw_merge(
             disk_entries[name] = dict(snap_entry)
             continue
         # Branch: entry in both
+        # M2 decision #66 reuse-create reset: on reconcile, if disk entry was
+        # tombstoned (agent had deleted) and snapshot no longer carries the
+        # tombstone flag (reconcile() cleared it because the skill file is
+        # back), reset counters/timestamps to zero. This is the ONLY path
+        # that resets monotonic counters (M1 invariant 3 carve-out).
+        if (
+            writer == "reconcile"
+            and disk_entry.get("tombstone") is True
+            and "tombstone" not in snap_entry
+        ):
+            merged_entry = dict(disk_entry)  # preserve unknown future fields
+            for counter in COUNTER_KEYS:
+                merged_entry[counter] = 0
+            merged_entry["last_view"] = None
+            merged_entry["last_use"] = None
+            merged_entry["entry_created_at"] = (
+                snap_entry.get("entry_created_at") or _now_iso()
+            )
+            merged_entry.pop("tombstone", None)
+            if snap_entry.get("origin") != "unknown":
+                merged_entry["origin"] = snap_entry["origin"]
+                merged_entry["shadowed"] = list(snap_entry.get("shadowed", []))
+            disk_entries[name] = merged_entry
+            continue
         merged_entry = dict(disk_entry)  # preserve unknown future fields
         last = last_synced.get(name, {"views": 0, "uses": 0, "patches": 0})
         for counter in COUNTER_KEYS:
@@ -197,6 +205,12 @@ def _rmw_merge(
         if writer == "reconcile" and snap_entry.get("origin") != "unknown":
             merged_entry["origin"] = snap_entry["origin"]
             merged_entry["shadowed"] = list(snap_entry.get("shadowed", []))
+        # M2 decision #66: propagate snapshot's tombstone flag for writer="bump"
+        # (set by `bump(kind='delete')`). The merge-from-disk preserves an
+        # already-tombstoned disk_entry by default; this branch covers the
+        # "first flush after bump-delete" case where snapshot is the source.
+        if "tombstone" in snap_entry:
+            merged_entry["tombstone"] = snap_entry["tombstone"]
         disk_entries[name] = merged_entry
 
     # Entries only on disk (snapshot didn't touch them):
@@ -311,6 +325,20 @@ class SkillTelemetry:
             }
 
     def bump(self, name: str, kind: BumpKind) -> None:
+        if kind == "delete":
+            # M2 decision #66: tombstone flag on agent-driven deletion. Does NOT
+            # mutate any counter (M1 invariant 3 — counters stay monotonic on
+            # every code path except reuse-create reset in `reconcile()`).
+            # Lock order is the same as other bump kinds: layer-3 only here;
+            # layer-4 (filelock) is acquired by the subsequent flush().
+            with self._lock:
+                entry = self._entries.get(name)
+                if entry is None:
+                    entry = _zero_entry_with_unknown_origin()
+                    self._entries[name] = entry
+                entry["tombstone"] = True  # type: ignore[typeddict-unknown-key]
+                self._dirty = True
+            return
         if kind not in _KIND_TO_COUNTER:
             raise ValueError(f"unknown bump kind: {kind!r}")
         counter_key = _KIND_TO_COUNTER[kind]
@@ -373,6 +401,23 @@ class SkillTelemetry:
                         "last_use": None,
                     }
                 else:
+                    # M2 decision #66 reuse-create: tombstoned entry whose
+                    # underlying skill file is back in known_skills means the
+                    # agent has re-created the same name. Zero the counters,
+                    # refresh entry_created_at, and clear the tombstone flag
+                    # so phantom-popularity carryover from the prior incarnation
+                    # is broken. This is the ONLY counter-reset path (M1
+                    # invariant 3 carve-out). Also zero `_last_synced_counts`
+                    # so flush phase 3 doesn't immediately advance back to the
+                    # stale pre-reset values.
+                    if existing.get("tombstone") is True:
+                        for counter in COUNTER_KEYS:
+                            existing[counter] = 0  # type: ignore[literal-required]
+                        existing["entry_created_at"] = _now_iso()
+                        existing["last_view"] = None
+                        existing["last_use"] = None
+                        existing.pop("tombstone", None)  # type: ignore[misc]
+                        self._last_synced_counts.pop(name, None)
                     # Existing — only patch origin/shadowed (never counters/timestamps)
                     existing["origin"] = entry["effective_origin"]
                     existing["shadowed"] = list(entry["shadowed_origins"])
@@ -445,13 +490,20 @@ class SkillTelemetry:
         (caller treats False as a flush failure to be coalesced via
         `_note_failure`). Other I/O exceptions propagate to the caller.
         """
+        # Module-attribute indirection: M1 tests monkeypatch
+        # `nanobot.agent.skills_telemetry._atomic_write`. Importing the bound
+        # name into a local would defeat the monkeypatch — go through the
+        # module each call so test-time replacement always wins (M2 §8.5
+        # Option A.1, decision #68).
+        from nanobot.agent import skills_telemetry as _self_module
+
         lock = filelock.FileLock(str(self._lock_path), timeout=FILELOCK_TIMEOUT_S)
         for _attempt in range(FILELOCK_RETRIES):
             try:
                 with lock:
                     on_disk = _safe_read_json(self._path)
                     merged = _rmw_merge(on_disk, snapshot, last_synced_snapshot, writer)
-                    _atomic_write(self._path, merged)
+                    _self_module._atomic_write(self._path, merged)
                 return True
             except filelock.Timeout:
                 continue

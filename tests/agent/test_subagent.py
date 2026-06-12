@@ -22,7 +22,7 @@ async def test_subagent_uses_tool_loader():
         model="test",
         max_tool_result_chars=16_000,
     )
-    tools = sm._build_tools()
+    tools = sm._build_tools(task_id="testtask")
     assert tools.has("read_file")
     assert tools.has("write_file")
     assert not tools.has("message")
@@ -43,8 +43,8 @@ async def test_subagent_build_tools_isolates_file_read_state(tmp_path):
         max_tool_result_chars=16_000,
     )
 
-    first_read = sm._build_tools().get("read_file")
-    second_read = sm._build_tools().get("read_file")
+    first_read = sm._build_tools(task_id="t1").get("read_file")
+    second_read = sm._build_tools(task_id="t2").get("read_file")
 
     assert first_read is not second_read
     assert (await first_read.execute(path="note.txt")).startswith("1| hello")
