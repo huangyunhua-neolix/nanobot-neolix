@@ -38,7 +38,9 @@
 |---|---|---|---|
 | 74–80 | 见上 §0.2 | — | spec 立项期锁定 |
 | 81 | Judge pool 默认 size = 3，仅允许奇数（3 或 5），单 judge 仅 dev 用 | §3.3 | 中位聚合需奇数；单 judge 易引入 model bias |
-| *待 §4+ 起追加* | | | |
+| 82 | CLI 退出码全表（0=ok / 1=generic / 2=config / 3=extra-missing / 4=privacy / 5=resource-or-provider / 6=fs-or-state / 7=harness-invariant）；gate fail 不映射到非零 | §4.6 | CI / 自动化脚本需可分流不同失败模式（特别是「重试 provider」vs「报 bug」）；gate fail 是业务判定不是 CLI 错误 |
+| 83 | Default judge pool 选 3 家不同 provider（Anthropic Claude 3.5 Sonnet / OpenAI GPT-4o / Google Gemini 1.5 Pro），不重 provider | §4.5 | 同 provider 模型 bias 高度相关；跨 provider 最大化解耦 |
+| *待 §6+ 起追加* | | | |
 
 ### 0.4 跨 milestone 硬性约束的本 spec 化身
 
@@ -132,7 +134,7 @@ M4 引入两个新顶层目录 + 一个新 Python 包，均与 `nanobot/` / `web
 │   │   ├── deploy/
 │   │   │   ├── __init__.py
 │   │   │   └── pr_writer.py             # diff.patch + pr_body.md 生成（§8）
-│   │   └── exceptions.py                # EvolveExtraNotInstalled / GateRejected / JudgeError 等
+│   │   └── exceptions.py                # EvolveExtraNotInstalled / BaselineMismatch / JudgeError / ManifestPrivacyViolation / ConfigError
 │   └── cli/
 │       └── commands.py                  # 已有；M4 在此挂 evolve 子命令树（§4）
 ├── evals/                               # NEW 顶层；Tier A + Tier C 入仓
@@ -326,11 +328,11 @@ class Candidate(SkillContent):
     gepa_seed: Optional[int] = None                # 可复现性
 ```
 
-**配对不变量（harness 强制）**：
+**配对不变量（harness 强制）**：编号 #1 / #2 / #3 是 spec 内的稳定 anchor，下游章节（§5.1 docstring、§10 不变量）通过 "§3.2 配对不变量 #N" 引用。
 
-1. 任一 `Candidate.parent_baseline_hash` 必须等于配对 `Baseline.content_hash`；`OfflineHarness` 在 `_pair_candidate(c, b)` 时校验，违反即抛 `BaselineMismatch`。
-2. 跨 baseline 比较候选**永不**发生 —— 同一 run 内可有多个 baseline（多 skill 并行进化），但 fitness / gate 评估始终在同一 baseline 的候选集合内 rank。
-3. `Candidate.frontmatter.evolved_from_run` 写回时必须等于当次 `run_id`；`parent_skill_hash` 必须等于 `parent_baseline_hash`。
+1. **§3.2 #1 — Baseline-candidate hash pairing**：任一 `Candidate.parent_baseline_hash` 必须等于配对 `Baseline.content_hash`；`OfflineHarness` 在 `_pair_candidate(c, b)` 时校验，违反即抛 `BaselineMismatch`（exit 7，harness invariant）。
+2. **§3.2 #2 — No cross-baseline comparison**：跨 baseline 比较候选**永不**发生 —— 同一 run 内可有多个 baseline（多 skill 并行进化），但 fitness / gate 评估始终在同一 baseline 的候选集合内 rank。
+3. **§3.2 #3 — Provenance writeback equality**：`Candidate.frontmatter.evolved_from_run` 写回时必须等于当次 `run_id`；`parent_skill_hash` 必须等于 `parent_baseline_hash`。
 
 ### 3.3 JudgeResult / RubricScore 数据结构
 
@@ -395,9 +397,11 @@ class JudgePool(BaseModel):
     judges: list[str]                              # provider/model 列表
     weights: RubricWeights = RubricWeights()
     require_consensus: bool = False                # True 时 split → JudgeError 致整 record fail
+    min_quorum: int = 1                            # provider 退化时仍需的最小可用 judge 数；
+                                                   # available_judges 数低于此 → JudgeError 中断 run
 ```
 
-**新决策 #81（追加于 §0.3）**：判官池默认 size 为 3（pool of 3 distinct provider/model），单 judge 模式仅在 dev / unit-test 启用，CLI `--single-judge` 显式开启。理由：Hermes 调研指出单 judge 易引入 model bias；3 已是"最小奇数 + 可中位"。可在 config 调到 5，但不允许 2 或 4（避免无中位）。
+**新决策 #81（追加于 §0.3）**：判官池默认 size 为 3（pool of 3 distinct provider/model），单 judge 模式仅在 dev / unit-test 启用，通过 `--judge-pool <single-model-name>`（长度 1 即合法奇数）触发。理由：Hermes 调研指出单 judge 易引入 model bias；3 已是"最小奇数 + 可中位"。可在 config 调到 5，但不允许 2 或 4（避免无中位）。
 
 ### 3.4 Provenance frontmatter 写回 schema
 
@@ -600,6 +604,9 @@ class RunManifest(BaseModel):
     ]
     tiers_used: list[Literal["A", "B", "C", "D"]]
     record_count_per_tier: dict[str, int]          # 不含 record_id / input / expected 原文
+    judge_pool_health: dict[str, str]              # {model: "ok" | "degraded:<reason>" | "unavailable:<reason>"}；
+                                                   # 详见 §5.1 JudgeError retry contract。
+                                                   # value 限 256 chars，避免 reasoning 原文泄漏（§3.7.1）。
 ```
 
 #### 3.7.1 「无 PII」不变量
@@ -621,11 +628,748 @@ manifest 仅包含 hash / id / 计数 / 聚合统计 → 可安全 attach 至 PR
 
 ## 4. CLI 语法
 
-*（待 §3 approve 后填入）*
+落实 §0.2 #76 的 CLI 暴露面。所有子命令挂在 `nanobot/cli/commands.py` 现有 typer `app` 上，与 `nanobot gateway` / `nanobot serve` 同级，命名空间 `nanobot evolve <subcmd>`。CLI 全部为 Python API（§5）的 thin wrapper —— CLI 不实现业务逻辑，仅做参数解析 + `OfflineHarness` 调用 + 退出码映射。
+
+### 4.0 子命令总览与公共行为
+
+| 子命令 | 作用 | 是否需要 `evolve` extra |
+|---|---|---|
+| `nanobot evolve init` | 一次性 bootstrap：创建 `evals/synthetic/` + `evals/golden/` + `<workspace>/evals/runs/`、追加 `.gitignore`、写 `evals/README.md` 模板 | **否**（仅 mkdir / write，不 import dspy/gepa） |
+| `nanobot evolve run <skill-name>` | 主入口：跑 GEPA 迭代 → judge 评分 → gate 链 → manifest/report/diff 输出 | **是**（未装抛 `EvolveExtraNotInstalled` → exit 3） |
+| `nanobot evolve report <run-id>` | 只读：打印某 run 的 `report.md` | **否**（仅文件读写） |
+| `nanobot evolve apply <run-id>` | 生成 PR artifact bundle（`pr_body.md` / `diff.patch` / `report.md` 拷贝）至独立目录或 stdout，**不**触碰 git | **否**（仅文件读写 + 模板拼接） |
+
+公共行为（所有子命令）：
+
+1. 共享 typer 全局选项：`--workspace <path>`（默认 CWD）、`--config <path>`（默认 `~/.nanobot/config.json`）、`--verbose / -v`（流输出 DEBUG 日志）、`--quiet / -q`（仅 final 行）。
+2. 退出码语义全局一致（详见 §4.6）。
+3. 任何子命令首行必须 echo 当前 `nanobot --version` + `evolve_extra_version`（若已装），便于 bug 复盘。
+4. `--help` 输出严格遵循 typer 默认渲染；不引入自定义 ASCII art。
+
+### 4.1 `nanobot evolve init`
+
+#### 4.1.1 行为
+
+一次性 bootstrap，在当前 workspace 落盘 M4 必需的目录骨架与 README。**幂等**：重复调用不报错、不覆盖已存在文件，仅补齐缺失项。
+
+落盘行为（按顺序）：
+
+1. `mkdir -p <workspace>/evals/synthetic/` + 写 `.gitkeep`（若不存在）
+2. `mkdir -p <workspace>/evals/golden/` + 写 `.gitkeep`（若不存在）
+3. `mkdir -p <workspace>/evals/runs/`（不写 `.gitkeep` —— runs/ 整体进 gitignore）
+4. 编辑 `<workspace>/.gitignore`：若不存在则创建；按下文算法**同批次**补齐三条必需行：
+   - `evals/runs/` — harness 产物（每次 run 写入）
+   - `evals/self/` — Tier D self-eval（PII 风险，§5.2 privacy contract #2 / §3.1.5）
+   - `evals/sessions/` — Tier B 脱敏会话抽样落地路径（§3.1.3 / §9）
+5. 写 `<workspace>/evals/README.md`（仅当不存在时；模板见下）
+
+**`.gitignore` 行匹配算法**（落实 R2 / Y8 / Y7 的共享前提）：
+
+1. 读 `.gitignore` 全文，按 `\n` / `\r\n` 切行，每行 strip 首尾空白。
+2. 对每条必需 pattern（`evals/runs/` / `evals/self/` / `evals/sessions/`），检查是否存在一条 strip-后**完全相等**、且非空、非以 `#` 开头的行。
+3. **不接受语义等价但字面不同的匹配**：`evals/runs`、`/evals/runs/`、`evals/runs/*` 都**不**视为覆盖了 `evals/runs/`。理由：确定性 + 可幂等检测 > 灵活匹配。
+4. 缺失的 pattern 一次性 append 到文件末尾，每条独占一行末尾带 `\n`。写入策略：
+   - 读旧内容 → 构造新内容（旧内容 + 缺失行）→ 写 `<path>.tmp` → `os.fsync` → `os.replace(.tmp, .gitignore)`（沿用 `nanobot/agent/memory.py` 的 atomic-write 模式）。
+5. **幂等性**：若三条 pattern 已全部满足分支 #2 的匹配，函数早返，**不**重写文件、**不**改 mtime。
+
+`evals/README.md` 模板（约 40 行）覆盖：
+
+- 目录语义说明（`synthetic/` = Tier A、`golden/` = Tier C，cross-ref §3.1.2 / §3.1.4）
+- 添加新 record 的流程（手写 `input.jsonl` + `expected.jsonl`，两文件 `record_id` 对齐）
+- 与 `tests/eval/` 的差异提示（数据 ≠ 测试代码，pytest 不 collect）
+- 链接到本 spec 锚点 `docs/hermes-evolution/specs/m4-offline-skeleton.md#31-4-tier-评测数据-schema`
+
+#### 4.1.2 标志
+
+无必填标志。可用全局 `--workspace` / `--config`。
+
+#### 4.1.3 输出与退出码
+
+```
+$ nanobot evolve init
+nanobot 0.x.y · evolve extra: 2.5.3 / 0.3.1
+[init] created  evals/synthetic/.gitkeep
+[init] created  evals/golden/.gitkeep
+[init] created  evals/runs/
+[init] updated  .gitignore (+3 lines: evals/runs/, evals/self/, evals/sessions/)
+[init] created  evals/README.md
+done.
+```
+
+幂等再跑（全部已存在）：
+
+```
+$ nanobot evolve init
+nanobot 0.x.y · evolve extra: not installed
+[init] skip     evals/synthetic/.gitkeep (exists)
+[init] skip     evals/golden/.gitkeep (exists)
+[init] skip     evals/runs/ (exists)
+[init] skip     .gitignore (already contains evals/runs/, evals/self/, evals/sessions/)
+[init] skip     evals/README.md (exists)
+done.
+```
+
+退出码：`0` = 成功或全幂等命中；`>0` = filesystem error（详见 §4.6 表）。
+
+### 4.2 `nanobot evolve run <skill-name>`
+
+#### 4.2.1 行为
+
+主进化入口。流程：
+
+1. 解析 `<skill-name>`，从 `<workspace>/skills/agent/<skill-name>/SKILL.md` 加载 `Baseline`（§3.2）
+2. 加载 `--tiers` 指定的评测数据（§3.1）
+3. 跑 `--iterations` 轮 GEPA 优化，每轮产生若干 `Candidate`
+4. 对每个 candidate 跑 §3.3 judge pool → `JudgeConsensus`，聚合得 fitness
+5. 顺序执行 `GATES`（§3.6），首个 fail 即 short-circuit
+6. 选出 fitness 最高且全 gate pass 的 `promoted_candidate`
+7. 写 `<workspace>/evals/runs/<run_id>/manifest.json` + `report.md` + `judge_log.jsonl` + `gates/*.json`
+8. 若 `--no-dry-run` 且 `final_status == "promoted_to_pr"` → 调 `pr_writer` 生成 `diff.patch` + `pr_body.md` 到 `<run-id>/pr/`；否则 dry-run（默认）仅输出 manifest/report，**不**生成 PR artifact
+
+#### 4.2.2 标志
+
+| 标志 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `<skill-name>` | positional | — | 必填；目标 agent-tier skill 名（必须存在于 `<workspace>/skills/agent/`） |
+| `--tiers` | csv string | `A,C` | 启用 tier 列表；私有 tier（B、D）必须**显式**列出。值集 `{A,B,C,D}` |
+| `--iterations` | int | 5 | GEPA 迭代轮数（≥1） |
+| `--seed` | int | None（自动） | 随机种子；省略时 harness 生成并写入 manifest 的 `gepa_seed` 字段供复现 |
+| `--judge-pool` | csv string | `agents.defaults.evolve.default_judge_pool` | 形如 `anthropic/claude-3-5-sonnet,openai/gpt-4o,google/gemini-1.5-pro`；**长度必须为奇数**（决策 #81），偶数 → exit 2。如需单 judge dev 模式，传单个名字（如 `--judge-pool anthropic/claude-3-5-sonnet`，长度 1 是合法的奇数） |
+| `--dry-run` / `--no-dry-run` | bool flag | `--dry-run`（即 True） | 控制是否生成 PR artifact；默认 `--dry-run`（仅写 manifest/report）；`--no-dry-run` 触发 `pr_writer` 生成 `diff.patch` + `pr_body.md`，但**绝不**自动 commit / push / merge（§8） |
+
+互斥矩阵：M4 CLI 不再设置任何二元 flag 互斥对。`--dry-run` / `--no-dry-run` 是 typer 内置的 boolean flag pair（同名两个 flag 中 typer 仅取最后出现者，无歧义）。
+
+> 注 1：M4 取消了 `--apply` / `--single-judge` / `--rubric-weights` / `--no-cache-compat-gate` 这四个 flag。
+> - `--apply` 与 `--no-dry-run` 同语义重复 → 仅保留后者。
+> - `--single-judge` 与 `--judge-pool` 同语义重复（单 judge = `--judge-pool <single-name>`，长度 1 合法）→ 删除。
+> - `--rubric-weights` 是稳定调参参数，归 `EvolveDefaults.rubric_weights`；实验者改 config，不改 CLI。
+> - `--no-cache-compat-gate` 是危险的 dev 后门（与 `--no-dry-run` 同启会让未审产物进 PR）→ 删除。需本地临时跳过 gate 3 的开发者，在 `nanobot/evolve/gates/__init__.py` 中注释掉 `CacheCompatGate()` 一行（grep-able 改动，PR 时显眼），CLI 不开此口子。
+
+#### 4.2.3 输出
+
+stdout 流式输出（`--quiet` 时仅 final 行）：
+
+```
+$ nanobot evolve run refactor-helper --tiers A,C --iterations 5 --no-dry-run
+nanobot 0.x.y · evolve extra: 2.5.3 / 0.3.1
+[run] skill=refactor-helper baseline_hash=7f3a9e2b1c4d
+[run] tiers=[A, C]  records: A=30  C=8  total=38
+[run] judge_pool=[anthropic/claude-3-5-sonnet, openai/gpt-4o, google/gemini-1.5-pro] (size=3)
+[run] seed=auto:42139871
+
+[iter 1/5] candidates=4  best_fitness=0.612  baseline_fitness=0.581
+[iter 2/5] candidates=4  best_fitness=0.674  baseline_fitness=0.581
+[iter 3/5] candidates=4  best_fitness=0.701  baseline_fitness=0.581
+[iter 4/5] candidates=4  best_fitness=0.703  baseline_fitness=0.581
+[iter 5/5] candidates=4  best_fitness=0.711  baseline_fitness=0.581
+
+[gate 1-test-pass]      pass    (golden 8/8 strict, synthetic 30/30 judge_only)
+[gate 2-size-cap]       pass    (chars Δ=+312 / +4.1%, tokens_est Δ=+87 / +5.0%)
+[gate 3-cache-compat]   pass    (stable_hash unchanged: a1b2c3d4e5f6)
+
+[summary]
+  final_status:        promoted_to_pr
+  promoted_candidate:  9e8d7c6b5a4f
+  fitness_delta:       +0.130 (+22.4%)
+  median_aggregate:    0.711 (process=0.78, output=0.74, token=0.62)
+  consensus_split:     2 / 38 records
+  pr_artifact:         <workspace>/evals/runs/2026-06-12T08:30:00Z-a1b2c3d4/pr/
+
+manifest: <workspace>/evals/runs/2026-06-12T08:30:00Z-a1b2c3d4/manifest.json
+```
+
+dry-run（默认）行尾差异：`pr_artifact: (skipped: dry-run; pass --no-dry-run to generate)`。
+
+#### 4.2.4 退出码
+
+`0` = run 完成（任意 `final_status`，含 `rejected_by_gate` / `no_improvement`）；其余见 §4.6。**重要**：gate fail 不是 CLI error —— gate 是业务判定，run 本身成功；用户应读 manifest 的 `final_status` 字段判分流。
+
+### 4.3 `nanobot evolve report <run-id>`
+
+#### 4.3.1 行为
+
+只读子命令：打印 `<workspace>/evals/runs/<run-id>/report.md` 至 stdout。
+
+**Run-id 解析规则**（`report` / `apply` 共用，统一在 `nanobot/evolve/harness.py:_resolve_run_id()` 中实现）：
+
+1. 位置参数可以是 (a) 完整 `<UTC ISO>-<8-hex>` 字符串，或 (b) 8-hex 后缀的任意长度 ≥ 4 的 hex 前缀。
+2. CLI 通过扫描 `<workspace>/evals/runs/` 子目录名解析前缀。
+3. **前缀长度 < 4**：exit 2（`ConfigError`），提示 "run-id prefix must be ≥ 4 hex chars to disambiguate"。
+4. **前缀匹配 ≥ 2 个 run 目录**：exit 2（`ConfigError`），错误消息列出所有匹配 run-id。
+5. **前缀无匹配**：exit 6（fs/state，`FileNotFoundError` 映射），错误消息列出 `<workspace>/evals/runs/` 路径。
+6. 完整 8-hex 后缀（构造时由 ULID-suffix 随机区分）保证全局无碰撞，不会进入分支 #4。
+
+#### 4.3.2 标志
+
+| 标志 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `<run-id>` | positional | — | 与 `--latest` 互斥之一必填 |
+| `--latest` | flag | False | 跳过 `<run-id>` 解析，自动选 `<workspace>/evals/runs/` 下 `started_at` 最新者 |
+
+> 注：M4 删除了 `--format json` 标志。`report` 始终 cat `report.md`；调用方需 JSON 时直接 `cat <run-id>/manifest.json` 即可。当出现具体 CI consumer 需要单接口同时拿到 report 文本 + manifest 字段时再加 JSON 渲染。
+
+#### 4.3.3 退出码
+
+`0` = 找到并打印；`2` = run-id 前缀长度 < 4 或前缀歧义；`6` = run-id 前缀无匹配（§4.6 / §4.3.1）。
+
+### 4.4 `nanobot evolve apply <run-id>`
+
+#### 4.4.1 行为（**关键安全契约**）
+
+生成 PR artifact bundle 到独立目录，**完全不触碰 git / 网络 / 子进程**。
+
+**负契约（hard ban，由 `tests/evolve/test_apply_contract.py` AST 检查 `nanobot/evolve/deploy/**/*.py` 强制）**：
+
+- **禁止网络 I/O**：禁止顶层或函数内 import `requests` / `httpx` / `urllib.request` / `urllib3` / `aiohttp` / `socket`（顶层）/ 任何 GitHub SDK / 任何 HTTP client。AST 检测 + ruff 自定义规则（如可用）。
+- **禁止进程生成**：禁止 import / 调用 `subprocess` / `os.system` / `os.execvp` / `pty.spawn` / `multiprocessing.Process`。
+- **禁止 git 工具调用**：上一条已覆盖 `subprocess`，但同时白名单层面也 ban `git` / `gh` / 任何 VCS CLI 字符串。
+- **禁止改 SKILL.md**：`<workspace>/skills/agent/<name>/SKILL.md` 路径在 `nanobot/evolve/deploy/**` 内的 write/append/replace 操作全部禁止。
+- **禁止调 GitHub API**：不创建 branch、不 push、不开 PR、不打 label。
+
+**正契约（唯一允许的副作用）**：
+
+- 仅做：读 `<run-id>/manifest.json` → 模板拼接 `pr_body.md` → 拷贝 `report.md` + `diff.patch` 到 `--output-dir`。
+- `apply` **仅**允许通过 `pathlib.Path.write_text` / `write_bytes` / `mkdir` / `shutil.copytree` 在 `--output-dir` 子树内写文件。任何指向 `--output-dir` 之外的写路径均 fail。
+
+测试模块文件路径硬锁 `tests/evolve/test_apply_contract.py`。
+
+落实路线图 §6 约束 4 + §0.4 第 4 行；详细模板见 §8.3。
+
+唯一作用：把已生成的 artifact 重新输出为可手动使用的 PR 包（CI 流水线可拉走 → 调外部 PR-creation 工具，但此命令本身**不参与**）。
+
+调用结束打印明确 hint：
+
+```
+to merge: open PR manually using <output-dir>/pr_body.md
+nanobot evolve apply DOES NOT touch git, branches, or remotes by design.
+```
+
+#### 4.4.2 标志
+
+| 标志 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `<run-id>` | positional | — | 必填；与 `evolve report` 同 prefix 解析规则 |
+| `--output-dir` | path | `<workspace>/evals/runs/<run-id>/pr.bundle/` | bundle 输出目录；不存在则创建。**注意**与 `evolve run --no-dry-run` 写入的 `<run-id>/pr/` 是**不同**目录：`pr/` 是 run 进程内写的就地 artifact，`pr.bundle/` 是 `apply` 子命令导出的独立打包目录（供下游 CI / 手工 PR 拉走）。两路径分离避免 `apply` 与 `run --no-dry-run` 之间的写冲突 |
+| `--force` | flag | False | 允许覆盖已存在的 output-dir（默认报错 exit 5） |
+
+> 注：M4 删除了 `--format json` 标志。`apply` 始终输出标准多文件目录；目录本身就是 machine-readable（CI 直接读 `pr_body.md` / `diff.patch` / `manifest.json`），无需再封一层 JSON。
+
+#### 4.4.3 前置校验
+
+| 检查 | 失败时 |
+|---|---|
+| run-id 前缀长度 / 唯一性（§4.3.1 算法） | exit 2（长度 < 4 或歧义）；exit 6（无匹配） |
+| `<run-id>/manifest.json` 可解析 | exit 6（fs/state） |
+| `manifest.final_status == "promoted_to_pr"` | exit 5（非 promoted） |
+| `manifest` 通过 §3.7.1 「无 PII」不变量（`pr_writer` 二次扫描） | exit 4（`ManifestPrivacyViolation`） |
+| `--output-dir` 已存在且 `--force=False` | exit 5（`FileExistsError`） |
+
+#### 4.4.4 退出码
+
+成功返回 `0`；失败分类详见 §4.6 全表。本子命令**永不**触发 `BaselineMismatch`（exit 7）或 `JudgeError`（exit 5），那两类异常只可能在 `evolve run` 中出现。
+
+### 4.5 Config 字段（`agents.defaults.evolve.*`）
+
+落实 §0.2 #75 / #76 / #79；新增字段定义在 `nanobot/config/schema.py`，挂于现有 `AgentDefaults` 模型下的新 `EvolveDefaults` 子模型。
+
+```python
+# nanobot/config/schema.py（M4 plan 期落地的 delta）
+# Base、ConfigDict、Field、field_validator、model_validator 由本文件 §schema preamble 已导入。
+from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic.alias_generators import to_camel
+# Base 来自本文件第 21 行；EvolvePrivacyConfig / EvolveDefaults 须继承 Base 而非 BaseModel，
+# 以继承 `model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)`，
+# 保证 JSON 配置中的驼峰别名（sessionDbEnabled / selfEvalEnabled / defaultJudgePool /
+# rubricWeights / allowedUrlHosts）能被正确接受。
+
+class EvolvePrivacyConfig(Base):
+    """Tier B 脱敏管线的可调项；落实 §9。"""
+
+    # frozen=True：构造后字段不可变，避免运行时被悄悄改写；
+    # 与 Base 的 alias_generator / populate_by_name 合并写在同一 ConfigDict。
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        frozen=True,
+    )
+
+    allowed_url_hosts: list[str] = Field(default_factory=list)
+    """白名单 host 列表；URL host 不在此 → §9 redactor 改写为 [REDACTED:URL]。"""
+
+    # M4 删除 `custom_redactor` 字段：YAGNI。M4 ships 的内置 PII 规则（§9）已覆盖全部
+    # 已知场景；插件 hook 在出现真实用户请求时再引入。
+
+class EvolveDefaults(Base):
+    """`agents.defaults.evolve.*`；M4 新增。所有字段默认值保守，禁开私有 tier。"""
+
+    # frozen=True：rubric_weights / default_judge_pool 等是稳定调参参数，
+    # 一经 load 不应被运行时代码 mutate；想 override 必须调
+    # `EvolveDefaults.model_copy(update={...})` 重新构造 + 触发 validator。
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        frozen=True,
+    )
+
+    session_db_enabled: bool = False
+    """Tier B 总开关（决策 #75）；默认 False = 离线 lane 不读 SessionDB。"""
+
+    self_eval_enabled: bool = False
+    """Tier D 总开关；默认 False = `record_self_eval` API 调用变 no-op + warn log。"""
+
+    default_iterations: int = Field(default=5, ge=1, le=50)
+    """`evolve run --iterations` 默认值；上限 50 防失控。"""
+
+    default_judge_pool: list[str] = Field(default_factory=lambda: [
+        "anthropic/claude-3-5-sonnet",
+        "openai/gpt-4o",
+        "google/gemini-1.5-pro",
+    ])
+    """`evolve run --judge-pool` 默认值；长度必须为奇数（决策 #81）。
+    选 3 家不同 provider 是为最大化模型 bias 解耦（同家族模型间相关性更高）。"""
+
+    rubric_weights: dict[str, float] = Field(default_factory=lambda: {
+        "process": 0.4,
+        "output": 0.4,
+        "token": 0.2,
+    })
+    """`RubricScore.aggregate` 加权；和必须 == 1.0（容差 1e-6），key 必须是 {process,output,token}。"""
+
+    privacy: EvolvePrivacyConfig = Field(default_factory=EvolvePrivacyConfig)
+    """脱敏管线配置；详见 §9。"""
+
+    @field_validator("default_judge_pool")
+    @classmethod
+    def _odd_pool_size(cls, v: list[str]) -> list[str]:
+        if len(v) == 0:
+            raise ValueError("default_judge_pool must have ≥1 entry")
+        if len(v) % 2 == 0:
+            raise ValueError(
+                f"default_judge_pool size must be odd (got {len(v)}); "
+                "even sizes break median consensus per decision #81"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _weights_sum_to_one(self) -> "EvolveDefaults":
+        keys = set(self.rubric_weights.keys())
+        if keys != {"process", "output", "token"}:
+            raise ValueError(
+                f"rubric_weights keys must be exactly {{process,output,token}}; got {keys}"
+            )
+        total = sum(self.rubric_weights.values())
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"rubric_weights must sum to 1.0; got {total}")
+        return self
+
+# 挂载点：nanobot/config/schema.py 现有的 AgentDefaults 类（M4 不重定义，仅追加字段）
+# class AgentDefaults(Base):  # 既有定义，不在此重复
+#     ...（已有字段不动）
+#     evolve: EvolveDefaults = Field(default_factory=EvolveDefaults)
+# M4 plan 期：在 schema.py 内**编辑** AgentDefaults 类追加 `evolve` 字段；
+# 本 spec **不**重定义 AgentDefaults（避免与既有 schema 类同名冲突）。
+```
+
+字段速查表：
+
+| 字段 | 类型 | 默认 | Validator | Cross-ref |
+|---|---|---|---|---|
+| `session_db_enabled` | bool | `false` | — | §3.1.3 / §9 / §0.4 #5 |
+| `self_eval_enabled` | bool | `false` | — | §3.1.5 / §5.2 |
+| `default_iterations` | int | 5 | `1 ≤ n ≤ 50` | §4.2.2 |
+| `default_judge_pool` | list[str] | 3 家不同 provider | 长度奇数 | §3.3 / 决策 #81 |
+| `rubric_weights` | dict | `{0.4,0.4,0.2}` | 键集 + 求和 == 1.0 | §3.3 / §0.2 #79 |
+| `privacy.allowed_url_hosts` | list[str] | `[]` | — | §9 |
+
+CLI 标志 → config 优先级（从高到低）：CLI flag > `--config` 指定文件 > `~/.nanobot/config.json` > `EvolveDefaults` 内置默认值。
+
+### 4.6 退出码全表（**新决策 #82**）
+
+为让 CI / 自动化脚本可分流处理不同失败模式，M4 锁定退出码语义：
+
+| Code | 含义 | 触发场景 |
+|---|---|---|
+| `0` | 成功（含业务判定为 reject 的 run） | run/init/report/apply 正常完成；gate fail 不映射到非零 |
+| `1` | 通用错误（兜底） | 未分类的 Python 异常（不属于 2/3/4/5/6/7 任一类） |
+| `2` | Harness 配置错误 | `rubric_weights` 不合规 / `judge_pool` 偶数 / `iterations < 1` / run-id 前缀长度 < 4 / 前缀歧义 |
+| `3` | `EvolveExtraNotInstalled` | 未装 `nanobot[evolve]`，`evolve run` 调用 |
+| `4` | 隐私 / 安全 gate 违例 | `ManifestPrivacyViolation` |
+| `5` | 资源未找到 / 外部 provider 失败 | run-id 前缀无匹配（FileNotFoundError）/ `final_status != promoted_to_pr` 时 `apply` / `JudgeError`（aux provider 调用失败） |
+| `6` | Filesystem / 状态错误 | `init` 无法 mkdir / `.gitignore` 无法写入 / `<workspace>/evals/runs/` 不存在 |
+| `7` | Harness invariant 违反 | `BaselineMismatch`（候选 `parent_baseline_hash` ≠ baseline `content_hash`，§3.2 invariant #1）。本码意味着 harness 自身契约破裂，**不**重试，应当抓 trace 报 bug |
+
+**异常 → 退出码的完整映射表见 §5.3**。
+
+**新决策 #82 已追加 §0.3**。CI 分流原则：
+
+- exit 5 → 可能是临时性 provider 抖动，可重试（指数退避）。
+- exit 7 → harness invariant 破裂，必须停止重试并向 maintainer 报 bug。
+- exit 2 → 调用方参数错，需修改 invocation 再重跑。
+- exit 1 → 未分类异常，traceback 应入 CI 日志。
+
+退出码契约同时由 §10 不变量 #6 强制（任何业务路径不得使用未在此表列出的退出码）。
+
+---
 
 ## 5. Python API 表面
 
-*（待 §4 approve 后填入）*
+落实 §0.2 #76 的 API 暴露面；CLI（§4）是其 thin wrapper。所有 public 类 / 函数均从 `nanobot.evolve` 顶层 re-export，`__all__` 列表锁定 stable 表面，未列出的内部模块（`gepa.runner`、`judges.calibration` 等）不视为 public API。
+
+### 5.1 `OfflineHarness` 类
+
+```python
+# nanobot/evolve/harness.py
+from pathlib import Path
+from typing import Optional
+from nanobot.config.schema import NanobotConfig
+
+class OfflineHarness:
+    """M4 离线进化 pipeline 主入口。
+
+    线程安全：**否**。一个实例对应一次进化运行；并发请实例化多个。
+    生命周期：构造廉价，仅做 config 解析；`run()` / `init()` / `apply()`
+    分别可独立调用，无隐式状态机。
+
+    与 nanobot 运行时 lane 关系：本类**不**调用 AgentLoop / AgentRunner / 任何
+    channel；仅依赖 nanobot.config.loader、nanobot.providers.factory（取 judge model）、
+    nanobot.skills.SkillsLoader（读 baseline）。详见 §5.4。
+    """
+
+    def __init__(
+        self,
+        workspace: Path,
+        config: Optional[NanobotConfig] = None,
+    ) -> None:
+        """构造 harness。**廉价**：不读 config 文件、不 import dspy/gepa、不触网络。
+
+        Args:
+            workspace: workspace 根目录绝对路径；`evals/` / `evals/runs/` /
+                `skills/agent/` 均相对此路径解析。仅检查 `workspace.is_dir()`，
+                **不**校验 `~/.nanobot/config.json` 是否存在。
+            config: 已加载的 NanobotConfig；省略时在**首次需要 config 的方法**
+                （`run()` / `report()` / `apply()`）调用时**惰性**调
+                `loader.load_config()`，缓存到 `self._config`。
+
+        Raises:
+            ValueError: workspace 路径不是目录
+
+        注意：`__init__` **永不**抛 `ConfigError`。在没有
+        `~/.nanobot/config.json` 的全新机器上 `OfflineHarness(workspace).init()`
+        必须成功——`init` 是 bootstrap 命令，按定义不依赖运行时 config。
+        """
+
+    # 与 `OfflineHarness` 解耦的模块级 bootstrap 函数；CLI `nanobot evolve init`
+    # 直接 dispatch 到此函数，**不**经 harness 类。理由：bootstrap 不需要
+    # harness 对象、不需要 config、不需要 lazy import — 与主 pipeline 解耦更清晰。
+    def init_workspace(workspace: Path) -> None:
+        """落地 §4.1 的 bootstrap：创建目录骨架 + .gitignore + README。
+
+        幂等；等价于 CLI `nanobot evolve init`。模块级函数，签名独立于
+        `OfflineHarness`，可在 `~/.nanobot/config.json` 缺失时调用。
+
+        Args:
+            workspace: workspace 根目录绝对路径
+
+        Raises:
+            OSError: 文件系统 I/O 错误（exit 6）
+        """
+
+    def run(
+        self,
+        skill_name: str,
+        *,
+        tiers: Optional[list[str]] = None,            # 默认 ["A", "C"]
+        iterations: Optional[int] = None,              # 默认 config.default_iterations
+        seed: Optional[int] = None,                    # None → harness 自动生成
+        judge_pool: Optional[list[str]] = None,        # 默认 config.default_judge_pool
+        rubric_weights: Optional[dict[str, float]] = None,
+        dry_run: bool = True,                          # 默认 dry-run（与 CLI 一致）
+    ) -> "RunManifest":
+        """跑一次完整离线进化。等价于 CLI `nanobot evolve run`。
+
+        Returns:
+            RunManifest: §3.7 定义；含 final_status 字段供调用方分流。
+            注意：即使 final_status == 'rejected_by_gate'，本方法**返回**而非
+            抛错；调用方需读字段判分流。例外见 Raises。
+
+        Raises:
+            EvolveExtraNotInstalled: 未装 `nanobot[evolve]`（lazy import 触发）
+            BaselineMismatch: 候选 `parent_baseline_hash` ≠ 配对 `Baseline.content_hash`
+                （§3.2 「配对不变量」#1：`Candidate.parent_baseline_hash == Baseline.content_hash`）
+            JudgeError: provider 失败到 quorum 不足或 require_consensus=True 时 split。
+                **Retry contract**：每个 judge 调用使用 tenacity-style 指数退避，最多
+                3 次尝试，2s / 4s / 8s 延迟；重试触发条件：
+                  - `httpx.HTTPStatusError`，status ∈ {429, 500, 502, 503, 504}
+                  - `httpx.ReadTimeout`
+                  - `httpx.ConnectError`
+                3 次仍失败 → 该 judge **标记为本 run 不可用**（不立刻抛），加入
+                `RunManifest.judge_pool_health[<model>] = "unavailable:<reason>"`。
+                run 继续以缩减的 pool 评分；如此后任一 record 评分时
+                  - `len(available_judges) < 1`，或
+                  - 可用 judges 数 < `JudgePool.min_quorum`
+                即抛 `JudgeError`，附 per-judge 尝试日志。否则降级运行直到 run 完成，
+                `judge_pool_health` 保留退化轨迹供事后分析。
+                映射到 CLI exit 5（外部 provider 失败，可重试）。
+            ManifestPrivacyViolation: manifest 含 §3.7.1 禁字段
+            ConfigError: tier 列表含未知值 / iterations < 1 / pool 偶数等
+        """
+
+    def report(self, run_id: str) -> str:
+        """读取并返回某 run 的 `report.md` 文本。等价于 CLI `nanobot evolve report`。
+
+        Args:
+            run_id: 完整 ID 或 8-hex 后缀的 ≥4-hex 前缀（前缀唯一即可，
+                详细解析规则见 §4.3.1）
+
+        Returns:
+            报告文本（unicode str）
+
+        Raises:
+            ConfigError: run-id 前缀长度 < 4 或前缀歧义（exit 2）
+            FileNotFoundError: run-id 前缀无匹配（exit 6）
+        """
+
+    def apply(
+        self,
+        run_id: str,
+        *,
+        output_dir: Optional[Path] = None,             # 默认 <run_id>/pr.bundle/（与 run --no-dry-run 写的 <run_id>/pr/ 解耦，避免冲突）
+        force: bool = False,
+    ) -> Path:
+        """生成 PR artifact bundle 到独立目录。**绝不**触碰 git。
+
+        等价于 CLI `nanobot evolve apply`；详细契约见 §4.4 / §8。
+
+        Returns:
+            Path: bundle 目录绝对路径（含 pr_body.md / diff.patch / report.md 拷贝）
+
+        Raises:
+            ConfigError: run-id 前缀长度 < 4 或前缀歧义（exit 2）
+            FileNotFoundError: run-id 前缀无匹配（exit 6）
+            ValueError: manifest.final_status != 'promoted_to_pr'（exit 5）
+            ManifestPrivacyViolation: manifest 含 §3.7.1 禁字段（exit 4）
+            FileExistsError: output_dir 已存在且 force=False（exit 5）
+        """
+```
+
+**实例语义**：
+
+1. 一个 `OfflineHarness` 实例对应一个 workspace + config 组合；可重复调 `run()`（产生独立 `run_id`）。
+2. 不持有跨 `run()` 调用的状态（无 cache、无连接池）；每 `run()` 重新 lazy-import dspy/gepa、重建 provider client。
+3. 不重入 / 不并发：构造便宜，并发场景请独立实例化（每实例独立 `run_id`，文件互不冲突）。
+4. **`config` 参数的合法调用者**：仅 (a) pytest fixtures，(b) CLI thin wrapper（`nanobot/cli/commands.py`）。生产代码应当传 `config=None` 并依赖惰性加载；显式注入仅为测试与命令分发服务。
+
+### 5.2 `record_self_eval` 工具函数
+
+Tier D（§3.1.5）的写入入口；典型用法：在集成测试 / agent task 代码内调用，落盘 `<workspace>/evals/self/<task_id>/{input,output,verdict}.json`。
+
+```python
+# nanobot/evolve/__init__.py
+from pathlib import Path
+from typing import Optional
+
+def record_self_eval(
+    task_id: str,
+    input: dict,
+    output: dict,
+    verdict: dict,
+    *,
+    workspace: Optional[Path] = None,
+) -> None:
+    """记录一条 Tier D self-eval 样本。
+
+    Args:
+        task_id: 任务唯一 ID（调用方自定，建议 ULID 或 UUIDv7）
+        input: skill 入参 payload；落 `input.json`
+        output: skill 实际输出；落 `output.json`
+        verdict: 自评结论；**必须**含 `passed: bool` 字段（§3.1.5 binary_verdict）
+        workspace: 落盘根目录；省略时按
+            `<CWD>/evals/self/` → `~/.nanobot/evals/self/` 优先级解析
+
+    Behavior when self_eval_enabled = False:
+        若 config 的 `agents.defaults.evolve.self_eval_enabled == False`（默认）→
+        本函数变为 no-op（仅 log 一条 warning），**不**落盘。理由：避免在用户未
+        知情时累积 task 现场 PII。要启用必须显式开 config flag。
+        Warning 通过 `logging.getLogger("nanobot.evolve.self_eval")` 发出，
+        **每进程最多一次**（模块级 `_warned: bool` 标志位防 spam）。
+
+    Atomicity & concurrency contract:
+        - 三个文件（`input.json` / `output.json` / `verdict.json`）各自走
+          `<path>.tmp` → `os.fsync(fd)` → `os.replace(<path>.tmp, <path>)`
+          原子落盘（沿用 `nanobot/agent/memory.py` 模式）。
+        - **跨文件原子性不保证**：同一 `task_id` 的并发调用 reader 可能观测到
+          run N 的 `verdict.json` 与 run N+1 的 `input.json` 共存。契约要求调用方
+          **每次调用使用全新 `task_id`**（建议 `ulid.new()` 或 `uuid.uuid7()`），
+          复用 `task_id` 时三文件 last-writer-wins **per file**，无锁。
+          锁定会破坏 `self_eval_enabled=False` 静默 no-op 路径的低开销特性。
+
+    Directory creation:
+        当 `self_eval_enabled=True` 且 `<workspace>/evals/self/<task_id>/` 不存在 →
+        函数在三文件 atomic-write 之前调
+        `target_dir.mkdir(parents=True, exist_ok=True)`。这是为了处理用户开 Tier D
+        但未跑 `evolve init` 的边角场景（`evals/self/` 父目录缺失）。
+        **重要**：自动 `mkdir` 不是 `evolve init` 的替代——init 还写 `.gitignore` 条目；
+        缺少 init 的 Tier D 启用会让 `evals/self/` **未** gitignore，**有 PII 进库风险**。
+
+    Precondition guard:
+        函数入口先做 `.gitignore` 校验：若 `<workspace>/.gitignore` 存在但**不**
+        包含 `evals/self/`（按 §4.1.1 行匹配算法精确匹配）→ 抛
+        `ManifestPrivacyViolation("Tier D enabled but evals/self/ is not gitignored; "
+        "run `nanobot evolve init` first")`，**不**落盘。
+
+    Raises:
+        ValueError: verdict 缺 'passed' 字段或非 bool 类型
+        ManifestPrivacyViolation: `.gitignore` 缺 `evals/self/` 行（precondition）
+        OSError: 文件系统错误
+    """
+```
+
+**隐私契约（§9 落实）**：
+
+1. `input` / `output` / `verdict` **永不**进 `evals/runs/` 任何 manifest（§3.7.1 不变量）；harness 加载 Tier D 时仅传 `record_id` 给 judge / gate。
+2. `<workspace>/evals/self/` 路径必须**已**在 §4.1 init 时由 harness 加入 `.gitignore`（具体行：`evals/self/`，与 `evals/runs/` / `evals/sessions/` 同批次写入，§4.1.1 步骤 4）。`record_self_eval` 在入口处对此做精确-行匹配检查，缺失 → `ManifestPrivacyViolation`（详见 §5.2 Precondition guard）。
+3. config flag 默认关 → API 静默 no-op，避免无意识 PII 累积。
+
+### 5.3 异常族（`nanobot/evolve/exceptions.py` 完整列表）
+
+所有 M4 自定义异常集中在此模块；继承自标准库语义最近的基类，以便调用方既能用 `try/except` 精确捕获，也可用 `ImportError` / `ValueError` 等基类兜底。
+
+```python
+# nanobot/evolve/exceptions.py
+class EvolveExtraNotInstalled(ImportError):
+    """未装 `pip install nanobot[evolve]`，DSPy / GEPA 不可用。"""
+    INSTALL_HINT = "pip install nanobot[evolve]"
+
+class BaselineMismatch(ValueError):
+    """Candidate.parent_baseline_hash != Baseline.content_hash
+    （§3.2 配对不变量 #1）。M4 映射到 CLI exit 7（harness invariant 违反）。"""
+
+# 注：M4 **不**引入 `GateRejected` 异常类。M4 的设计是「gate 业务判定走 RunManifest
+# 返回值」（`final_status == 'rejected_by_gate'`），不抛异常。`strict_gates=True`
+# 扩展点（让 `run()` 在 gate fail 时抛 `GateRejected`）**延后到 M5**：M5 在引入
+# `gate 4 / gate 5` 时同步加该异常类，避免 M4 留死代码。
+
+class JudgeError(RuntimeError):
+    """Judge pool 调用失败（provider error，3 次重试后仍失败 → 详见 §5.1
+    retry contract）或 `JudgePool.require_consensus=True` 时 consensus split。"""
+
+class ManifestPrivacyViolation(RuntimeError):
+    """manifest 内出现 §3.7.1 禁字段；阻断 PR 生成（§4.4 / §8）。"""
+
+class ConfigError(ValueError):
+    """`EvolveDefaults` / `RubricWeights` / CLI 参数互斥违反等。"""
+```
+
+异常 → CLI 退出码映射（与 §4.6 一一对应）：
+
+| 异常 | CLI exit code | 子命令 | 重试建议 |
+|---|---|---|---|
+| `EvolveExtraNotInstalled` | 3 | `run` | 不重试，需 `pip install nanobot[evolve]` |
+| `ConfigError` | 2 | 任意 | 不重试，需修改 invocation / config |
+| `JudgeError` | 5 | `run` | **可重试**（指数退避；详见 §5.1 retry contract） |
+| `FileNotFoundError`（run-id 前缀无匹配） | 6 | `report` / `apply` | 不重试，run 真的不存在 |
+| `ManifestPrivacyViolation` | 4 | `run` / `apply` | 不重试，需修复 manifest 生成代码 |
+| `BaselineMismatch` | 7 | `run` | **绝不重试**，harness invariant 破裂，报 bug |
+| `OSError` | 6 | `init` / 任意 | 视情况（磁盘满 / 权限）人工处理 |
+
+未在表中列出的 Python 异常 → 兜底 exit 1（CLI traceback 入日志）。
+
+### 5.4 与 nanobot 现有 API 的关系（解耦边界）
+
+落实 §1.3 解耦原则。M4 离线 lane 与 nanobot 运行时 lane 严格分离：
+
+#### 5.4.1 M4 **依赖**的 nanobot 模块（白名单）
+
+| 模块 | 用途 | 调用形态 |
+|---|---|---|
+| `nanobot.config.loader` | 加载 `~/.nanobot/config.json` → `NanobotConfig` | `OfflineHarness.__init__` 内调 `load_config()` |
+| `nanobot.config.schema` | `EvolveDefaults` / `EvolvePrivacyConfig` 字段挂载 | M4 plan 期添加新 Pydantic 模型 |
+| `nanobot.providers.factory` | 实例化 judge model client（aux provider） | `judges.llm_judge.LLMJudge.__init__` 内调 `get_provider(model_str)` |
+| `nanobot.skills.SkillsLoader` | 加载 baseline `<workspace>/skills/agent/<name>/SKILL.md` + 解析 frontmatter | `harness._load_baseline()` 内调 |
+| `nanobot.session.redactor`（M4 plan 期新增的 facade module） | Tier B 抽样脱敏：唯一被允许从 evolve 包 import 的 `nanobot.session.*` 入口 | `privacy/redactor.py` 内 `from nanobot.session.redactor import read_redacted_records` |
+
+#### 5.4.2 M4 **绝不**依赖的 nanobot 模块（黑名单）
+
+| 模块 | 黑名单理由 |
+|---|---|
+| `nanobot.agent.loop.AgentLoop` | 运行时 lane 入口；M4 不跑 agent turn |
+| `nanobot.agent.runner.AgentRunner` | 同上；M4 不跑 LLM 多轮对话 |
+| `nanobot.agent.tools.*` | M4 不执行工具（judge 与 gate 都是 deterministic Python） |
+| `nanobot.channels.*` | 离线 lane 无 channel 概念 |
+| `nanobot.bus.queue.MessageBus` | M4 同步 pipeline，无消息总线 |
+| `nanobot.session.*`（包括所有子模块） | SessionDB 触达**仅**通过新增的 facade `nanobot.session.redactor.read_redacted_records(filters) -> Iterator[dict]`（M4 plan 期落地）；任何 `nanobot.session.<其它>` 一律禁止 import |
+| `nanobot.command.*` | 离线 lane 无 slash 命令 |
+| `nanobot.api.server` | M4 不暴露 HTTP 接口（路线图明确不引入 HTTP API） |
+
+依赖白/黑名单由 §10 不变量强制。M4 plan 期落地的测试模块：`tests/evolve/test_decoupling.py`，规则如下：
+
+1. **Import 形态覆盖**：测试通过 `ast.parse` 遍历每个 `.py` 的 AST，识别以下全部形态：
+   - `import X`（`ast.Import` 节点）
+   - `from X import Y`（`ast.ImportFrom` 节点）
+   - `from X.A import B`（同上，`module="X.A"`）
+   - `import X as Z`（`ast.Import` 节点，`alias.asname` 不为 None）
+2. **遍历范围**：`pathlib.Path('nanobot/evolve').rglob('*.py')` —— 包内所有 `.py` 文件无遗漏。
+3. **传递闭包检查**：构建 import 图后做 transitive closure。若 `nanobot/evolve/foo.py` import `nanobot.evolve.bar`，而 `bar.py` 顶层 import 黑名单（如 `nanobot.agent.loop`），则 `foo.py` 与 `bar.py` **都**报 fail。
+4. **动态 import 检测**：通过 AST 字符串字面量分析检测 `importlib.import_module("nanobot.X")` 与 `__import__("nanobot.X")` 调用；这两种形式同样落入黑名单匹配。
+5. **R7 facade 单符号断言**：单独 assert "在 `nanobot/evolve/**/*.py` 任一文件中，`nanobot.session.*` 的 import 唯一合法形态是 `from nanobot.session.redactor import read_redacted_records`"（精确匹配 `module == "nanobot.session.redactor"` 且 names 仅含 `read_redacted_records`）；其它 `nanobot.session.<X>` 任意形态均 fail。
+6. **fixture / 文件锚点**：测试模块文件路径硬锁 `tests/evolve/test_decoupling.py`；M5 加 gate 时**不可**改路径。
+
+#### 5.4.3 与 M2 `skill_manage` 的契约
+
+M4 与 M2 共享 `created_by` enum（§3.4.1）：
+
+- M4 仅**追加**新值 `dspy:gepa`；不改 `agent` / `subagent:<id>` / `dream` / `bundled` / `user` 任一已有语义。
+- M4 写回的 candidate frontmatter 落盘路径完全等同于 M2（`<workspace>/skills/agent/<name>/SKILL.md`），但**永不**直接写 —— 只通过 `diff.patch` 让人审 merge 触达。
+- `<workspace>/skills/agent/<name>/.lock`（M2 落地）：M4 不写 SKILL.md，故不取该锁；未来 M5 若实现自动 commit 必须取锁，本 spec 不涉及。
+
+#### 5.4.4 与 M3 Curator 的契约
+
+M3 / M4 是两条独立 lane（§1.3）：
+
+- M4 不读 M3 的 Curator 状态（如归档标记）；冲突场景由人工 reviewer 在 PR 阶段处理。
+- M4 不写 telemetry（M1 落地的 `<workspace>/.nanobot/telemetry.json`）；可读用于 candidate 排序，但本 spec 暂不启用（留给 M5 fitness 加权）。
+
+#### 5.4.5 子模块 `__init__.py` 的 lazy-import 纪律
+
+为让「未装 `evolve` extra 仍可 `import nanobot.evolve` 探针」契约（§3.5.1）逐层成立，下列规则强制：
+
+1. `nanobot/evolve/__init__.py` 顶层**禁止** import `dspy` / `gepa` / `litellm` / `optuna` 或任何 `evolve` extra 内的模块。`OfflineHarness` 类身体内的方法可以 lazy-import。
+2. `nanobot/evolve/judges/__init__.py` 同上 — 仅暴露符号（`from .rubric import RubricScore`），重符号在被首次实例化时 lazy-import 重依赖。
+3. `nanobot/evolve/gates/__init__.py` 同上 — 仅声明 `GATES: list[Gate]`，其元素的依赖通过子模块按需 import。
+4. `nanobot/evolve/deploy/__init__.py` 同上 — 仅做模块 export，业务逻辑在 `pr_writer.py` 内 lazy-import。
+5. M4 plan 期落地测试 `tests/evolve/test_no_extra_in_init.py`：用 AST 遍历每个 `__init__.py`，断言 module-level `ast.Import` / `ast.ImportFrom` 节点不出现 `{"dspy", "gepa", "litellm", "optuna"}` 任一名称（或其子模块）。
+
+#### 5.4.6 `__all__` 公共表面
+
+```python
+# nanobot/evolve/__init__.py
+__all__ = [
+    "OfflineHarness",
+    "init_workspace",
+    "record_self_eval",
+    "RunManifest",
+    "Candidate",
+    "Baseline",
+    "RubricScore",
+    "JudgeResult",
+    "JudgeConsensus",
+    "JudgePool",
+    "GateResult",
+    "EvolveExtraNotInstalled",
+    "BaselineMismatch",
+    "JudgeError",
+    "ManifestPrivacyViolation",
+    "ConfigError",
+]
+```
+
+**`__all__` 名称数：16**（精确计数 — R9 删除 `GateRejected`、R10 新增 `JudgePool`、R8 新增模块级 `init_workspace`）。
+
+未在 `__all__` 列出的模块（`gepa.runner` / `judges.calibration` / `privacy.redactor` 内部细节 / `deploy.pr_writer`）视为 internal，可在 minor 版本变更签名；M5 仅可在 `__all__` 列表上**追加**新名字（如 `GateRejected`、`SemanticFidelityGate`、`HumanReviewGate`），不可删除或改签名（落实 §14 下游契约）。
+
+---
+
+> §4–§5 完。新增决策 #82（CLI exit code 全表）已追加 §0.3。下一节 §6 Gate 详细定义。
 
 ## 6. Gate 详细定义
 
