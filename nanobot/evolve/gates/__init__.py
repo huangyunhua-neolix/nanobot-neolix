@@ -48,6 +48,17 @@ class Gate(ABC):
 
 # Ordered EXECUTION registry — concrete Gate INSTANCES only, appended at module
 # bottom after gate-implementations land in t-08/09/10. Harness iterates THIS list
-# for evaluate().
+# for evaluate(). Order MUST match the "N-" name prefix (gate 1 first, etc.) —
+# §6.4.1 contract test (t-07) enforces this.
 GATES: list[Gate] = []
-# TODO(t-08, t-09, t-10): append concrete gate instances to GATES below
+
+# Local imports kept at bottom to avoid a circular import: each gate module
+# `from nanobot.evolve.gates import Gate, GateResult`, so this module must
+# finish defining those names before importing the concrete subclasses.
+from nanobot.evolve.gates.cache_compat import CacheCompatGate  # noqa: E402
+from nanobot.evolve.gates.skill_size import SkillSizeGate  # noqa: E402
+from nanobot.evolve.gates.test_pass import TestPassGate  # noqa: E402
+
+GATES.append(TestPassGate())
+GATES.append(SkillSizeGate())
+GATES.append(CacheCompatGate())
