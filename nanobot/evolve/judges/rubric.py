@@ -29,12 +29,7 @@ class JudgeConsensus(EvolveBase):
 
 
 class JudgePool(EvolveBase):
-    model_config = ConfigDict(
-        extra="forbid",
-        alias_generator=EvolveBase.model_config["alias_generator"],
-        populate_by_name=True,
-        frozen=True,
-    )
+    model_config = ConfigDict(**{**EvolveBase.model_config, "frozen": True})
     judges: list[JudgeConfig] = Field(..., min_length=1)
     weights: RubricWeights = Field(default_factory=RubricWeights)
     require_consensus: bool = False
