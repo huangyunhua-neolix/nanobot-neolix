@@ -350,3 +350,131 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Conflict**: None；属 M5 pipeline 接线义务的 audit trail
 - **Defer reason**: `assemble_pr_body` 的 Diff stats section 当前硬编码 `files changed: 1 (skill <name> SKILL.md)`，因为 M4 skeleton 期 `RunManifest` 未承载 `Patch` 对象。本 commit 同步在 deploy.py 该 section 上方加 `TODO(M5)` inline marker 防止 stub 变成 load-bearing 数据
 - **Future close criterion**: M5 `pipeline.py` 线 `Patch` 入 `RunManifest`（携带真实 +/- counts 与 files-touched 列表）时重写本 section 输出真实 diff stats；inline `TODO(M5)` marker 同步移除，本 CF 闭合
+
+### CF-R3-a — `_compute_final_status` 精度边界未覆盖（R3 holistic sweep）
+
+- **Source**: R3 holistic sweep / testing finding
+- **Confidence**: 60%
+- **Conflict**: None；M5 run() 接线义务的 audit trail
+- **Defer reason**: `_compute_final_status` 三个 precedence corner case 未直接 pinned —— (i) `promoted_candidate_hash` 等于 candidate 且 `gate_traces=None`；(ii) `promoted_candidate_hash` 设了但不在 candidates 列表；(iii) `no-promoted` + 多 candidate 的 mixed pass/fail。M4 skeleton 期 harness 未真正 run，仅 typed-stub 形式被消费
+- **Future close criterion**: M5 真正接 `run()` 时一并补 3 个 boundary test 落到 `tests/evolve/test_harness.py::test_compute_final_status_*`
+
+### CF-R3-b — Redact 4-stage direct ordering witnesses 仅 1/3 完整（R3-9 部分覆盖）
+
+- **Source**: R3 holistic sweep / testing finding
+- **Confidence**: 60%
+- **Conflict**: None；R3-9 已加 APIKEY-before-PATH 一例
+- **Defer reason**: R3-9 仅加 APIKEY-before-PATH witness；剩余 PATH-before-CUSTOM 与 PII-before-APIKEY 两个 ordering 边界仍由"all 4 stages exist in module"间接证明
+- **Future close criterion**: M5 redaction expansion pass 同 fuzz 测试一起补 `test_stage_order_path_runs_before_custom` 与 `test_stage_order_pii_runs_before_apikey`（与 CF-t12-a/b 同批次）
+
+### CF-R3-c — `Gate._subclasses` 在 `importlib.reload` 下未 exercise（R3-1 后续）
+
+- **Source**: R3 holistic sweep / testing finding
+- **Confidence**: 50%
+- **Conflict**: None
+- **Defer reason**: R3-1 强化了 own-declaration enforcement，但 `__init_subclass__` 的 dedup guard 在 `importlib.reload(nanobot.evolve.gates.test_pass)` 路径下是否仍生效（reload 重新定义类对象 → `cls not in _subclasses` identity check 会判定为新类）未 pinned。M4 期生产路径无 reload；仅开发回环下可能触发
+- **Future close criterion**: M5 加 `tests/evolve/test_gates.py::test_subclasses_dedup_survives_reload` —— 用 `importlib.reload` 二次加载 `test_pass` 模块，断言 `_subclasses` 不暴露 stale 类对象 OR `GATES` execution registry 不被重复污染
+
+### CF-R3-d — `EvolveError` diamond-MRO 子类未覆盖（R3 holistic sweep）
+
+- **Source**: R3 holistic sweep / testing finding
+- **Confidence**: 50%
+- **Conflict**: None；当前 enforcement 用 `cls.__dict__`（不走 MRO）
+- **Defer reason**: 现有 enforcement 仅看 `cls.__dict__["STRUCTURED_KWARGS"]`，diamond inheritance（如 `class C(A, B)` 且 A/B 都是 `EvolveError` 子类各自声明）的合并行为未 pinned。M4 期无 diamond case；如真出现，行为可能 surprising
+- **Future close criterion**: M5 若新增 diamond exception 子类时补一条 unit test pin 行为；否则 M8+ retro 复评是否值得 pin 一条 mock-diamond test
+
+### CF-R3-e — `assemble_pr_body` cross-process determinism 未 pin（R3 holistic sweep）
+
+- **Source**: R3 holistic sweep / testing finding
+- **Confidence**: 50%
+- **Conflict**: None；当前 same-process 已 pin byte-equality
+- **Defer reason**: `test_assemble_pr_body_is_deterministic` 仅 same-process two-call。若未来引入 `set` / `dict` ordering reliance（如 metrics blob 排序），不同 `PYTHONHASHSEED` 下输出可能 diverge。M4 实现已 sorted() metrics；防御性测试是 high-cost
+- **Future close criterion**: M5 加 `test_assemble_pr_body_cross_process_byte_stable` —— `subprocess.run([sys.executable, ...], env={"PYTHONHASHSEED": "random"})` 三次，所有输出字节相等
+
+### CF-R3-f — Backtick / code-fence injection via `gate_name` / `failure_reason`（R3 security）
+
+- **Source**: R3 holistic sweep / security finding
+- **Confidence**: 60%
+- **Conflict**: None；与 R3-2 newline 防御正交
+- **Defer reason**: 当前 `_validate_no_newlines` 已升级覆盖 Unicode 行分隔符；但一个恶意 gate plugin 可在 `failure_reason` 注入 ` ``` ` / `</code>` 等 markdown / HTML 控制 token 打乱 PR 渲染（不破坏 5-section 结构，但视觉欺骗 reviewer）。M4 skeleton 期 gate plugin 是 trusted-internal
+- **Future close criterion**: M5 加 renderer-level allowlist —— `failure_reason` 仅允许 `[A-Za-z0-9 .,:;()<>/=_'-]`，其它字符 escape 为 `\xNN`
+
+### CF-R3-g — Regex-DoS 审计未对 PHONE_RE / OPENAI_KEY_RE 做 100KB+ 对抗输入（R3 security）
+
+- **Source**: R3 holistic sweep / security finding
+- **Confidence**: 50%
+- **Conflict**: None
+- **Defer reason**: `PHONE_RE` 用 negative lookbehind/lookahead + 量化 `{7,}` 在 pathological 输入下（长 digit run + interleaved hyphens）可能 catastrophic backtrack；`OPENAI_KEY_RE` 的 `[A-Za-z0-9_\-]{20,}` 同样。M4 redact 输入来自内部 RunManifest（不可控但通常 ≤ 10KB），未达需要 per-stage timeout 阈值
+- **Future close criterion**: M5 redaction expansion pass 加 `time.monotonic()` 包装每个 `_run_stage` 调用，若耗时 > 250ms 抛 `ManifestPrivacyViolation(violated_invariant="§9.4 stage timeout")`；同时加 fuzz 测试覆盖 100KB+ 输入
+
+### CF-R3-h — `GATES` 列表 bottom-of-module mutation（R3 maintainability）
+
+- **Source**: R3 holistic sweep / maintainability finding
+- **Confidence**: 55%
+- **Conflict**: None；模式 work 但 review 时 surprising
+- **Defer reason**: `nanobot/evolve/gates/__init__.py` bottom 3 行 `GATES.append(...)` 在 import-side-effect 期 mutate 模块常量，跟 frozenset / EvolveBase frozen 哲学不一致。M4 期 gate 数固定为 3；重构属于 cosmetic
+- **Future close criterion**: M5 接 plugin discovery 时改用 `@register_gate` decorator 或 `_register_default_gates()` idempotent helper（确保多次 import 不会重复 append）
+
+### CF-R3-i — `_bin_cutoffs` dual-convention 双语义（R3 maintainability）
+
+- **Source**: R3 holistic sweep / maintainability finding
+- **Confidence**: 55%
+- **Conflict**: None；R3-7 已 rewrite docstring 描述真实行为
+- **Defer reason**: `_bin_cutoffs(bins)` 同时支持 spec-pinned 3-bin (`[0.33, 0.66]` literal) 与 equal-width fallback (`i/bins`)，dual convention 在 R3-7 docstring 中已 prominently warn。生产唯一调用点是 `bins=3`，fallback path 无 prod 消费者
+- **Future close criterion**: M5 calibration finalize 时若仍仅用 `bins=3`，drop `bins` 参数 + 内联 `[0.33, 0.66]` 为 module-level constant
+
+### CF-R3-j — `_JudgeScorer` Protocol shim（R3 maintainability）
+
+- **Source**: R3 holistic sweep / maintainability finding
+- **Confidence**: 60%
+- **Conflict**: None；与 CF-cc-a 同源
+- **Defer reason**: `nanobot/evolve/judges/calibration.py::_JudgeScorer` Protocol 是 t-04/t-05 时期为 `calibrate()` 创建的临时 shim —— 真实 `JudgePool.score` 方法在 M4 skeleton 期未落地
+- **Future close criterion**: M5 接 CF-cc-a 时 delete Protocol，把 `calibrate(pool: JudgePool)` 直接 type-hint 到 concrete `JudgePool`
+
+### CF-R3-k — `RunManifest` 13 top-level fields surface 偏胖（R3 maintainability）
+
+- **Source**: R3 holistic sweep / maintainability finding
+- **Confidence**: 50%
+- **Conflict**: None；当前 13 字段全部 spec §11.1 明确要求
+- **Defer reason**: M4 skeleton `RunManifest` 已经 13 top-level fields（run_id / started_at / finished_at / nanobot_version / evolve_extra_version / skill_name / baseline_hash / candidate_hashes / promoted_candidate_hash / gate_verdicts / judge_summary / final_status / tiers_used / record_count_per_tier / judge_pool_health），M5 接 pipeline 后可能再 +3。Pydantic frozen 类 14+ 字段开始难导航
+- **Future close criterion**: M5 字段数 ≥ 16 时拆 `ManifestProvenance`（version + timestamps）/ `EvalSummary`（gate + judge）/ `TierHealth`（tiers + counts + pool health）三个 sub-models
+
+### CF-R3-l — `redact.py` 4-stage 写法重复（R3 maintainability）
+
+- **Source**: R3 holistic sweep / maintainability finding
+- **Confidence**: 50%
+- **Conflict**: None
+- **Defer reason**: 4 stage 各自 `out = _run_stage("name", lambda: _stage_xxx(out))` 是 boilerplate fold；改成 `@dataclass _Stage(name, fn)` + `for stage in STAGES: out = stage.run(out)` 可压缩，但 M4 期 4 stage 数已封顶，重构收益边际
+- **Future close criterion**: M5 redaction expansion 若新增 stage 数 ≥ 5，refactor 为 `_Stage` dataclass + 列表迭代
+
+### CF-R3-m — `harness.py` 文件 pre-emptive split（R3 maintainability）
+
+- **Source**: R3 holistic sweep / maintainability finding
+- **Confidence**: 50%
+- **Conflict**: None
+- **Defer reason**: `nanobot/evolve/harness.py` 当前接近 300 LOC，主要是 Pydantic model 定义（`Baseline` / `Candidate` / `RunManifest` / `JudgeSummary` 等）+ stub `run()` 入口。M5 run() 接线后会 push past 400 LOC（pyproject lint 上限 400 only by convention，不 hard-enforced）
+- **Future close criterion**: M5 接 `run()` 前 / 同 commit 拆分 `harness/models.py`（纯 schema）+ `harness/runner.py`（execution wiring）
+
+### CF-R3-n — Lazy-import smoke test 缺失（R3 maintainability）
+
+- **Source**: R3 holistic sweep / maintainability finding
+- **Confidence**: 55%
+- **Conflict**: None；§3.5.1 lazy-guard claim 当前为 aspirational
+- **Defer reason**: spec §3.5.1 声明 `nanobot.evolve.__init__` import 不引入 dspy / gepa 等 extra deps；M4 期靠 hand-audit 而非测试。如果未来误加 `from nanobot.evolve.gepa import ...` 到 `__init__.py`，会让 baseline install 抛 `ImportError`
+- **Future close criterion**: M5 加 `tests/evolve/test_lazy_import.py::test_evolve_import_without_extra` —— 在 subprocess 中 `python -c "import nanobot.evolve"` 期 sys.modules 不含 `dspy` / `gepa`
+
+### CF-R3-o — `_lazy_import_gepa` helper 仅一处调用（R3 maintainability）
+
+- **Source**: R3 holistic sweep / maintainability finding
+- **Confidence**: 50%
+- **Conflict**: None；当前 helper 只为 error-wrapping
+- **Defer reason**: `_lazy_import_gepa()` 仅在 `build_pipeline()` 内部调用一次，存在主要是为了把 `ImportError` 重新包装为 `EvolveExtraNotInstalled`。M5 接线 run() 后该 helper 仍单点调用
+- **Future close criterion**: M5 `build_pipeline()` 接线落地后 inline helper（保留 error-wrapping try/except）
+
+### CF-R3-p — `EvolveError` STRUCTURED_KWARGS 在 diamond MRO 下未定义行为（R3 correctness）
+
+- **Source**: R3 holistic sweep / correctness finding
+- **Confidence**: 50%
+- **Conflict**: 与 CF-R3-d 同源（diamond 双角度）
+- **Defer reason**: `EvolveError.__init_subclass__` 用 `cls.__dict__.get("STRUCTURED_KWARGS")` 解析当前类的声明（不走 MRO），diamond `class C(A, B)` 行为依赖 MRO 第一个声明者；contract 未文档化
+- **Future close criterion**: M5 若出现真实 diamond case，在 spec §5.3 增写 "diamond inheritance: cls.__dict__ takes precedence, MRO 走 left-to-right"，同时补一条 unit test pin
