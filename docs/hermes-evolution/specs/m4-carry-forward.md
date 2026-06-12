@@ -562,3 +562,61 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Conflict**: None；当前 assertion 行为正确
 - **Defer reason**: 测试名 `..._is_zero_or_negative` 暗示宽松断言（κ ≤ 0），但 assertion 实为 `pytest.approx(-1.0, abs=1e-9)`（完全 disagreement = -1.0 精确）。未来维护者可能根据名字把 assertion 弱化为 `assert kappa <= 0`，掩盖真实回归
 - **Future close criterion**: 将测试 rename 为 `test_kappa_perfect_disagreement_is_minus_one`，让名字反映真实断言强度；同 commit 检查同模块是否还有其他"名字宽 / assertion 严"的对称问题
+
+### CF-T16-a — `run_run` only checks `workspace.exists()`, not `.is_dir()`（t-16 review / correctness）
+
+- **Source**: t-16 R5 correctness reviewer / YELLOW~55%
+- **Confidence**: 55%
+- **Conflict**: None；当前 `OfflineHarness.__init__` 对非目录路径会 raise `ConfigError`，CLI 端依赖该 contract
+- **Defer reason**: `run_run` 只检查 `workspace.exists()`，不检查 `.is_dir()`，"file-as-workspace" 情形完全依赖 harness `__init__` 的 contract。若 harness contract 在未来 refactor 中弱化（如改为 lazy init），CLI 层会让 file-as-workspace 走出一条不清晰的 exit code 路径。Belt+suspenders 视角下应在 CLI 入口加 `if not workspace.is_dir(): raise ConfigError(...)`
+- **Future close criterion**: M5 hardening pass 在 `run_run` 加 `is_dir()` 显式检查，并补 `test_run_run_workspace_is_file_raises_config_error` 覆盖 file-as-workspace boundary；或者通过 CLI-level test 把 harness contract 显式 pin 住
+
+### CF-T16-b — 非 Value/Runtime 异常 escape dispatch, 与 EXIT_RUNTIME=1 碰撞（t-16 review / correctness）
+
+- **Source**: t-16 R5 correctness reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: None；当前 handler 不抛 OSError/TypeError/KeyError，仅 forward-looking
+- **Defer reason**: `dispatch` 仅 catch `ValueError` / `RuntimeError` 及其 evolve subclass。`OSError`（如 workspace 读写失败）/ `TypeError` / `KeyError` 等 escape 后 Python 默认 exit 1，与 `EXIT_RUNTIME=1`（spec §4.6 "受控 RuntimeError fallback"）语义重叠。Operator 无法区分"controlled RuntimeError fallback"与"未捕获 crash"。M4 阶段 handler stub 简单未触发，但 M5 起 init/report/apply 真实实现会扩大表面
+- **Future close criterion**: M5 在 dispatch 外层加 `except Exception as exc: _print_err("internal", exc); return EXIT_INTERNAL` —— 新增 EXIT_INTERNAL=8 slot；继续让 `KeyboardInterrupt` / `asyncio.CancelledError` propagate；补 `test_dispatch_unexpected_oserror_maps_to_8` 等 boundary witness
+
+### CF-T16-c — argparse-injected `SystemExit(2)` 与 ConfigError 的 exit 2 重叠（t-16 review / correctness）
+
+- **Source**: t-16 R5 correctness reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: None；argparse 行为标准化，无运行时 bug
+- **Defer reason**: argparse 在 missing required subcommand / `--help` / unknown flag 时 raise `SystemExit(2)` 完全 bypass `dispatch`。该 exit 2 与 `EXIT_CONFIG=2`（spec-pinned `ConfigError` exit）overlap，operator 无法区分"parser 拒收的非法调用"与"typed ConfigError"。Spec §4.6 把 exit 2 锚定到 ConfigError 语义，argparse 的"convention-by-coincidence" exit 2 是 silent collision
+- **Future close criterion**: M5 在 typer-shim 捕获 `SystemExit`，把 argparse 的 exit 2 re-map 到新 slot（如 EXIT_PARSER=9），同时 preserve `--help` 的 exit 0；补 `test_typer_shim_argparse_missing_subcommand_uses_parser_slot` 覆盖该路径
+
+### CF-T16-d — `test_validation_error_wrap_preserves_cause` 用 raw try/finally 而非 `pytest.MonkeyPatch`（t-16 review / testing）
+
+- **Source**: t-16 R5 testing reviewer / YELLOW~65%
+- **Confidence**: 65%
+- **Conflict**: None；纯 style debt，correctness 一致
+- **Defer reason**: 该测试用 `original = evolve_cli._print_err; evolve_cli._print_err = capturing_print` 加 try/finally restore，而不是标准的 `monkeypatch.setattr(evolve_cli, "_print_err", capturing_print)`。raw monkey-patch 在 setup 失败时不会自动 restore，pytest fixture 路径更鲁棒。M4 阶段 test 通过，但是 style debt 累计会让后续 contributor 复制错模式
+- **Future close criterion**: 下一次 test-quality pass（与 CF-R4-h "exception message 字面耦合"打包处理）改写为 `monkeypatch.setattr(evolve_cli, "_print_err", capturing_print)`，去掉手工 try/finally
+
+### CF-T16-e — 缺 CLI-level 测试探测 `--workspace` 指向 regular file（t-16 review / testing）
+
+- **Source**: t-16 R5 testing reviewer / YELLOW~60%
+- **Confidence**: 60%
+- **Conflict**: 与 CF-T16-a 同源（CLI 层未独立验证 is_dir）
+- **Defer reason**: 当前 `run_run` 测试覆盖 missing workspace + valid dir，但未覆盖 `--workspace` 指向已存在的 regular file 这一 boundary。该路径完全依赖 `OfflineHarness.__init__` raise `ConfigError`，CLI 层没有独立 witness。若 harness contract 改变，无 test 会 fire
+- **Future close criterion**: 在为 CF-T16-a 补 belt+suspenders 时同 commit 加 `test_run_run_workspace_is_regular_file_raises_config_error(tmp_path)` —— 创建一个 file，--workspace 指向它，assert exit 2
+
+### CF-T16-f — `Path(args.workspace).expanduser()` 的 tilde-expansion 分支无测试（t-16 review / testing）
+
+- **Source**: t-16 R5 testing reviewer / YELLOW~55%
+- **Confidence**: 55%
+- **Conflict**: None；当前 `expanduser()` 行为正确
+- **Defer reason**: `run_run` 调用 `Path(args.workspace).expanduser()`，若 refactor 中误删该调用，传 `~/some-workspace` 的 user-typed 路径会作为 literal 字面失败（"~/some-workspace does not exist"），但**没有 test 会 fire**。属 silent-regression 风险
+- **Future close criterion**: 在 happy-path 的 `test_run_run_valid_workspace_returns_zero` 上加 parametrized variant，构造 `~/<random>` 形态的 path（用 `monkeypatch.setenv("HOME", str(tmp_path))` 让 expanduser 解析到 tmp_path）；assert exit 0
+
+### CF-T16-g — `_print_err` stderr 格式仅通过 mock-call assert，缺 capsys end-to-end pin（t-16 review / testing）
+
+- **Source**: t-16 R5 testing reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: None；当前 format 行为正确
+- **Defer reason**: `_print_err(category, exc)` 输出 `evolve: <category> error: <msg>` 到 stderr，但所有现有测试 assert 的是 mock-call 参数（`captured["category"] == "config"`），没有任何 test 用 capsys 验证实际写到 stderr 的字符串。日志抓取的 operator 若把 wording 当 contract（grep 这个前缀），format string 被静默改写会让监控悄悄断
+- **Future close criterion**: 加 `test_print_err_stderr_format_pinned(capsys)` —— 直接 call `_print_err("config", ValueError("bad"))`，capsys 抓取 stderr，assert `"evolve: config error: bad"` literal 出现
+
+> **Meta-note (handler-order pinning)**: 两位 reviewer 初稿都怀疑 dispatch 表的 handler order 缺 documentary pin；trace MRO 后确认 order 已经被 Python 继承链自然 pin（`ApplyTerminalError ISA ValueError`、`JudgeError`/`ManifestPrivacyViolation`/`EvolveEnvironmentError`/`GateInternalError` ISA `RuntimeError`），加之 `EvolveError.MUST_PRECEDE` 已 documented + sibling order test 已 cover，无需额外 CF entry。本节因此为 7 条（a–g）而非 8 条。
