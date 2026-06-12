@@ -35,15 +35,21 @@ class FakeBaseline:
 
 @pytest.fixture
 def shared_passing_candidate() -> FakeCandidate:
-    """A candidate that satisfies all three M4 gates by default."""
+    """A candidate that satisfies all three M4 gates by default.
+
+    Padded above the tier-C 1.00 and tier-A 0.80 pass-rate floors so a future
+    floor tightening surfaces in the gate-specific tests rather than flipping
+    this fixture to fail and breaking the e2e smoke as a false positive.
+    Current values: tier-C = 10/10 (1.00), tier-A = 24/25 (0.96).
+    """
     return FakeCandidate(
         content_hash="cand-shared",
         cache_key_hash="key-shared",
         size_metrics={
-            # Gate 1 (test_pass) — passes both tier-c (5/5) and tier-a (20/25) floors.
-            "tier_c_pass": 5.0,
-            "tier_c_total": 5.0,
-            "tier_a_pass": 20.0,
+            # Gate 1 (test_pass) — padded above tier-c (1.00) and tier-a (0.80) floors.
+            "tier_c_pass": 10.0,
+            "tier_c_total": 10.0,
+            "tier_a_pass": 24.0,
             "tier_a_total": 25.0,
             # Gate 2 (skill_size) — within both 400 hard cap and 150 delta cap.
             "lines": 300.0,
