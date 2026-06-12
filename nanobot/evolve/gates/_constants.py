@@ -1,5 +1,6 @@
 """Shared spec-locked gate constants. Owner: M5 round-A Arch reviewer (RF-4)."""
-# Derivation: ceil(TIER_C_FLOOR=5) × PER_RECORD_TIMEOUT_S=30 s × SLACK≈4 × 1000 ms/s = 600_000 ms.
+# Derivation: ceil(TIER_C_FLOOR=5) × PER_RECORD_TIMEOUT_S=30 s × SLACK≈4
+#   × 1000 ms/s = 600_000 ms.
 GATE_TIMEOUT_MS_HARD: int = 600_000
 
 # Gate 2 (§6.2.2)
