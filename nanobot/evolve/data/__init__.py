@@ -88,12 +88,28 @@ def load_tier(tier: Tier, skill_name: str, root: Path) -> list[EvalRecord]:
     input_rows = _read_jsonl(input_path)
     expected_rows = _read_jsonl(expected_path)
 
+    expected_allowed_keys = {"record_id", "expected"}
     expected_by_id: dict[str, dict] = {}
     for row in expected_rows:
-        rid = row.get("record_id")
+        if "record_id" not in row:
+            raise ValueError(
+                f"{expected_path}: row missing 'record_id' key "
+                f"(tier={tier!r}, skill_name={skill_name!r}): {row!r}"
+            )
+        rid = row["record_id"]
         if not rid:
             raise ValueError(
-                f"{expected_path}: row missing 'record_id': {row!r}"
+                f"{expected_path}: row has blank 'record_id' value "
+                f"(tier={tier!r}, skill_name={skill_name!r}): {row!r}"
+            )
+        unexpected = set(row.keys()) - expected_allowed_keys
+        if unexpected:
+            raise ValueError(
+                f"{expected_path}:rid={rid!r}: unexpected keys in expected.jsonl "
+                f"row: {sorted(unexpected)} "
+                f"(tier={tier!r}, skill_name={skill_name!r}); expected.jsonl rows "
+                f"MUST contain only {sorted(expected_allowed_keys)} — any other "
+                f"field would silently overwrite the input.jsonl side on merge."
             )
         if rid in expected_by_id:
             raise ValueError(
@@ -104,9 +120,17 @@ def load_tier(tier: Tier, skill_name: str, root: Path) -> list[EvalRecord]:
     seen_input_ids: set[str] = set()
     out: list[EvalRecord] = []
     for row in input_rows:
-        rid = row.get("record_id")
+        if "record_id" not in row:
+            raise ValueError(
+                f"{input_path}: row missing 'record_id' key "
+                f"(tier={tier!r}, skill_name={skill_name!r}): {row!r}"
+            )
+        rid = row["record_id"]
         if not rid:
-            raise ValueError(f"{input_path}: row missing 'record_id': {row!r}")
+            raise ValueError(
+                f"{input_path}: row has blank 'record_id' value "
+                f"(tier={tier!r}, skill_name={skill_name!r}): {row!r}"
+            )
         if rid in seen_input_ids:
             raise ValueError(f"{input_path}: duplicate record_id {rid!r}")
         seen_input_ids.add(rid)
@@ -118,7 +142,13 @@ def load_tier(tier: Tier, skill_name: str, root: Path) -> list[EvalRecord]:
                 f"from {expected_path.name}"
             )
 
-        merged = {**row, **exp_row}
+        # Only the `expected` field crosses from expected.jsonl to the merged
+        # record; every other top-level EvalRecord field (input, match_mode,
+        # privacy_class, source, created_at, tags) lives on the input side.
+        # expected.jsonl key whitelisting above guarantees no other field can
+        # sneak through and silently shadow the input.jsonl version.
+        merged = dict(row)
+        merged["expected"] = exp_row.get("expected")
         # Loader fills tier + skill_name from path context if record omits them,
         # making fixture writing less verbose and aligning with the on-disk
         # convention (tier directory IS the source of truth for tier label).

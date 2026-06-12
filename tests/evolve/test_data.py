@@ -32,10 +32,16 @@ def _make_fixture(
     return tier_dir
 
 
-def _base_input_row(rid: str, payload: dict, source: str = "synthesizer:s0") -> dict:
+def _base_input_row(
+    rid: str,
+    payload: dict,
+    source: str = "synthesizer:s0",
+    match_mode: str = "judge_only",
+) -> dict:
     return {
         "record_id": rid,
         "input": payload,
+        "match_mode": match_mode,
         "privacy_class": "public",
         "created_at": datetime(2026, 6, 12, 0, 0, 0, tzinfo=timezone.utc).isoformat(),
         "source": source,
@@ -43,11 +49,10 @@ def _base_input_row(rid: str, payload: dict, source: str = "synthesizer:s0") -> 
     }
 
 
-def _expected_row(rid: str, payload: dict | None, match_mode: str = "judge_only") -> dict:
+def _expected_row(rid: str, payload: dict | None) -> dict:
     return {
         "record_id": rid,
         "expected": payload,
-        "match_mode": match_mode,
     }
 
 
@@ -91,15 +96,15 @@ def test_load_tier_joins_by_record_id_not_line_order(tmp_path: Path) -> None:
     tier = "C"
 
     input_rows = [
-        _base_input_row("rec-001", {"q": "alpha"}, source="curator:alice"),
-        _base_input_row("rec-002", {"q": "beta"}, source="curator:alice"),
-        _base_input_row("rec-003", {"q": "gamma"}, source="curator:alice"),
+        _base_input_row("rec-001", {"q": "alpha"}, source="curator:alice", match_mode="strict"),
+        _base_input_row("rec-002", {"q": "beta"}, source="curator:alice", match_mode="strict"),
+        _base_input_row("rec-003", {"q": "gamma"}, source="curator:alice", match_mode="strict"),
     ]
     # expected.jsonl deliberately written in REVERSE line order
     expected_rows = [
-        _expected_row("rec-003", {"key_outputs": {"value": "gamma-ok"}}, match_mode="strict"),
-        _expected_row("rec-001", {"key_outputs": {"value": "alpha-ok"}}, match_mode="strict"),
-        _expected_row("rec-002", {"key_outputs": {"value": "beta-ok"}}, match_mode="strict"),
+        _expected_row("rec-003", {"key_outputs": {"value": "gamma-ok"}}),
+        _expected_row("rec-001", {"key_outputs": {"value": "alpha-ok"}}),
+        _expected_row("rec-002", {"key_outputs": {"value": "beta-ok"}}),
     ]
     _make_fixture(tmp_path, skill, tier, input_rows, expected_rows)
 
@@ -207,3 +212,125 @@ def test_load_tier_in_row_skill_name_mismatch_raises(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="disagrees with path-context skill_name"):
         load_tier("A", skill, tmp_path)
+
+
+def test_expected_jsonl_rejects_unknown_keys(tmp_path: Path) -> None:
+    """A stray key in expected.jsonl (e.g. match_mode, which now belongs on the
+    input side) must trip the whitelist guard. The loader refuses to silently
+    accept fields that would shadow the input.jsonl side on merge."""
+    skill = "skill_x"
+    polluted_expected = _expected_row("rec-001", {"answer": "x"})
+    polluted_expected["match_mode"] = "strict"  # not in {record_id, expected}
+    _make_fixture(
+        tmp_path,
+        skill,
+        "A",
+        [_base_input_row("rec-001", {"q": "x"})],
+        [polluted_expected],
+    )
+    with pytest.raises(ValueError, match="unexpected keys"):
+        load_tier("A", skill, tmp_path)
+
+
+def test_expected_jsonl_overwrite_attack_blocked(tmp_path: Path) -> None:
+    """RED #1 regression: an expected.jsonl row carrying an input-side field
+    (here `privacy_class`) MUST be rejected. Previously `{**row, **exp_row}`
+    would silently let stale expected-side data clobber the input metadata."""
+    skill = "skill_x"
+    polluted_expected = _expected_row("rec-001", {"answer": "x"})
+    polluted_expected["privacy_class"] = "private"  # overwrite-attack vector
+    _make_fixture(
+        tmp_path,
+        skill,
+        "A",
+        [_base_input_row("rec-001", {"q": "x"})],  # input declares "public"
+        [polluted_expected],
+    )
+    with pytest.raises(ValueError, match="unexpected keys"):
+        load_tier("A", skill, tmp_path)
+
+
+def test_input_missing_record_id_key(tmp_path: Path) -> None:
+    """input.jsonl row literally lacking the 'record_id' key — distinct diagnostic
+    from a row that contains the key with a blank value."""
+    skill = "skill_x"
+    bad_row = _base_input_row("rec-001", {"q": "x"})
+    del bad_row["record_id"]
+    _make_fixture(
+        tmp_path,
+        skill,
+        "A",
+        [bad_row],
+        [_expected_row("rec-001", {"answer": "x"})],
+    )
+    with pytest.raises(ValueError, match="missing 'record_id' key"):
+        load_tier("A", skill, tmp_path)
+
+
+def test_input_blank_record_id_value(tmp_path: Path) -> None:
+    """input.jsonl row that DOES carry 'record_id' but with an empty string —
+    diagnostic must explicitly say 'blank', not be conflated with 'missing key'."""
+    skill = "skill_x"
+    bad_row = _base_input_row("rec-001", {"q": "x"})
+    bad_row["record_id"] = ""
+    _make_fixture(
+        tmp_path,
+        skill,
+        "A",
+        [bad_row],
+        [_expected_row("rec-001", {"answer": "x"})],
+    )
+    with pytest.raises(ValueError, match="blank 'record_id' value"):
+        load_tier("A", skill, tmp_path)
+
+
+def test_expected_missing_record_id_key(tmp_path: Path) -> None:
+    """expected.jsonl mirror of test_input_missing_record_id_key."""
+    skill = "skill_x"
+    bad_exp = _expected_row("rec-001", {"answer": "x"})
+    del bad_exp["record_id"]
+    _make_fixture(
+        tmp_path,
+        skill,
+        "A",
+        [_base_input_row("rec-001", {"q": "x"})],
+        [bad_exp],
+    )
+    with pytest.raises(ValueError, match="missing 'record_id' key"):
+        load_tier("A", skill, tmp_path)
+
+
+def test_expected_blank_record_id_value(tmp_path: Path) -> None:
+    """expected.jsonl mirror of test_input_blank_record_id_value."""
+    skill = "skill_x"
+    bad_exp = _expected_row("rec-001", {"answer": "x"})
+    bad_exp["record_id"] = ""
+    _make_fixture(
+        tmp_path,
+        skill,
+        "A",
+        [_base_input_row("rec-001", {"q": "x"})],
+        [bad_exp],
+    )
+    with pytest.raises(ValueError, match="blank 'record_id' value"):
+        load_tier("A", skill, tmp_path)
+
+
+def test_load_tier_accepts_null_expected_payload(tmp_path: Path) -> None:
+    """Spec §3.1.5: `expected` may be null (Tier-D-shaped record, exercised here
+    on the Tier C code path with match_mode='judge_only'). The loader must
+    accept it and surface it as EvalRecord.expected == None."""
+    skill = "skill_x"
+    tier = "C"
+    _make_fixture(
+        tmp_path,
+        skill,
+        tier,
+        [_base_input_row("rec-001", {"q": "x"}, match_mode="judge_only")],
+        [_expected_row("rec-001", None)],
+    )
+
+    records = load_tier(tier, skill, tmp_path)
+    assert len(records) == 1
+    assert records[0].expected is None
+    assert records[0].match_mode == "judge_only"
