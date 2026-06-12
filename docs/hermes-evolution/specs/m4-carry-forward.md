@@ -660,3 +660,23 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 **Future close criterion**: next round that adds/modifies a top-level import
   in `nanobot/evolve/__init__.py` or `nanobot/evolve/harness.py` ships the
   subprocess-import contract test in the same commit.
+
+### CF-Drift1-a — `GateInternalError` lacks a dedicated exit-code slot in spec §4.6
+**Source**: drift-check round 1 on M4 offline-skeleton (post-t-19)
+**Confidence**: ~50%
+**Conflict**: Spec §4.6's normative exit-code table (slots 0..8) was pinned
+  before decision #120 introduced `GateInternalError`. The current CLI
+  implementation maps `GateInternalError` to `EXIT_CONFIG=2` as a
+  precondition-violation flavor (the closest existing slot), but operators
+  cannot distinguish a gate precondition violation from a generic
+  configuration error without inspecting the stderr category prefix.
+**Defer reason**: re-numbering exit codes mid-M4 to carve a new slot (e.g. 9)
+  would re-drift every downstream consumer (CI gates, runbooks, monitor
+  rules); pending a spec amendment that either (a) confirms the
+  `EXIT_CONFIG=2` mapping as canonical or (b) reserves a new slot. M4 ships
+  with the conservative collision (consistent with how `EvolveEnvironmentError`
+  also folds into `EXIT_CONFIG` per spec §5.3 line 2562).
+**Future close criterion**: M5 spec-maintenance pass amends §4.6 — either
+  documents the `GateInternalError → EXIT_CONFIG` mapping inline in the
+  table footnote, or adds a slot 9 (`EXIT_GATE_INTERNAL`) and the CLI arm
+  is re-pointed in the same commit.

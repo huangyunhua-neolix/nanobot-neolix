@@ -127,7 +127,7 @@ def test_dispatch_config_error_maps_to_2():
     assert evolve_cli.dispatch(_ns_with_handler(boom)) == 2
 
 
-def test_dispatch_apply_terminal_maps_to_3():
+def test_dispatch_apply_terminal_maps_to_8():
     def boom(_a):
         raise ApplyTerminalError(
             "pr fail",
@@ -135,31 +135,33 @@ def test_dispatch_apply_terminal_maps_to_3():
             manifest_path=Path("/tmp/m.json"),
         )
 
-    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 3
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 8
 
 
-def test_dispatch_judge_error_maps_to_4():
+def test_dispatch_judge_error_maps_to_5():
     def boom(_a):
         raise JudgeError("judge unreachable")
 
-    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 4
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 5
 
 
-def test_dispatch_privacy_violation_maps_to_5():
+def test_dispatch_privacy_violation_maps_to_4():
     def boom(_a):
         raise ManifestPrivacyViolation(
             "leak",
             violated_invariant="no-pii",
         )
 
-    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 5
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 4
 
 
-def test_dispatch_environment_error_maps_to_6():
+def test_dispatch_environment_error_maps_to_config():
+    """Spec §5.3 line 2562: EvolveEnvironmentError → EXIT_CONFIG (2)."""
+
     def boom(_a):
         raise EvolveEnvironmentError("missing dspy")
 
-    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 6
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 2
 
 
 def test_dispatch_bare_runtime_error_maps_to_1():
@@ -208,8 +210,8 @@ def test_apply_terminal_precedes_config_error_when_both_inheritances_exist():
         )
 
     # If ConfigError caught it first we'd see 2; ApplyTerminalError must
-    # win and yield 3.
-    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 3
+    # win and yield 8 (spec §4.6 slot).
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 8
 
 
 def test_judge_error_precedes_bare_runtime_error():
@@ -218,38 +220,43 @@ def test_judge_error_precedes_bare_runtime_error():
     def boom(_a):
         raise JudgeError("judge failure")
 
-    # If bare RuntimeError caught first we'd see 1; specific arm yields 4.
-    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 4
+    # If bare RuntimeError caught first we'd see 1; specific arm yields 5.
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 5
 
 
 def test_privacy_violation_precedes_bare_runtime_error():
     def boom(_a):
         raise ManifestPrivacyViolation("leak", violated_invariant="no-pii")
 
-    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 5
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 4
 
 
 def test_environment_error_precedes_bare_runtime_error():
     def boom(_a):
         raise EvolveEnvironmentError("env missing")
 
-    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 6
+    # Spec §5.3 line 2562: env error → EXIT_CONFIG (2). Specific arm still
+    # fires before bare RuntimeError; this test pins the precedence (1 would
+    # be the wrong result if bare-RuntimeError caught first).
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 2
 
 
-def test_dispatch_gate_internal_error_maps_to_7():
-    """``GateInternalError`` MUST surface on its own exit slot (T16-FIX-1).
+def test_dispatch_gate_internal_error_maps_to_config():
+    """``GateInternalError`` MUST fire its own arm before bare ``RuntimeError``.
 
-    Before the explicit arm landed, ``GateInternalError(EvolveError,
-    RuntimeError)`` silently degraded to ``EXIT_RUNTIME=1`` via the bare
-    ``except RuntimeError`` arm, violating the ``MUST_PRECEDE={"RuntimeError"}``
-    invariant declared on the exception class.
+    Spec §4.6 has no dedicated slot for ``GateInternalError`` (added by
+    decision #120 after the table was pinned). Current mapping is
+    ``EXIT_CONFIG`` as a precondition-violation flavor — see CF-Drift1-a
+    for the pending spec amendment. The behavioral pin here is that the
+    specific arm fires (not the bare ``except RuntimeError`` which would
+    yield ``EXIT_RUNTIME=1`` and violate ``MUST_PRECEDE={"RuntimeError"}``).
     """
 
     def boom(_a):
         raise GateInternalError("tier-C records missing for gate eval")
 
-    assert evolve_cli.dispatch(_ns_with_handler(boom)) == evolve_cli.EXIT_GATE_INTERNAL
-    assert evolve_cli.EXIT_GATE_INTERNAL == 7
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == evolve_cli.EXIT_CONFIG
+    assert evolve_cli.EXIT_CONFIG == 2
 
 
 def test_gate_internal_error_precedes_bare_runtime_error_via_dual_inheritance():
@@ -270,7 +277,8 @@ def test_gate_internal_error_precedes_bare_runtime_error_via_dual_inheritance():
     def boom(_a):
         raise _GateAndRuntimeError("synthetic dual-inheritance probe")
 
-    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 7
+    # GateInternalError currently maps to EXIT_CONFIG=2 (see CF-Drift1-a).
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 2
 
 
 # ---------------------------------------------------------------------------

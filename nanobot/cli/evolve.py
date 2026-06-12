@@ -9,17 +9,16 @@ and maps exceptions to the exit codes pinned in the offline-evolution spec
 Handler-order invariant (MUST match ``EvolveError.MUST_PRECEDE`` documentary
 hints in ``nanobot.evolve.exceptions``):
 
-* ``ApplyTerminalError`` BEFORE ``ConfigError`` / ``ValueError`` — both share
-  ``ValueError`` ancestry, and ``ApplyTerminalError`` carries the richer PR
-  terminal-failure context that ``ConfigError``'s handler would silently
-  swallow if reordered.
+* ``BaselineMismatch`` / ``ApplyTerminalError`` / ``ConfigError`` BEFORE
+  bare ``ValueError`` — all three inherit ``ValueError``; the specific arms
+  must fire first so each lands on its spec-pinned slot rather than the
+  generic ``EXIT_CONFIG`` fallback.
 * ``JudgeError`` / ``ManifestPrivacyViolation`` / ``EvolveEnvironmentError``
   / ``GateInternalError`` BEFORE bare ``RuntimeError`` — same MRO trap on
   the ``RuntimeError`` side. ``GateInternalError`` carries
-  ``MUST_PRECEDE = {"RuntimeError"}`` and maps to its own
-  ``EXIT_GATE_INTERNAL`` slot so operators can distinguish a gate
-  precondition violation (malformed inputs, tier sizes below floor) from a
-  generic runtime fault.
+  ``MUST_PRECEDE = {"RuntimeError"}``; spec §4.6 has no dedicated slot for
+  it, so it currently maps to ``EXIT_CONFIG`` as a precondition-violation
+  flavor (see CF-Drift1-a for the pending spec amendment).
 
 The ``pydantic.ValidationError`` → ``ConfigError`` wrap happens at the
 dispatch boundary so callers (including stubs in this module) can rely on
@@ -36,25 +35,25 @@ from pydantic import ValidationError
 
 from nanobot.evolve.exceptions import (
     ApplyTerminalError,
+    BaselineMismatch,
     ConfigError,
     EvolveEnvironmentError,
+    EvolveExtraNotInstalled,
     GateInternalError,
     JudgeError,
     ManifestPrivacyViolation,
 )
 
-# Exit codes — keep aligned with spec §4.6.
-# EXIT_GATE_INTERNAL extends §4.6 with a dedicated slot for
-# GateInternalError so its MUST_PRECEDE invariant doesn't silently
-# degrade to EXIT_RUNTIME (the bare-RuntimeError slot).
+# Exit codes — normative per spec §4.6 (drift-R1 renumber).
 EXIT_OK = 0
 EXIT_RUNTIME = 1
 EXIT_CONFIG = 2
-EXIT_APPLY_TERMINAL = 3
-EXIT_JUDGE = 4
-EXIT_PRIVACY = 5
-EXIT_ENV = 6
-EXIT_GATE_INTERNAL = 7
+EXIT_EXTRA_MISSING = 3  # EvolveExtraNotInstalled
+EXIT_PRIVACY = 4  # ManifestPrivacyViolation
+EXIT_JUDGE = 5  # JudgeError (retry-eligible per spec §4.6)
+EXIT_FS = 6  # FileNotFoundError / FileExistsError / OSError
+EXIT_BASELINE = 7  # BaselineMismatch (harness invariant — never retry)
+EXIT_APPLY_TERMINAL = 8  # ApplyTerminalError
 
 
 # ---------------------------------------------------------------------------
@@ -197,35 +196,51 @@ def dispatch(args: argparse.Namespace) -> int:
         except ValidationError as exc:
             # Preserve traceback context for callers that inspect __cause__.
             raise ConfigError(f"invalid configuration: {exc}") from exc
-    # --- spec §5.3 handler-order chain ------------------------------------
-    # ApplyTerminalError MUST precede ConfigError/ValueError (shared MRO).
+    # --- spec §4.6 handler-order chain ------------------------------------
+    # Most-specific first. ValueError-subclasses (BaselineMismatch,
+    # ApplyTerminalError, ConfigError) MUST precede `except ValueError`.
+    # RuntimeError-subclasses (JudgeError, ManifestPrivacyViolation,
+    # EvolveEnvironmentError, GateInternalError) MUST precede the bare
+    # `except RuntimeError`.
+    except EvolveExtraNotInstalled as exc:
+        _print_err("extra missing", exc)
+        return EXIT_EXTRA_MISSING
+    except ManifestPrivacyViolation as exc:
+        _print_err("privacy violation", exc)
+        return EXIT_PRIVACY
+    except JudgeError as exc:
+        _print_err("judge", exc)
+        return EXIT_JUDGE
+    except BaselineMismatch as exc:
+        # MUST precede ConfigError / ValueError (inherits ValueError).
+        # Harness invariant; never retry.
+        _print_err("baseline mismatch", exc)
+        return EXIT_BASELINE
     except ApplyTerminalError as exc:
+        # MUST precede ConfigError / ValueError (shared MRO via ValueError).
         _print_err("apply terminal", exc)
         return EXIT_APPLY_TERMINAL
+    except GateInternalError as exc:
+        # Spec §4.6 has no dedicated slot for GateInternalError; map to
+        # EXIT_CONFIG as a precondition-violation flavor pending spec
+        # amendment (see CF-Drift1-a). MUST precede bare RuntimeError.
+        _print_err("gate-internal", exc)
+        return EXIT_CONFIG
+    except EvolveEnvironmentError as exc:
+        # Per spec §5.3 line 2562: environment errors map to EXIT_CONFIG.
+        _print_err("environment", exc)
+        return EXIT_CONFIG
     except ConfigError as exc:
         _print_err("config", exc)
         return EXIT_CONFIG
+    except (FileNotFoundError, FileExistsError, OSError) as exc:
+        _print_err("filesystem", exc)
+        return EXIT_FS
     except ValueError as exc:
         # Bare ValueError (non-Evolve) still maps to ConfigError exit slot
         # — caller passed bad input that didn't surface a typed exception.
         _print_err("config", exc)
         return EXIT_CONFIG
-    # Specific RuntimeError subclasses MUST precede bare RuntimeError.
-    except JudgeError as exc:
-        _print_err("judge", exc)
-        return EXIT_JUDGE
-    except ManifestPrivacyViolation as exc:
-        _print_err("privacy violation", exc)
-        return EXIT_PRIVACY
-    except EvolveEnvironmentError as exc:
-        _print_err("environment", exc)
-        return EXIT_ENV
-    except GateInternalError as exc:
-        # MUST precede bare RuntimeError; carries its own exit slot so
-        # operators can distinguish a gate precondition violation from a
-        # generic runtime fault (spec §6.1.2 / decision #120).
-        _print_err("gate-internal", exc)
-        return EXIT_GATE_INTERNAL
     except RuntimeError as exc:
         _print_err("runtime", exc)
         return EXIT_RUNTIME
