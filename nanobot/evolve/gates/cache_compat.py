@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
+from nanobot.evolve.exceptions import GateInternalError
 from nanobot.evolve.gates import Gate, GateResult
 
 if TYPE_CHECKING:
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 
 class CacheCompatGate(Gate):
-    NONDETERMINISTIC = False
+    NONDETERMINISTIC: ClassVar[bool] = False
 
     @property
     def name(self) -> str:
@@ -32,6 +33,14 @@ class CacheCompatGate(Gate):
         start = time.monotonic()
         candidate_key = candidate.cache_key_hash
         baseline_key = baseline.cache_key_hash
+        if not candidate_key:
+            raise GateInternalError(
+                "malformed-candidate: cache_key_hash is empty or None"
+            )
+        if not baseline_key:
+            raise GateInternalError(
+                "malformed-baseline: cache_key_hash is empty or None"
+            )
         equal = candidate_key == baseline_key
 
         evidence: dict[str, str] = {

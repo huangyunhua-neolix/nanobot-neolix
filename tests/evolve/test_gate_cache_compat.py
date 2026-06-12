@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
+from nanobot.evolve.exceptions import GateInternalError
 from nanobot.evolve.gates.cache_compat import CacheCompatGate
 
 
@@ -44,6 +47,36 @@ def test_equal_cache_keys_produce_pass_with_evidence() -> None:
     assert result.baseline_hash == "base-bbb"
     assert result.timestamp is not None
     assert result.duration_ms >= 0
+
+
+def test_empty_candidate_cache_key_raises_precondition() -> None:
+    cand = _FakeCandidate(content_hash="cand", cache_key_hash="")
+    base = _FakeBaseline(content_hash="base", cache_key_hash="key-xyz")
+    with pytest.raises(GateInternalError) as exc:
+        CacheCompatGate().evaluate(cand, base)  # type: ignore[arg-type]
+    assert "malformed-candidate" in str(exc.value)
+
+
+def test_empty_baseline_cache_key_raises_precondition() -> None:
+    cand = _FakeCandidate(content_hash="cand", cache_key_hash="key-xyz")
+    base = _FakeBaseline(content_hash="base", cache_key_hash="")
+    with pytest.raises(GateInternalError) as exc:
+        CacheCompatGate().evaluate(cand, base)  # type: ignore[arg-type]
+    assert "malformed-baseline" in str(exc.value)
+
+
+def test_case_sensitive_hash_comparison_fails() -> None:
+    """Cache key comparison is case-sensitive — uppercase vs lowercase hex differs.
+
+    Locks in current behavior: sha-256 hex is conventionally lowercase, but
+    no normalization is applied. Mismatched cases produce a fail verdict.
+    """
+    cand = _FakeCandidate(content_hash="cand", cache_key_hash="ABCDEF0123")
+    base = _FakeBaseline(content_hash="base", cache_key_hash="abcdef0123")
+    result = CacheCompatGate().evaluate(cand, base)  # type: ignore[arg-type]
+    assert result.verdict == "fail"
+    assert result.failure_reason is not None
+    assert result.failure_reason.startswith("cache-key-mismatch")
 
 
 def test_different_cache_keys_produce_fail_with_evidence() -> None:
