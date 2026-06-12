@@ -291,3 +291,39 @@ def test_returns_redaction_result_type():
     result = redact("hello world")
     assert isinstance(result, RedactionResult)
     assert isinstance(result.matches, dict)
+
+
+# ---------------------------------------------------------------------------
+# R3-9 — direct 4-stage ordering witness: APIKEY (stage 2) runs BEFORE PATH (3)
+# ---------------------------------------------------------------------------
+#
+# Witness: an Anthropic key embedded INSIDE a ``/Users/...`` path component.
+# Under the spec §9.2 order (PII → APIKEY → PATH → CUSTOM):
+#   1. PII: no match (the key has no @ or phone digits)
+#   2. APIKEY: ``sk-ant-AAAA...`` → ``[REDACTED:APIKEY:ANTHROPIC]`` AND
+#      matches["apikey:anthropic"] increments.
+#   3. PATH: HOME_NIX_RE then swallows ``/Users/[REDACTED:APIKEY:ANTHROPIC]/``
+#      wholesale, but the apikey count + sentinel-was-applied invariant has
+#      already been recorded in stage 2.
+#
+# Regression check: if PATH ran FIRST (stages reordered), HOME_NIX_RE would
+# swallow ``/Users/sk-ant-AAAA.../`` directly and APIKEY stage would never see
+# the key → matches["apikey:anthropic"] == 0. The count-of-1 assertion below
+# is the load-bearing proof of stage order.
+def test_stage_order_apikey_runs_before_path():
+    """Spec §9.2: APIKEY (stage 2) runs BEFORE PATH (stage 3).
+
+    A successful APIKEY-stage hit on a key embedded in a ``/Users/...`` path
+    can only occur if APIKEY runs first; otherwise HOME_NIX_RE eats the whole
+    path component (including the raw key) before APIKEY can pattern-match.
+    The match-count = 1 assertion is the ordering proof.
+    """
+    text = "config at /Users/sk-ant-AAAAAAAAAAAAAAAAAAAAAAAAAA/.config"
+    result = redact(text)
+    # Stage-2 ordering proof: APIKEY stage saw and counted the key.
+    assert result.matches.get("apikey:anthropic", 0) == 1, (
+        "APIKEY stage failed to fire on the embedded key — suggests PATH "
+        "stage ran first and swallowed it"
+    )
+    # The raw key MUST NOT survive in the output.
+    assert "sk-ant-AAAAAAAAAAAAAAAAAAAAAAAAAA" not in result.text
