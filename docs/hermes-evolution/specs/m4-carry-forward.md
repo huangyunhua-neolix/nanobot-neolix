@@ -474,3 +474,91 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Conflict**: 与 CF-R3-d 同源（diamond 双角度）
 - **Defer reason**: `EvolveError.__init_subclass__` 用 `cls.__dict__.get("STRUCTURED_KWARGS")` 解析当前类的声明（不走 MRO），diamond `class C(A, B)` 行为依赖 MRO 第一个声明者；contract 未文档化
 - **Future close criterion**: M5 若出现真实 diamond case，在 spec §5.3 增写 "diamond inheritance: cls.__dict__ takes precedence, MRO 走 left-to-right"，同时补一条 unit test pin
+
+### CF-R4-a — Unicode BiDi / zero-width / no-break-space 未列入 `_FORBIDDEN_BRANCH_CHARS`（R3+R3.5 convergence / security）
+
+- **Source**: R3+R3.5 convergence security reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: None；M4 sources 为内部 RunManifest
+- **Defer reason**: `_FORBIDDEN_BRANCH_CHARS` 不含 BiDi override (U+202E)、zero-width chars (U+200B / U+200C / U+200D)、no-break / BOM (U+00A0 / U+FEFF)。如果 PR title / branch name 的 `run_id` / `skill_name` 未来变成 attacker-controlled，渲染层可被视觉欺骗。M4 期数据源是内部 RunManifest（pipeline 自生成），风险有界
+- **Future close criterion**: M5 在 spec §8 增 threat-model 决定后，显式列出 allow-list 或 deny-list（参考 git refname IDN 规则与 Unicode TR36）并补 `_FORBIDDEN_BRANCH_CHARS` 单元测试
+
+### CF-R4-b — `assert_not_main` 在空 / 全空白 branch 上 silently pass（R3+R3.5 convergence / security）
+
+- **Source**: R3+R3.5 convergence security reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: None；下游 git plumbing 会自然 fail
+- **Defer reason**: `assert_not_main(branch)` strip+casefold 后若 `normalized == ""`，函数走 fall-through 返回 None（即"非保护分支，放行"）。Defense-in-depth 视角下应把"strip 后为空"列为 refuse-condition。M4 风险有界 —— 后续 `git push <空>` 会 fail，但 fail-mode 含义不清晰
+- **Future close criterion**: M5 hardening pass 在 `assert_not_main` 入口加 `if not normalized: raise ApplyTerminalError(...)`，并补 `test_assert_not_main_raises_on_empty_after_strip` 覆盖 `""` / `"   "` / `"\t\n"` 三种 input
+
+### CF-R4-c — `assemble_pr_body` 接受单行 markdown link / image / HTML-comment 注入（R3+R3.5 convergence / security）
+
+- **Source**: R3+R3.5 convergence security reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: None；triple-backtick + newline 已 R3.5 闭合
+- **Defer reason**: 单行 attacker payload 如 `skill_name="foo](https://evil.com)"` 仍可 sneak through —— 渲染时与上下文文本拼成 markdown link `[run xxx for skill foo](https://evil.com)`。Image refs (`![alt](evil.png)`) 与 HTML comment 注入 (`<!-- -->`) 同样未拦截。M4 sources 内部，但 plugin gate `failure_reason` 是未来 attack surface
+- **Future close criterion**: M5 在 `_validate_no_newlines` 旁加 markdown sanitizer —— 要么 schema-based allow-list（仅允许 `[A-Za-z0-9 _\-.,:/]`），要么 escape 所有 `[`, `]`, `(`, `)`, `<`, `>`, `!` 为 HTML entity（与 CF-R3-f 的 link spoofing 一并闭合）
+
+### CF-R4-d — `Gate._subclasses` test-defined 子类永久泄漏到 registry（R3+R3.5 convergence / correctness）
+
+- **Source**: R3+R3.5 convergence correctness reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: None；目前无 bug，仅形态隐患
+- **Defer reason**: `Gate._subclasses` 是 module-level monotonically-growing 全局。测试中定义的子类（如 `_DedupProbe` / `_Collected`）通过 `__init_subclass__` 注册后无 teardown，永久残留。今天无 bug；若未来某 contract test 遍历 `_subclasses` 并断言其 shape，pytest collection order 会变成 load-bearing
+- **Future close criterion**: M5 加 fixture-scoped teardown（`@pytest.fixture(autouse=True)` 在退出时 `Gate._subclasses.discard(test_subclass)`）；或让 contract test 用 name-filter（如仅看 `cls.__module__.startswith("nanobot.evolve")`）忽略 test-only 子类
+
+### CF-R4-e — `_KAPPA_EPSILON = 1e-9` 仅施于 `kappa_mean`，per-axis κ 仍裸 FP（R3+R3.5 convergence / correctness）
+
+- **Source**: R3+R3.5 convergence correctness reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: None；当前 verdict 仅依赖 kappa_mean
+- **Defer reason**: `_KAPPA_EPSILON = 1e-9` tolerance 当前仅应用于 `kappa_mean` 与阈值 `0.7` 的比较；per-axis κ（process / output / token / aggregate）若被下游引入"reject if any axis κ < 0.6"判定，会重新引入边界 fragility 而本 tolerance 不会生效
+- **Future close criterion**: M5 若加 per-axis floor verdict，抽 `_passes_with_tolerance(value, threshold, *, eps=_KAPPA_EPSILON)` helper 复用于所有 κ-vs-阈值比较点（kappa_mean + per-axis）
+
+### CF-R4-f — `1e-9` epsilon 比实际 FP error floor 宽 ~7 个量级（R3+R3.5 convergence / correctness）
+
+- **Source**: R3+R3.5 convergence correctness reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: None；为安全 trade-off 而非 bug
+- **Defer reason**: `1e-9` 比 IEEE 754 double 实际 FP error floor（~2.22e-16 × 3 / 3 ≈ 几个 ULP）宽 ~7 个量级。设计上是"安全偏宽"（避免本来该过的边界 case 被 false-rejected），但同时也 mask 掉真正 1e-10 跌破阈值的 value。这是设计 trade-off，非 bug
+- **Future close criterion**: 若 production 观察到 false-negative（即应该 fail 的 calibration 被边缘 tolerance 救活），revisit；否则保持现状
+
+### CF-R4-g — Redact PII-before-APIKEY ordering 缺 isolated witness（R3+R3.5 convergence / correctness）
+
+- **Source**: R3+R3.5 convergence correctness reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: 与 CF-R3-b 同源（redact ordering 覆盖）
+- **Defer reason**: R3-9 加了 APIKEY-before-PATH 的孤立 ordering witness；analogous 的 PII-before-APIKEY witness 当前仅 bundled 在 `test_stage_order_apikey_specificity_preserved` 中（间接证）。若未来 stage 顺序调整误反，此间接覆盖检测不到
+- **Future close criterion**: M5 在 `tests/evolve/test_redact.py` 加 `test_stage_order_pii_runs_before_apikey` —— 用 digit-run payload（11 位数字串）若 APIKEY 先跑会被 `[A-Za-z0-9_\-]{20,}` 误匹配；PII 先跑会变成 `[REDACTED:PHONE]` 后 APIKEY 找不到匹配。断言输出仅含 PII sentinel
+
+### CF-R4-h — 多处测试断言耦合到 exception message 字面（R3+R3.5 convergence / testing）
+
+- **Source**: R3+R3.5 convergence testing reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: None；R4-2 新测试已规避此 anti-pattern
+- **Defer reason**: 当前 `tests/evolve/` 多个测试用 `pytest.raises(ValueError, match="@")` / `match=r"contains '\.\.'"` / `match=r"\.lock"` 等正则锚定 exception message 字面（5+ 处类似 `"line-break" in msg` 与 `f"U+{codepoint_hex}" in msg`）。这些断言在 error-message wording 改写时会脆性 fail，掩盖真实的契约变化
+- **Future close criterion**: pre-M5 一次 test-quality pass 把 `pytest.raises(X, match=...)` 改为两步式 —— 先 `with pytest.raises(X) as exc_info:`，再用 loose-substring `assert "<keyword>" in str(exc_info.value)`（参考 R4-2 三个新测试）；保留对 ValueError 类型与 component 名称的硬断言
+
+### CF-R4-i — `test_subclasses_registry_dedups_on_repeat_subclass_definition` 依赖 CPython descriptor 内部（R3+R3.5 convergence / testing）
+
+- **Source**: R3+R3.5 convergence testing reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: None；当前 `__init_subclass__` 实现稳定
+- **Defer reason**: 该测试 reach 进 `Gate.__init_subclass__.__func__` 以重新触发 hook —— 这是 CPython descriptor 内部。如果未来 `__init_subclass__` 迁移到 metaclass 或 `@classmethod` 装饰器，`.__func__` 路径会 break for non-behavioral reasons
+- **Future close criterion**: M5 rewrite dedup probe 用 `types.new_class("Probe", (Gate,))` 重新声明类（语义等价于 `class Probe(Gate): ...` 的 dynamic 等价物），或在测试顶部加 `pytest.importorskip` guard 检查 `__func__` 存在性
+
+### CF-R4-j — Calibrate κ 边界测试 monkey-patch `compute_cohen_kappa` 隐藏 per-axis 变化（R3+R3.5 convergence / testing）
+
+- **Source**: R3+R3.5 convergence testing reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: 与 CF-R4-e 同源（per-axis κ 缺乏 dedicated test）
+- **Defer reason**: `test_calibrate_*_at_kappa_*` boundary tests 在 module scope monkey-patch `compute_cohen_kappa` 返回固定值 —— 这是 intentional（在 isolation 中 probe verdict 分支）但同时也意味着未来若 verdict 改成依赖 per-axis κ 而非 mean，这些测试还会"通过"而不报警
+- **Future close criterion**: 当 per-axis verdict logic 落地时（同 CF-R4-e 闭合时机），增补 `test_calibrate_per_axis_floor_*` 类测试，直接 probe per-axis 路径而非 monkey-patch mean 计算
+
+### CF-R4-k — `test_kappa_random_agreement_is_zero_or_negative` 名实不符（R3+R3.5 convergence / testing）
+
+- **Source**: R3+R3.5 convergence testing reviewer / YELLOW~50%
+- **Confidence**: 50%
+- **Conflict**: None；当前 assertion 行为正确
+- **Defer reason**: 测试名 `..._is_zero_or_negative` 暗示宽松断言（κ ≤ 0），但 assertion 实为 `pytest.approx(-1.0, abs=1e-9)`（完全 disagreement = -1.0 精确）。未来维护者可能根据名字把 assertion 弱化为 `assert kappa <= 0`，掩盖真实回归
+- **Future close criterion**: 将测试 rename 为 `test_kappa_perfect_disagreement_is_minus_one`，让名字反映真实断言强度；同 commit 检查同模块是否还有其他"名字宽 / assertion 严"的对称问题
