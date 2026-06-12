@@ -65,7 +65,13 @@
 | 106 | **§12 carry-forward register 格式 established by C-rev10（CF-1/CF-2/CF-3）**：§12 carry-forward 章节首批 3 条 entry 落地 —— 由用户 sanctioned 的 Lite + carry-forward 路线（不全 fix 即 RED-block）建立 register 格式：每条 entry 含 `source` (reviewer 名 + bucket-id)、`confidence`（reviewer 自报 % 或定性 "advisory"）、`conflict`（Arch / Corr / Coh / Scope reviewers 之间的判定差）、`defer reason`（为何不在本轮 fix）、`future close criterion`（具体可观测的关闭条件）。CF entries 不是决策 —— 它们是"已意识到但**故意**延后处理"的 reviewer-finding 转储，与 §0.3 决策表语义正交。M5+ 启动时 retro 必须 review 全部未关闭 CF entries；满足 close criterion 的从 §12 移除并在 retro 中记录关闭原因 | §12 | C-rev10 闭合：format establishment for the 3 Scope-reviewer advisories sanctioned for carry-forward by user (CF-C-rev10-1/2/3) |
 | 107 [AMENDS #104] | **`__init_subclass__` STRUCTURED_KWARGS 检查放宽：strict-equality → subset semantics（C-rev11 / RED-1）**：`EvolveError.__init_subclass__` 把"`STRUCTURED_KWARGS` 集合**严格等于** `__init__` keyword-only 参数集合"放宽为"`STRUCTURED_KWARGS` **子集于** keyword-only 参数集合"。理由：`ManifestPrivacyViolation` 设计为 `STRUCTURED_KWARGS = frozenset({"violated_invariant"})` 且 `__init__` 含三个 kw-only 参数（`violated_invariant` / `offending_path` / `offending_fields`，后两者是可选诊断字段，故意不进 registry），strict-equality 会让本类在导入期 `TypeError` → 阻断整个 evolve 子系统加载（hard blocker：4-reviewer convergence pass C-rev10 抓出的 RED-1）。Subset 语义保留"必填字段 MUST 出现在 ctor"的 fail-loud 守护（缺失 → import 期 `TypeError` 命名缺失成员），同时允许 ctor 含额外可选 kw-only 参数。Decision #104 的"子类 redeclare"约束保留不变，仅本条 equality vs subset 语义改写。新增 `test_init_subclass_accepts_optional_diagnostic_kwargs` 机械化两端：positive case（subset OK）+ negative case（成员缺失 fail）。**Alternative 未采纳**：(B) 把 `offending_path` / `offending_fields` 加入 `STRUCTURED_KWARGS` 让 strict-equality 通过 → 违反 registry 设计意图（"必填字段"语义被稀释，AST 契约扫描会强制 raise 点全填可选诊断 kwarg）；(C) 在 ctor 上把可选字段从 kw-only 转 positional → 破坏调用站点的命名清晰度，且与 `ManifestPrivacyViolation` 已有调用约定不兼容 | §5.3 / §0.3 | C-rev11 闭合：RED-1（C-rev9 草拟的 strict-equality 与 `ManifestPrivacyViolation` 设计冲突 → 整个 evolve 子系统 import-time crash） |
 | 108 [AMENDS #103] | **Marker placement convention + W-bucket 简写禁令（C-rev11 / Tighten-2 + YELLOW-1）**：§0.3.1 enumeration 追加两条 normative rule —— (a) **Placement convention**：`[SUPERSEDED-*]` / `[AMENDED-BY]` MUST 出现在被替代/修订的（旧）决策标题行；`[SUPERSEDES-*]` / `[AMENDS]` MUST 出现在做出替代/修订的（新）决策标题行；任何只有一端 marker 的 PR commit SHOULD 在 review 中被拒。(b) **W-bucket 简写禁令**：早期轮次曾用 `[AMENDED-BY #N via W<bucket> <description>]` 的内联简写 → 跨轮次 W-bucket 编号重用造成歧义；C-rev11 起强制（i）若新决策 #N 已独立存在 → 标题行只写 `[AMENDED-BY #N]`，W-bucket 归属由 #N 自身 narrative 承载；（ii）若编辑幅度仅就地（无新决策）→ 加 `[AMENDED-INLINE C-rev<N> / W<bucket>]` 单端 marker；两形态可叠加（如 #98 同时含 `[AMENDED-BY #101] [AMENDED-INLINE C-rev8 / W1]`）。本轮一并对齐：#96 markers `[AMENDED-BY #102] [AMENDED-INLINE C-rev8 / W4]`；#98 markers `[AMENDED-BY #101] [AMENDED-INLINE C-rev8 / W1] [AMENDED-INLINE C-rev9 / W5] [AMENDED-INLINE C-rev11 / RED-1+YELLOW-4]`。**Alternative 未采纳**：保留 `via W<bucket>` 简写形式 + 在 §0.3.1 增补一段释义 → 释义无法消除跨轮次歧义（同 W2 在 C-rev8 / C-rev9 / C-rev10 各轮次都出现过），形式简洁但语义不稳；强制 `C-rev<N> / W<bucket>` 全限定形式让 marker 单调可解析 | §0.3.1 / §0.3 | C-rev11 闭合：Tighten-2（marker placement convention 缺）+ YELLOW-1（W-bucket 引用未规范化为 C-rev<N>/W<bucket> 全限定形式） |
-| *待 §6+ 起追加* | | | |
+| 109 | **Gate 顺序 1 → 2 → 3 优先 metrics 完整性 over CI wall-clock**：`GATES = [TestPassGate, SizeGate, CacheCompatGate]` 而非 cheap-first（3 → 2 → 1）。理由（§6.4.1）：(a) GEPA 优化器需要在 reject 候选上拿到完整 fitness signal（含 test outcome）才能学习"什么样的候选会过 gate"；cheap-first 让 size/cache 先 reject 时 GEPA 看不到 test signal，下一轮 mutation 仍重蹈覆辙；(b) report.md reviewer 拿 `gate-rejected-at: 3-cache-compat` 时同时看 test_rate / size_delta 上下文比"前面就 reject 了无 test 数据"更可观测；(c) GEPA-layer early termination（候选 fitness < `FITNESS_GATE_FLOOR=0.3` 跳过 gate 链）部分缓解 wall-clock cost。同时锁定 §6.0 point 3：gate 内部异常 → `verdict='fail'` + `failure_reason='gate-internal-error:...'`（**不**冒泡为 `EvolveError`），traceback 落 `<run_id>/gates/<N>-<name>.error.txt` 供 CI 监控扫描。**Alternative 未采纳**：(a) cheap-first 顺序（3→2→1）—— 牺牲 metrics 可观测性换 wall-clock，GEPA 收敛速度损失高于 wall-clock 节省；(b) 全 gate 跑完不短路（仅记 verdicts）—— 浪费明显 reject 候选的 size/cache 检查 cost，且模糊"短路是首-fail-fast" 的 §3.6 既有契约 | §6.0 / §6.4 | C-rev13 W1：gate 顺序未定 + gate-internal-error 落库未规范 |
+| 110 | **Gate 1 输入数据集 = Tier C all-pass + Tier A rate floor**：gate 1 仅在 Tier A（synthetic, rate floor `0.80`）+ Tier C（curated golden, strict 100%）上评测；Tier B（SessionDB）opt-in 默认 false → gate 不能依赖默认 disabled 数据源（trivially-pass）；Tier D（task self-eval）M4 仅 collect、不 gate-on（同 run collect+gate-on 形成 chicken-and-egg），M5 引入 cross-run consumption（§14 下游契约）。Tier C 阈值为 `1.0`（strict-pass-rate）锚定 §1.1 line 370 既有"≥5 core golden = gate 1 lower bound"；Tier A 阈值 `0.80` 反映 Tier A statistical 性质（synthetic 噪声允许小比例失败）。**Alternative 未采纳**：(A) Tier A+C 同 strict-pass —— synthetic 数据集 strict 100% 等于把 GEPA 优化目标限定到"过拟合 Tier A"，与 Tier A 是 statistical 噪声补充的设计意图冲突；(C) Tier A+C+D 含 D bootstrap 规则 —— bootstrap 规则（首 run D 空 → trivially-pass）让 gate 在最关键的"首次进化"路径上失效，反 gate 设计意图 | §6.1.1 | C-rev13 W2：gate 1 数据集范围未明 + Tier B/D 是否参与未规范 |
+| 111 | **Gate 阈值 spec-locked，不通过 EvolveDefaults 暴露**：`TIER_A_PASS_RATE_FLOOR=0.80` / `TIER_C_PASS_RATE_FLOOR=1.0` / `SKILL_LINE_HARD_CAP=400` / `SKILL_LINE_DELTA_CAP=150` / `PER_RECORD_TIMEOUT_S=30` / `GATE_TIMEOUT_MS_HARD=600_000` / `FITNESS_GATE_FLOOR=0.3` 全部为 module-level constants（在各 gate 实现文件 / `harness.py`），**不**经 `EvolveDefaults` / config 暴露给 user。理由：gate 阈值是路线图 §6 五条约束的硬实现；config 暴露 = 给 user "lowering 阈值 silently bypass gate"的口子，破坏 hard-gate 性质。M5 retro 视实测调阈值，但不放开"运行时调"路径。**Alternative 未采纳**：(A) 全部经 `EvolveDefaults` 暴露 —— 提高 user flexibility，但破坏 hard-gate 路线图约束；(B) 部分暴露（仅 timeout 类）—— 边界划分主观，timeout vs rate-floor 与"绕开 gate" 的距离差异微妙，最简单、最稳的策略是统一 spec-locked | §6.1.1 / §6.2.2 | C-rev13 W3：gate 阈值是否 user-tunable 未规范，存在 silent bypass 风险 |
+| 112 | **Gate 内 partial-failure 全跑、跨 gate 短路（区分两层语义）**：gate 1 内部对 Tier A∪C 全部 record 跑完才计 `tier_*_rate`（单条 record subprocess crash / timeout 不终止 gate）；这与 §3.6 line 826 "首个 fail 即 short-circuit" 的**跨 gate**短路不冲突 —— 短路是 gate 之间，gate 1 内部全跑。理由：partial metrics 让 GEPA-iteration loop 拿到稳定 fitness（gate 1 内部短路 = metrics 缺失 → 后续 GEPA round 无 signal）。Per-record timeout `PER_RECORD_TIMEOUT_S=30s`（SIGTERM → 5s → SIGKILL），单 record outcome 失败但 gate 不终止。**Alternative 未采纳**：(A) gate 内首 record fail 即终止 —— wall-clock 略省但破坏 GEPA 学习 signal；(B) 跨 gate 不短路（全 gate 跑完）—— 浪费明显坏候选 cost 且与 §3.6 既定 short-circuit 契约冲突，不可改 | §6.1.2 / §6.4.2 | C-rev13 W4：gate 内 vs gate 间 short-circuit 语义未区分 |
+| 113 | **Gate 2 度量 = `lines`（不是 tokens、不是 bytes）**：候选 SKILL.md 行数硬上限 `SKILL_LINE_HARD_CAP=400` + delta 上限 `SKILL_LINE_DELTA_CAP=+150`，两条同时校验。理由：(a) deterministic（§6.0 point 1）—— tokens 需 tokenizer 选择跨 provider/版本不稳定违反 deterministic gate；bytes 受 BOM/CRLF/编码影响（同语义文件 byte 数可不同）；lines 仅 `\n` 计数；(b) human-grain —— M4 进化目标仅 SKILL.md（人类编辑文件），lines 是人类直觉单位；(c) zero-extra-deps —— 不强迫 tiktoken / anthropic-tokenizer 在 gate 路径 install。M4 **无** exemption 机制（frontmatter override / config bypass 都不引入），bypass 在 M4 等于把硬 gate 退化为 advisory。**Alternative 未采纳**：(A) tokens（cl100k 估算）—— tokenizer 版本绑定违反 deterministic；(B) bytes —— 编码污染敏感；(C) 含 frontmatter 例外机制 —— 给 silent bypass 留口子，与决策 #111 同源 spec-lock 哲学冲突 | §6.2.1 / §6.2.3 | C-rev13 W5：size gate 度量单位 + 是否 user-tunable + 是否 exemptable 三处未规范 |
+| 114 | **Gate 3 hash 串放 `failure_reason`、`metrics` 仅放 boolean-shaped float（schema 边界承认）**：`GateResult.metrics: dict[str, float]`（§3.6 line 794 锁定）只接受 float，hex hash 字符串无法直接放入。Gate 3 设计：candidate/baseline cache_key (hex) 串入 `failure_reason`（pass 时 None），`metrics` 仅放 `byte_diff_present ∈ {0.0, 1.0}` 之类 boolean-shaped float。这是 §3.6 schema 当前刚性约束的承认，**不**改 §3.6 schema —— 跨章节改 schema 风险高于 gate 3 内部解决。M5 若引入更多 hash-shaped gate（如 ast-equivalence），考虑把 `GateResult.metrics` 放宽为 `dict[str, float \| str]`，届时 §14 下游契约统一处理。**Alternative 未采纳**：(A) 把 `metrics` schema 改为 `dict[str, float \| str]` —— 破坏 §3.6 已锁 schema，影响 manifest 序列化（json schema validators 需同步），M4 范围内得不偿失；(B) hex hash 转 float（取前 8 hex chars 转 int 转 float）—— 损失精度且与 hex 字符串语义不直观，调试体验差 | §3.6 / §6.3.3 | C-rev13 W6：gate 3 hash 字符串如何嵌入 `metrics: dict[str, float]` 未规范 |
+| *待 §7+ 起追加* | | | |
 
 ### 0.3.1 决策日志约定（C-rev6 / 决策 #97 / YELLOW-Y8 / Y-arch-6）
 
@@ -2827,11 +2833,296 @@ __all__ = [
 
 ## 6. Gate 详细定义
 
-*（待 §5 approve 后填入）*
+§3.6 已锁定 `Gate` ABC、`GateResult` schema、`GATES` ordered list、首-fail-short-circuit、`<run_id>/gates/<N>-<name>.json` 落盘约定。**本章承担逐 gate 业务语义** —— 每个 gate 的输入边界、判定算法、metrics 字段语义、失败归因、env hardening。本章**不**重述 §3.6 已经锁定的 ABC 形状（避免 §3.6 ↔ §6 双源漂移）。
+
+> **Gate 顺序**（locked §3.6 line 816–820）：`1-test-pass` → `2-size-cap` → `3-cache-compat`。短路行为：首个 `verdict == "fail"` 终止剩余 gate（决策 #109 解释为何选这个顺序）。
+
+### 6.0 Gate ABC 与执行契约（§3.6 cross-ref + §6 补完）
+
+§3.6 落地的 ABC + executor 是数据形状层的硬约束。本节追加 §3.6 未文档化的**业务执行契约**：
+
+1. **同步 + deterministic + offline**（§3.6 line 809 强化）：每个 `Gate.evaluate` MUST：
+   - **同步**：`evaluate` 不是 coroutine（无 `async def`），不在 `evaluate` 内部 `asyncio.run` 子循环。理由：harness `_run_gates` 在 `OfflineHarness.run` 已建立的 asyncio 上下文中以 `loop.run_in_executor(None, gate.evaluate, ...)` 形式串行调度，gate 自身 sync 让线程模型可预测。
+   - **deterministic**：相同 `(candidate.content_hash, baseline.content_hash, GATES_VERSION)` 三元组下 `verdict` + `failure_reason` MUST 比特一致；`metrics` 浮点字段允许 ±1e-9 ULP 抖动（来自 numpy / hashlib 内部）。CI 通过 §10 不变量 #X（待 §10 起草时新增）落地双跑断言。
+   - **offline**：`evaluate` MUST 不发起任何网络 syscall；env hardening 在 §6.0 「Env hardening 公约」一段统一描述。
+2. **Env hardening 公约**（适用于所有 gate）：harness 在调 `Gate.evaluate` 前 sets per-gate env：
+   - `os.environ["HTTP_PROXY"] = os.environ["HTTPS_PROXY"] = "http://127.0.0.1:1"`（DNS-resolvable but no listener，requests-style client 立即 ECONNREFUSED）；
+   - 子进程（仅 gate 1 用）继承 stripped env：only `PATH` / `PYTHONPATH` / `LANG` / `LC_*` / `TMPDIR` 保留；其他 env var **全部** strip（含 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `AWS_*` 等 secret，避免 candidate 里的 prompt 触发到真 LLM）。
+   - fs scope：仅 `<run_id>/gates/sandbox/<gate-name>/` 目录可写；其余路径 read-only via `chdir` + 工作目录 sandbox（**非** seccomp / chroot——M4 仅 cooperative sandbox，恶意 candidate 不在威胁模型，见 §9 隐私边界）。
+   - 网络 hardening 是 **cooperative**：candidate skill 若主动 import socket 仍可绕过；M4 spec 不防御 adversarial candidate（all candidates 均由 GEPA 在我方 prompt 模板控制下生成，trust boundary 在 GEPA 而非 gate）。M5 若引入 third-party-evolved candidate（外部 Darwinian Evolver subprocess）需重新评估威胁模型。
+3. **Failure mode 分类**：`evaluate` 抛**任何**未捕获异常 → harness 把该 gate 视为 `verdict="fail"`，`failure_reason = f"gate-internal-error: {type(exc).__name__}: {str(exc)[:200]}"`，并把 traceback 写到 `<run_id>/gates/<N>-<name>.error.txt`。Gate 内部异常**不**冒泡为 `EvolveError` —— gate 的对外语义只有 `pass` / `fail`，不区分"业务 fail"与"实现 bug"。CI 监控可通过扫描 `*.error.txt` 文件检测实现 bug 累积（决策 #109）。
+4. **`metrics` 字段稳定性公约**：每个 gate 的 `metrics: dict[str, float]` 含一个**契约**键集（必填，schema 锁定）+ 任意**诊断**键（可选，自由扩展）。契约键集是 SoT —— 跨 milestone 对外 contract 仅承诺契约键的语义稳定性。M4 三 gate 的契约键集见 §6.1.4 / §6.2.4 / §6.3.4。
+5. **Gate execution telemetry**：harness 在调用 `evaluate` 前后记 `time.perf_counter_ns()`，差值 / 1e6 写入 `GateResult.duration_ms`（int）。任何 gate `duration_ms > GATE_TIMEOUT_MS_HARD` (默认 600_000，10min) 由 harness 主动 cancel，gate `verdict="fail"` + `failure_reason="timeout-hard:<actual>ms"`。Per-gate soft timeout（warn 但不 cancel）见各 gate 子节。
+
+### 6.1 Gate 1 — `1-test-pass`（Tier C all-pass + Tier A rate floor）
+
+**目的**：候选 skill 在 §3.1 的 Tier C 全部 record 上 strict-pass、Tier A 上 loose-match-rate ≥ 阈值。这是"功能未回归"的 lower bound，对应路线图 §6 隐式约束（任何进化产物**必须**保留 baseline 的核心能力）。
+
+#### 6.1.1 输入数据集
+
+| Tier | 是否参与 gate 1 | 阈值 | 理由 |
+|---|---|---|---|
+| **A**（synthetic） | **是** | loose-match-rate ≥ `TIER_A_PASS_RATE_FLOOR`（默认 `0.80`） | §3.1 line 350+ 已锁定 Tier A 是 statistical（synthetic 噪声允许小比例失败）；rate 而非 all-pass。 |
+| **B**（SessionDB anonymized） | **否** | — | 用户级 opt-in（§1.1 #4 默认 `false`）；gate 不能依赖默认 disabled 数据源——会让 default 配置下 gate trivially-pass，破坏 §6 路线图约束意图。 |
+| **C**（curated golden） | **是** | strict-pass-rate == `1.0` | §1.1 line 370 锚定"≥5 core golden = gate 1 lower bound"；curated golden 是回归基线，单条失败即视为功能丢失。 |
+| **D**（task self-eval） | **否** | — | M4 仅 collect Tier D（不 gate-on）；run 内同期 collect + gate-on 形成 chicken-and-egg（首 run 时 D 为空 → trivially-pass）。M5 计划引入"上一 run 的 Tier D → 本 run gate"的 cross-run consumption（§14 下游契约）。决策 #110 选择 Option B（spec 立项期 dispatch 选项中的 B）。 |
+
+**阈值 sourcing**：`TIER_A_PASS_RATE_FLOOR` 为 module-level constant `nanobot/evolve/gates/test_pass.py::TIER_A_PASS_RATE_FLOOR = 0.80`，**不**通过 `EvolveDefaults` 暴露给 user config（M4 范围决策 #111：gate 阈值是 spec-locked 不可调，避免 user 通过 lowering 阈值 silently bypass gate；M5 若有真实需求再 hoist 至 config）。`TIER_C_PASS_RATE_FLOOR = 1.0` 类似。
+
+#### 6.1.2 判定算法
+
+```
+for each record in (Tier A ∪ Tier C):
+    1. spawn isolated subprocess（per §6.0 env hardening）
+    2. inside subprocess: load candidate SKILL.md → invoke skill harness
+       (uses § stub `nanobot.evolve.gates.test_pass._invoke_skill_in_sandbox(record)`,
+       contract: returns Optional[str] output or raises)
+    3. compute per-record outcome:
+       - Tier C: outcome = (output == record.expected) under match_mode
+                          == 'strict' (§3.1)
+       - Tier A: outcome = loose_match(output, record.expected)
+                          per record.match_mode (§3.1, default 'loose')
+    4. record per-record telemetry into metrics["records"][record_id]
+       (诊断键，非契约键)
+
+aggregate:
+    tier_c_pass_count / tier_c_total → tier_c_rate
+    tier_a_pass_count / tier_a_total → tier_a_rate
+
+verdict:
+    if tier_c_rate < TIER_C_PASS_RATE_FLOOR (== 1.0): fail
+    elif tier_a_rate < TIER_A_PASS_RATE_FLOOR:        fail
+    else:                                              pass
+```
+
+**Per-record 失败隔离**：单条 record 的 subprocess crash / timeout / exception → 该条记 `outcome=False`，gate 不因单条 outcome 终止 —— 全部 record 跑完才计 `tier_*_rate`。理由：partial metrics 才让 GEPA-iteration loop 拿到稳定 fitness（gate 1 短路全停 → metrics 缺失 → 后续 GEPA round 无 signal）。这与 §3.6 line 825 "首个 fail 即 short-circuit" 的**跨 gate** 短路不冲突 —— 短路是 gate 之间，gate 1 内部全跑（决策 #112）。
+
+**Per-record timeout**：`PER_RECORD_TIMEOUT_S = 30`（module-level constant，与 6.1.1 阈值同放置 reasoning）。subprocess 超过 30s 即 SIGTERM → 5s 后 SIGKILL → 该条 `outcome=False`，写诊断键 `metrics["timeouts"][record_id] = duration_ms`。
+
+#### 6.1.3 失败归因（`failure_reason`）
+
+verdict=`fail` 时 `failure_reason` 形如：
+
+- `"tier-c-rate-floor: 4/5 (0.80) < 1.0"` —— Tier C 未全过（path 1）
+- `"tier-a-rate-floor: 17/25 (0.68) < 0.80"` —— Tier C 全过但 Tier A rate 不达标（path 2，仅在 path 1 通过后评估）
+- `"gate-internal-error: <ExcName>: <msg>"` —— gate.evaluate 自身抛异常（§6.0 point 3）
+
+#### 6.1.4 `metrics` 契约键
+
+| Key | 类型 | 语义 |
+|---|---|---|
+| `tier_c_pass_count` | float（int 兼容） | Tier C strict-pass record 数 |
+| `tier_c_total` | float | Tier C record 总数 |
+| `tier_c_rate` | float ∈ [0, 1] | `tier_c_pass_count / tier_c_total`；除零安全（total=0 → rate=1.0 conventional） |
+| `tier_a_pass_count` | float | 同上 Tier A |
+| `tier_a_total` | float | 同上 Tier A |
+| `tier_a_rate` | float ∈ [0, 1] | 同上 Tier A |
+
+诊断键（非契约，跨 milestone 可加可减）：`records` per-record outcome map、`timeouts`、`subprocess_errors` 等。下游消费者（§4.4 `apply` / report.md generator）**只**消费契约键。
+
+### 6.2 Gate 2 — `2-size-cap`（per-skill SKILL.md 行数硬上限）
+
+**目的**：候选 skill 文件不得无限制膨胀。GEPA 优化压力倾向于增加 prompt 长度以挤性能；不设硬上限，几轮迭代后 skill 文件会失控（一手观察：上游 Hermes 实测 GEPA 跑 30 轮后无 size cap 的 skill 从 80 行涨到 600+ 行）。
+
+#### 6.2.1 度量选择：lines（不是 tokens、不是 bytes）
+
+§3.2 line 415 `size_metrics: dict[str, int]` 已含 `chars` / `tokens_est` / `lines` 三个度量。Gate 2 主度量选 **`lines`**（决策 #113），理由：
+
+- **deterministic**（§6.0 point 1 硬约束）：tokens 需要 tokenizer 选择（cl100k / o200k / claude-tokenizer 各异），跨 provider / 跨 tokenizer 版本不稳定 → 违反 deterministic gate；bytes 受 BOM / CRLF / 编码影响（同语义文件 byte 数可不同）；lines 仅依赖 `\n` 计数，跨平台 normalize（git autocrlf 在 §10 不变量层另控）。
+- **human-grain**：M4 范围 §1.1 #5 锁定进化目标仅 `SKILL.md`（人类编辑文件），lines 是人类直觉单位 —— review 一份 600 行 markdown 与 200 行 markdown 的认知负担差异，lines 比 token-count 更符合 reviewer 心智。
+- **无 tokenizer extra 依赖**：gate 实现 zero extra import（与 `nanobot/evolve/schemas.py` 的 zero-extra-deps 哲学一致；不强迫 tiktoken / anthropic-tokenizer 在 gate 路径 install）。
+
+#### 6.2.2 阈值
+
+| Constant | 默认 | 来源 |
+|---|---|---|
+| `SKILL_LINE_HARD_CAP` | `400` | 经验阈值；上游 Hermes 现行 skill 中位 ~120 行，Q3 ~ 200 行；400 行给 GEPA 留 ~3x 头部。M5 retro 视实测调。 |
+| `SKILL_LINE_DELTA_CAP` | `+150` | 候选相对 baseline 增量上限；防止 baseline 已 350 行时候选窜到 480 还过 hard cap。两条同时校验。 |
+
+阈值同 §6.1：module-level constant，**不**经 `EvolveDefaults` 暴露（决策 #111 同源）。
+
+#### 6.2.3 判定算法
+
+```
+candidate_lines = candidate.size_metrics["lines"]
+baseline_lines  = baseline.size_metrics["lines"]
+delta           = candidate_lines - baseline_lines
+
+verdict:
+    if candidate_lines > SKILL_LINE_HARD_CAP:        fail (path 1)
+    elif delta > SKILL_LINE_DELTA_CAP:               fail (path 2)
+    else:                                             pass
+```
+
+**Exemption mechanism**：M4 **无** —— 任何候选触发任一 cap 即 fail，无 frontmatter override / config bypass。理由：gate 是路线图 §6 五条约束之一，bypass 机制在 M4 等于把硬 gate 退化为 advisory；若用户真有正当理由生成超大 skill，应在 GEPA prompt 模板里体现意图（让模型自身受约束），而不是事后 bypass gate。M5 若引入"large skill 例外"（如 self-modifying meta-skill）需在 §14 下游契约中显式 carve-out。
+
+#### 6.2.4 `metrics` 契约键
+
+| Key | 类型 | 语义 |
+|---|---|---|
+| `candidate_lines` | float | 候选 SKILL.md 行数 |
+| `baseline_lines` | float | baseline SKILL.md 行数 |
+| `delta_lines` | float | `candidate_lines - baseline_lines`（可负） |
+| `hard_cap` | float | `SKILL_LINE_HARD_CAP`（写入便于 report.md 直接读，不 spec 跨调用） |
+| `delta_cap` | float | `SKILL_LINE_DELTA_CAP` |
+
+`failure_reason` 形如：
+- `"hard-cap-exceeded: 480 > 400 lines"`
+- `"delta-cap-exceeded: +180 > +150 lines (480 vs 300 baseline)"`
+
+### 6.3 Gate 3 — `3-cache-compat`（prompt cache stable 段 hash 等价）
+
+**目的**：路线图 §6 约束 1（"永不打破 prompt cache"）的硬实现。`Candidate.cache_key_hash`（§3.2 line 414，`sha256-12` of stable 段）必须 ≡ `Baseline.cache_key_hash`；任何不等即 fail，候选立即出局。
+
+#### 6.3.1 "stable 段" 定义（与 §3.2 cache_key_hash 计算同源）
+
+**SoT**：`nanobot/evolve/_cache_key.py::compute_cache_key_hash(skill_md_content: str) -> str`，§3.2 计算 `cache_key_hash` 与本 gate 校验**走同一函数**（避免 §3.2 计算路径与 §6.3 校验路径双源漂移）。
+
+stable 段定义（M4 锁定，M5 不可更改否则破坏 §10 不变量 #1 → §14 下游契约）：
+
+1. SKILL.md 解析为 `(frontmatter, body_md)`（§3.2 `SkillContent.frontmatter` / `body_md`）。
+2. **frontmatter 中**：`name`、`description`、`origin`、`created_by` 四字段进入 stable 段（M2 已锁定的 frontmatter contract）；`evolved_from_run` / `evolved_at` / `parent_skill_hash` / `created_at` **不**进入（这些 evolution-specific 字段每 run 都变，进 stable 段会让 cache 永远 miss）。
+3. **body_md 中**：完整 markdown 文本（不含 frontmatter）按 byte 串入 stable 段。`body_md` 是 prompt cache 命中的 critical path —— body 任何字符变化都让 Anthropic prompt cache miss，这正是 gate 要捕获的。
+4. stable 段拼接：`f"{name}\0{description}\0{origin}\0{created_by}\0{body_md}"`，sha256-12（前 12 hex chars of sha256 hex digest）。
+
+**关键观察**：gate 3 的"等价"不是"语义等价"也不是"AST 等价" —— 是 **byte-level 等价**。GEPA 即使做"等价改写"（reorder bullet 顺序、改 markdown emphasis）也会被 gate 3 reject。这是**有意为之**：
+
+- Anthropic prompt cache 是 byte-prefix-based（cache key = exact byte prefix），任何 byte diff 即 miss → 路线图约束 1 直接消费 byte 等价语义；
+- "语义等价改写"是 GEPA 优化空间内**没有 fitness 信号**的修改（fitness 已用 RubricScore 衡量正确性，byte-equivalent rewrite 不改 RubricScore 但消耗 cache）—— 用 hard gate 让 GEPA 优化器学到"不要做无信号的 byte 重排"，这是设计意图。
+
+#### 6.3.2 判定算法
+
+```
+candidate_key = candidate.cache_key_hash   # 已在 §3.2 时计算并锁
+baseline_key  = baseline.cache_key_hash
+
+verdict:
+    if candidate_key == baseline_key:  pass
+    else:                              fail
+```
+
+单 hash 比较，O(1)；no fs / network IO；no false-positive mitigation（hash 等价是定义本身，false-positive 来自 hash 函数 collision，sha256-12 collision 概率忽略）。
+
+**False-positive 注**：sha256 截断到 12 hex chars (~48 bits)，collision 期望 ~2^24 ≈ 16M 候选 — 远超 M4 单 run 候选量（GEPA 默认 ≤ 32 iterations × ≤ 8 candidates/iter ≈ 256）。M5 若候选量级跨数量级提升（≥ 1M / run），需 hoist 到 sha256-16 或全 hash；本 spec § 14 下游契约 carry-forward。
+
+#### 6.3.3 `metrics` 契约键
+
+| Key | 类型 | 语义 |
+|---|---|---|
+| `candidate_cache_key` | float（占位；hex string 走 `failure_reason`） | 0.0（占位；真实 hex 字符串无法装 float —— 见下） |
+| `baseline_cache_key` | float（占位） | 0.0 |
+| `byte_diff_present` | float ∈ {0.0, 1.0} | `0.0 == identical, 1.0 == differ`（gate verdict 同义量化） |
+
+**Schema 限制注**（决策 #114）：`GateResult.metrics: dict[str, float]`（§3.6 line 794 锁定）只接受 float —— hex hash 字符串无法直接放入。本 gate 把 hash hex 串放入 `failure_reason`（pass 时 None），`metrics` 仅放 boolean-shaped float。这是 §3.6 schema 的当前刚性约束；M5 若引入更多 hash-shaped gate（如 ast-equivalence gate），考虑把 `GateResult.metrics` 放宽为 `dict[str, float | str]`。本 spec **不**改 §3.6 schema —— 跨章节改 schema 风险高于 gate 3 内部解决。
+
+`failure_reason` 形如：
+- `"cache-key-mismatch: candidate=a3f8c211ab4d != baseline=12bc97ee5f08"`
+
+### 6.4 Gate ordering、聚合与短路语义
+
+#### 6.4.1 顺序（§3.6 line 816–820 cross-ref）
+
+`GATES = [TestPassGate(), SizeGate(), CacheCompatGate()]` —— 顺序由列表位置决定（§3.6 locked），名字前缀 `1-` / `2-` / `3-` 与位置同步。
+
+**为何 1 → 2 → 3 而不是 3 → 2 → 1（最便宜先）？**（决策 #109）
+
+- **直觉反例**：cache-compat gate 是 O(1) 哈希比较；size gate 是 O(1) int 比较；test gate 跑 subprocess × 数十 record，是 O(秒级)。最便宜先（3 → 2 → 1）让"明显坏候选"快速 reject，省 CI 时间。
+- **Spec 选择 1 → 2 → 3 的反向理由**：候选**总数**在 GEPA 单轮 ≤ 8 ~ 32（DSPy 默认），单候选 gate 1 cost ~30s × 5–25 records ≈ 数分钟级；gate 2/3 ~ms 级。从 wall-clock 看，gate 1 cost dominates 任意候选 —— 把它放第一位的代价：所有 candidate 跑过 gate 1 才能被 size/cache reject。**关键 trade-off**：metrics 完整性 vs CI 时间。
+  - **完整 metrics 必要性**：GEPA 优化器需要在 reject 候选上拿到完整 fitness signal（包括 test outcome）才能学习"什么样的候选会过 gate"；若 size/cache 先 reject，GEPA 看不到 test signal，下一轮 mutation 仍会重蹈覆辙（短路把 test signal 信息掩埋）。
+  - **路线图 §6 约束 1 优先级**：cache-compat 是路线图明文约束，结构上**必须**让候选携带 test 完整 metrics 走到 cache 校验时仍可被定位（reasoning：reviewer 拿 report.md 看 `gate-rejected-at: 3-cache-compat` 时同时看到 test_rate 与 size_delta 上下文，比"前面就 reject 了，无 test 数据"信息更丰富）。
+
+- **结论**：1 → 2 → 3 顺序优先 metrics 完整性 + 故障可观测性 over wall-clock 节省。CI 时间 cost 由 §6.4.3 GEPA 层面 early termination（候选 fitness 太低跳过 gate）部分缓解。Decision #109 grounding。
+
+#### 6.4.2 短路（locked §3.6 line 826）
+
+跨 gate 首-fail 短路：`gate i.verdict == "fail"` → `gate i+1, i+2, ...` 不执行。`<run_id>/gates/<N>-<name>.json` 仅前 i 个文件存在。`Candidate` 标记 `gate_rejected_at: <gate_name>`（in-memory；不入 Candidate schema —— 仅 harness 内部记号，落盘体现为 manifest `gate_verdicts` list 的最后一项 `verdict=='fail'`）。
+
+#### 6.4.3 GEPA-layer early termination（与 gate 短路正交）
+
+GEPA 优化器内部有"低 fitness 候选不进 gate"机制：候选若 `judge_consensus.aggregate < FITNESS_GATE_FLOOR`（默认 `0.3`，spec-locked），harness `_run_gates` 不调；该候选的 `gate_verdicts: []`（空 list），manifest 记 `final_status="no_improvement"` 候选侧分支。
+
+这避免 obviously-bad 候选浪费 gate-1 subprocess 时间。**与 gate 链短路区分**：
+
+| 维度 | Gate 链短路 | GEPA-layer early termination |
+|---|---|---|
+| 触发 | 上一个 gate `fail` | 候选 fitness < `FITNESS_GATE_FLOOR` |
+| 跳过的 gate | `i+1, i+2, ...` | 全部 gate（候选根本不入 gate 链） |
+| `gate_verdicts` 长度 | `1 ≤ len ≤ 3` | `0` |
+| manifest 结果 | `final_status=rejected_by_gate` | `final_status=no_improvement` |
+
+#### 6.4.4 全 candidate 失败下的 `gate_verdicts` 选取
+
+§3.7 line 875–876 已锁定：`RunManifest.gate_verdicts` 只记**一个** candidate 的 trace —— promoted candidate（若有）；全员 reject 时记 fitness 最高者的 trace。本节 normative 重申：harness 选取规则是 stable-sort by `judge_consensus.aggregate desc, candidate.gepa_iteration asc`，取 top-1 写入 `gate_verdicts`。其余候选 trace 仍落 per-candidate `<run_id>/gates/<candidate-hash-prefix>/*.json`（每候选一组 sub-dir，从 §2.2 line 250 既有目录约定派生）。
+
+### 6.5 Gate 输出 → `final_status` 映射
+
+`final_status` 是 §3.7 RunManifest 字段，CLI exit code（§4.6）由 § dispatch 表从异常类型映射，**不**从 `final_status` 派生（决策 #82 / #88 已锁定 gate fail 不映射非零 exit code）。
+
+#### 6.5.1 计算位置
+
+**SoT**：`OfflineHarness._compute_final_status(promoted: Optional[Candidate], all_candidates: list[Candidate], baseline: Baseline) -> Literal[...]`，被 `OfflineHarness.run()` 在 GEPA loop 完成后调用一次，写入即将构造的 `RunManifest`。`apply` 子命令是**只读消费者**（§3.7 frozen=True manifest），不重算 `final_status`。
+
+#### 6.5.2 决策树
+
+```
+def _compute_final_status(promoted, all_candidates, baseline):
+    # 1. harness_error 由顶层 try/except 在 OfflineHarness.run 包装；
+    #    本函数只在 happy path 之后调用，不会返回 'harness_error'
+    if promoted is not None:
+        return "promoted_to_pr"   # 全 gate pass + fitness > baseline_fitness
+
+    if any_candidate_failed_gate(all_candidates):
+        return "rejected_by_gate"  # 至少一候选有 gate fail trace
+
+    # 全 gate pass 但无 promoted —— 即所有候选 fitness ≤ baseline
+    return "no_improvement"
+```
+
+`promoted` 由 `_select_promoted` 选出：候选必须满足 `len(gate_verdicts) == len(GATES) and all(v.verdict == "pass" for v in gate_verdicts) and judge_consensus.aggregate > baseline_judge_consensus.aggregate`。否则 `promoted = None`。
+
+`harness_error` 是顶层 `try/except` 边界产物（`EvolveError` 子类 escape 到 `OfflineHarness.run` 的 outer try），不由 `_compute_final_status` 返回。
+
+#### 6.5.3 下游消费者
+
+| 消费者 | 读取 `final_status` 的方式 | 行为 |
+|---|---|---|
+| `nanobot evolve report <run-id>` | 直接读 manifest，渲染 report.md | 模板分支：`promoted_to_pr` / `rejected_by_gate` / `no_improvement` 三种 markdown header + 不同 metrics 表格 |
+| `nanobot evolve apply <run-id>` | 决策 #88 / #90：`final_status != 'promoted_to_pr'` 抛 `ApplyTerminalError` → exit 8 | 即 apply 仅在 `promoted_to_pr` 时产 PR artifact |
+| `OfflineHarness.run()` 调用方（Python API） | 读返回的 `RunManifest.final_status` 字段 | §5.1 docstring (line 1668–1669) 已锁定：返回而非异常；调用方分流 |
+| CI 自动化脚本 | exit code（§4.6）+ optionally manifest.json grep | exit 0 + final_status 决定下一步（merge / log / 重跑） |
+
+### 6.6 Forward to M5（gates 4–5 与不变量）
+
+§14 下游契约（待 Round I 起草）将正式锁定本节内容；本节先列出对 M5 的硬约束。
+
+#### 6.6.1 M5 必须**保留**的 M4 表面（不可破坏）
+
+1. **`Gate` ABC + `GateResult` schema**（§3.6）：M4 锁定，M5 **不**得修改 `name` / `evaluate` 签名、`GateResult` 字段集合、`verdict: Literal["pass", "fail"]` 二值（不可加 `INSUFFICIENT_DATA` 或其他三值，§3.7 manifest 字段都按二值假设构造）。
+2. **`GATES` ordered list 扩展方式**（§3.6 line 828）：`GATES.append(SemanticFidelityGate(), HumanReviewGate())` —— 仅 append，不 insert / 不 reorder。新 gate name 必须 `4-*` / `5-*` 前缀。
+3. **gate 1–3 业务语义**：阈值常量（`TIER_C_PASS_RATE_FLOOR` / `SKILL_LINE_HARD_CAP` / `SKILL_LINE_DELTA_CAP` / etc.）在 M5 可调，但**不可降级**到 advisory（即不能让"硬 gate"变"warn"）。
+4. **`final_status` enum**：`promoted_to_pr` / `rejected_by_gate` / `no_improvement` / `harness_error` 四值锁定。M5 若需细分（如 `rejected_by_gate_4_semantic`），加诊断字段 `rejection_subtype`，**不**扩 enum。
+5. **CLI exit code 不变**（§4.6）：gate fail 仍不映射非零 exit；apply 业务终态仍 exit 8（决策 #88）。
+
+#### 6.6.2 M5 自由扩展面（无需 spec 修订）
+
+1. **新 gate 实现**：`nanobot/evolve/gates/semantic_fidelity.py` + `human_review.py`，append 到 `GATES`；
+2. **gate 阈值调整**（M4 spec-locked constants → M5 retro 后重新定义，但需在 M5 spec §0.3 显式 decision），允许放宽或收紧。
+3. **新 metrics 诊断键**（非契约键）：随时加，无 spec 修订负担。
+4. **新 failure_reason 格式**：自由，无对外 contract。
+
+#### 6.6.3 跨 milestone 不变量（hardline）
+
+| 不变量 | M4 落地 | M5+ 强制 |
+|---|---|---|
+| 任何 evolution 产物前都过 `GATES` 全链（除 GEPA early termination） | §6.4 | M5 不得绕开 `_run_gates` 直接调 `pr_writer` |
+| `final_status == 'promoted_to_pr'` ⇒ `len(gate_verdicts) == len(GATES) and all(pass)` | §6.5.2 `_select_promoted` | M5 加 gate 4–5 时 `len(GATES)=5`，`promoted_to_pr` 自动要求 5-pass |
+| Gate 实现 deterministic + offline | §6.0 point 1 | M5 `SemanticFidelityGate` 调 LLM judge → 非 deterministic → 例外条款必须在 §14 显式 carve-out（gate 4 是计划中第一个例外，M5 spec 必须正面处理） |
+
+> §6 Gate 详细定义完。本章新增决策 #109–#114（共 6 条，已追加 §0.3）。下一节 §7 Judge rubric 与 calibration。
 
 ## 7. Judge rubric 与 calibration
 
-*（待 §6 approve 后填入）*
+*（待 Round E 起草）*
 
 ## 8. PR-only deploy 契约
 
