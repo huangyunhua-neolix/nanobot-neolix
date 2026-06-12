@@ -2,7 +2,7 @@
 
 > **Milestone**：M4（离线进化骨架）。属于 [Hermes 风格自我进化能力路线图](../roadmap.md) 的第四阶段。
 >
-> **状态**：草稿中（2026-06-12，§0 决策已锁定，body 待逐节 approve）。
+> **状态**：草稿中（2026-06-12，C-rev7 收敛：闭合 C-rev6 review 中 2 RED + 18 YELLOW，§0 决策已锁定，body 待逐节 approve）。
 >
 > **依赖**：M1（[`m1-foundations.md`](./m1-foundations.md)）—— 需要 provenance 字段（`origin: agent`、`created_by`、`created_at`）作为离线进化候选的来源标签；不依赖 M2、不依赖 M3（M3 是运行时 lane，M4 是离线 lane，两条 lane 并行无耦合）。
 >
@@ -48,12 +48,15 @@
 | 89 | Promoted `JudgeConfig` to `__all__`（count 17→18，再叠 #90 → 19）。Kept `EvolveBase` inheritance（不 downgrade `@dataclass`）以吸收 M5 per-judge fields（`timeout_s` / `weight` / `temperature_override`）而无须 ctor migration。同时在 `OfflineHarness.run()` 的 `judge_pool` kwarg 上接受 `list[str] \| JudgePool \| None` union（YELLOW-Y3） | §3.3 / §5.1 / §5.4.6 | C-rev4 收敛：`JudgePool.judges` 元素类型必须 importable；M5 扩展 per-judge 字段在即，dataclass 化会触发 ctor 二进制兼容破坏 |
 | 90 | 引入专属异常 `ApplyTerminalError(ValueError)` 替代 `apply()` 中裸 `ValueError → exit 8` 的映射。和 `pydantic.ValidationError`（亦 `ValueError` 子类）解耦，CLI handler isinstance 顺序不再 load-bearing。加入 `__all__`（count 18→19）。**C-rev5 注**：(a) YELLOW-Y2 添加 `test_cli_handler_order.py` 机械化强制 isinstance 顺序 —— 见 §5.3 dispatch-order subsection。(b) YELLOW-Y8 具体消费者：§4.6 CI dispatch 规则使用 `case ApplyTerminalError` / `case ConfigError` / `case ValueError` 风格分派 exit code（详见 §5.3 dispatch-order subsection 与 YELLOW-Y2 引入的 `test_cli_handler_order.py` 强制契约）；这两个具体消费者就在 M4 落地，不是 M5 furniture | §3.5 / §5.1 / §5.3 / §4.6 | C-rev4 YELLOW-Y5：`pydantic.ValidationError` 与 `apply` 业务终态共用 `ValueError` 基类时，CLI handler 的 `isinstance` 顺序决定 exit 2 vs exit 8，未文档化即 load-bearing；专属异常彻底消歧 |
 | 91 | M4 plan 期落地 `tests/evolve/test_base_config_frozen.py` 快照测试：锁定 `EvolveBase.model_config` 与 `JudgePool` / `RubricWeights` 的 `frozen` override。任何修改要求同步更新 EXPECTED_* dict + §0.3 新 Decision + roadmap entry。**C-rev5 注 (YELLOW-Y9) 累积成本**：C-rev5 时 M4 已有 5 个 contract/snapshot 测试（`test_no_extra_in_init.py` / `test_probe_no_extra.py` / `test_decoupling.py` / `test_apply_contract.py` / `test_base_config_frozen.py`）。CI 维护成本在可接受范围（合计 < 200 行测试代码 + < 5s 运行时间）；M5 引入新 contract 测试前需评估是否合并到现有文件而非新增 | §3.0 / §5.4.5 | C-rev4 YELLOW-Y4：§3.0 EvolveBase 稳定性公约缺机械化绑定，纯 prose 不可强制；快照测试把 covenant 从文档承诺升级为 CI 拦截 |
-| 92 | 通用化 `tests/evolve/test_decoupling.py` 中的 kwargs-only 强制 AST scanner 为 registry pattern（`STRUCTURED_EXC_KWARGS`）。C-rev3 引入时仅硬编码 `ManifestPrivacyViolation` 一类；C-rev4 引入 `ApplyTerminalError` 同样使用 kwargs-only 构造但无对应强制 → 层间不一致。C-rev5 把扫描器升级为按 registry 驱动；M5 新增结构化-kwargs 异常（如 `GateRejected` / `JudgeQuorumFailure`）需同步登记。**[SUPERSEDED-BY #95]**（C-rev6 把 registry 从测试侧 dict 迁至生产侧 `ClassVar[frozenset[str]]` introspection；测试不再硬编码异常列表） | §5.3 | RED-1 C-rev5：两个同形异常只有一个机械化强制，是层间一致性裂缝；registry 化让"哪些异常是结构化-kwargs"成为单一事实之源 |
+| 92 | 通用化 `tests/evolve/test_decoupling.py` 中的 kwargs-only 强制 AST scanner 为 registry pattern（`STRUCTURED_KWARGS`，COH-001 / C-rev7 / Z8 修正：C-rev5 草拟时使用 `STRUCTURED_EXC_KWARGS`，C-rev6 落地时实际命名为 `STRUCTURED_KWARGS`，本表 entry 同步统一）。C-rev3 引入时仅硬编码 `ManifestPrivacyViolation` 一类；C-rev4 引入 `ApplyTerminalError` 同样使用 kwargs-only 构造但无对应强制 → 层间不一致。C-rev5 把扫描器升级为按 registry 驱动；M5 新增结构化-kwargs 异常（如 `GateRejected` / `JudgeQuorumFailure`）需同步登记。**[SUPERSEDED-BY #95]**（C-rev6 把 registry 从测试侧 dict 迁至生产侧 `ClassVar[frozenset[str]]` introspection；测试不再硬编码异常列表） | §5.3 | RED-1 C-rev5：两个同形异常只有一个机械化强制，是层间一致性裂缝；registry 化让"哪些异常是结构化-kwargs"成为单一事实之源 |
 | 93 | 抽取 `_assert_odd_pool_size` helper 至 `nanobot/evolve/schemas.py`。`JudgePool._odd_pool_only` 与 `EvolveDefaults._odd_pool_size` 两个 validator 都改为薄 delegate；消除双重错误信息漂移风险。任何关于奇数池规则的改动（M5 若允许 even=2 用于 A/B 测试）只需修改 helper 一处。**Forward-looking（C-rev6 / Y-arch-5）**：若 M5（或任意后续 milestone）引入**第二个**跨模型 validator helper（例如 weight-bounds checker / tier-name normalizer），**必须**同时抽取两个 helper 到新模块 `nanobot/evolve/validators.py`。单 helper 留在 `schemas.py` 是 YAGNI 阈值之内的合理放置；引入第二个 helper 即触发提取，避免 `schemas.py` 长期混入"数据类 + 跨模型规则"两类关注点。Import 调整：相应 validator 调用点改为 module-top `from nanobot.evolve.validators import _assert_odd_pool_size`，与 C-rev6 Y-corr-3 闭合同步落地 | §3.3 / §4.5 | YELLOW-Y4 C-rev5：两个 validator 独立实现同一 parity 规则 + 同形错误消息 = SoT 漂移风险；helper 化让单一事实之源从文档断言（"两处校验语义一致"）升级为代码 delegate |
 | 94 | 添加 contract 机械化强制 evolve CLI dispatch 中 `except ApplyTerminalError` 必须在 `except ValueError` / `except ConfigError` 之前。`MUST_PRECEDE` registry 与决策 #95 共同迁至**生产侧 introspection**（C-rev6 / 决策 #95）：M5 新结构化异常入栏时只需在异常类自身声明 `MUST_PRECEDE` ClassVar；测试合并到 `tests/evolve/test_decoupling.py`（不再单独 `test_cli_handler_order.py` 文件） | §5.3 | YELLOW-Y2 C-rev5：决策 #90 让 `ApplyTerminalError` 与 `pydantic.ValidationError` 解耦，但 isinstance 顺序仍 load-bearing（`ApplyTerminalError` 是 `ValueError` 子类）；handler 顺序写反会让 apply 业务终态被静默回归 exit 2，需 CI 拦截。**C-rev6 [SUPERSEDED-BY #95]**（测试侧 `HANDLER_ORDER_RULES` dict + 独立测试文件部分；contract 本身保留） |
-| 95 | **生产侧结构化-异常 + handler-order registries（introspection，非测试侧 dict）**：`STRUCTURED_KWARGS` 与 `MUST_PRECEDE` 作为 `ClassVar[frozenset[str]]` 直接声明在异常类自身（`nanobot/evolve/exceptions.py`）。测试 (`tests/evolve/test_decoupling.py`) 通过 `inspect.getmembers` 遍历 `nanobot.evolve.exceptions` 模块，自动发现所有声明 `STRUCTURED_KWARGS` 的类并对其 raise 点做 AST 断言；handler-order 测试同样合并到 `test_decoupling.py`（不再单独文件）。AST scanner 同时改进：(i) 支持 `ast.Attribute` 形态（`raise pkg.mod.Foo(...)`），(ii) 排除 `.venv` / `__pycache__` / `node_modules` / `dist` / `build` / `.tox` / `.nox` / `.mypy_cache` / `.ruff_cache` / `.pytest_cache` 目录，(iii) 增加 `nanobot/evolve/cli/*.py` 的 bare-except 禁令扫描 | §5.3 / §5.4.2 | C-rev6 闭合：Y-arch-1（registries 测试侧 → 生产侧 SoT 迁移）+ Y-arch-2（misleading "wraps" 注释 + `HANDLER_ORDER_RULES` 命名 → `MUST_PRECEDE_RULES` 重命名）+ Y-scope-2（避免单独 test 文件膨胀，合并到 `test_decoupling.py`）+ Y-corr-1（Attribute-form raises）+ Y-corr-4（bare-except 禁令）+ Y-corr-5（excluded dirs） |
-| 96 | **`--force` 真原子语义升级：`renameat2(RENAME_EXCHANGE)` + pre-flight sweep + parent-writable precondition**。Pre-step 0a: assert `output_dir.parent` writable，否则 exit 2。Pre-step 0b: rmtree 任何 `<output_dir>.old-*` / `<output_dir>.staging-*` 残留（前次 crash debris），失败 → exit 2 提示手动清理。Atomic swap: 优先用 `os.rename2(staging, output_dir, flags=RENAME_EXCHANGE)`（Linux ≥ 3.15 + ext4/btrfs/xfs）单 syscall 完成；不支持的平台（macOS、旧内核、tmpfs 等）回退至两步 `os.rename` 并在文档中显式标注 SIGKILL 窗口；下次 `--force` 由 pre-flight sweep 恢复。`shutil.rmtree(<output_dir>.old-*)` 包 try/except 仅 WARN（swap 已成功，残留是 cosmetic）| §4.4.2 / §5.1 `apply` | C-rev6 闭合：Y-corr-2（SIGKILL 窗口）+ Y-arch-3（parent-dir-writable precondition 缺）+ Y-arch-4（`.old-*` silent leak）。决策 #88 / §4.4.2 / §5.1 `apply` 的 atomicity 部分 **[SUPERSEDED-BY #96]** |
+| 95 | **生产侧结构化-异常 + handler-order registries（introspection，非测试侧 dict）**：`STRUCTURED_KWARGS` 与 `MUST_PRECEDE` 作为 `ClassVar[frozenset[str]]` 直接声明在异常类自身（`nanobot/evolve/exceptions.py`）。测试 (`tests/evolve/test_decoupling.py`) 通过 `inspect.getmembers` 遍历 `nanobot.evolve.exceptions` 模块，自动发现所有声明 `STRUCTURED_KWARGS` 的类并对其 raise 点做 AST 断言；handler-order 测试同样合并到 `test_decoupling.py`（不再单独文件）。AST scanner 同时改进：(i) 支持 `ast.Attribute` 形态（`raise pkg.mod.Foo(...)`），(ii) 排除 `.venv` / `__pycache__` / `node_modules` / `dist` / `build` / `.tox` / `.nox` / `.mypy_cache` / `.ruff_cache` / `.pytest_cache` 目录，(iii) 增加 `nanobot/evolve/cli/*.py` 的 bare-except 禁令扫描。**C-rev7 / Z2 澄清**：discovery helper 必须用 `cls.__dict__.get("STRUCTURED_KWARGS")` / `cls.__dict__.get("MUST_PRECEDE")`（**非** `getattr`），避免 MRO 继承导致子类被误识为声明者（基类 ClassVar 通过 MRO 渗透 → 子类被错误地加入 raise-point AST 断言集合）；同步增加 `test_must_precede_acyclic` 防止 registry 形成环 | §5.3 / §5.4.2 | C-rev6 闭合：Y-arch-1（registries 测试侧 → 生产侧 SoT 迁移）+ Y-arch-2（misleading "wraps" 注释 + `HANDLER_ORDER_RULES` 命名 → `MUST_PRECEDE_RULES` 重命名）+ Y-scope-2（避免单独 test 文件膨胀，合并到 `test_decoupling.py`）+ Y-corr-1（Attribute-form raises）+ Y-corr-4（bare-except 禁令）+ Y-corr-5（excluded dirs）。**C-rev7 闭合追加**：Y-corr-rev6-3（MRO 渗透 → `cls.__dict__.get()` 修正）+ Y-corr-rev6-4（cycle detection） |
+| 96 | **`--force` 真原子语义升级：`renameat2(RENAME_EXCHANGE)` + pre-flight sweep + parent-writable precondition**。Pre-step 0a: assert `output_dir.parent` writable（**C-rev7 / Z4 强化**：用 `R_OK \| W_OK \| X_OK` access check，并对 iterdir 包 try/except OSError），否则 exit 2。Pre-step 0b: rmtree 任何 `<output_dir>.old-*` / `<output_dir>.staging-*` 残留（前次 crash debris），失败 → exit 2 提示手动清理。Atomic swap: 优先用 `os.rename2(staging, output_dir, flags=RENAME_EXCHANGE)`（Linux ≥ 3.15 + ext4/btrfs/xfs）单 syscall 完成；不支持的平台（macOS、旧内核、tmpfs 等）回退至两步 `os.rename` 并在文档中显式标注 SIGKILL 窗口；下次 `--force` 由 pre-flight sweep 恢复。`shutil.rmtree(<output_dir>.old-*)` 包 try/except 仅 WARN（swap 已成功，残留是 cosmetic）。**C-rev7 / Z1 [AMENDED-BY #98]**：ctypes/libc 探测机制本身提取至 `nanobot/evolve/_atomic_swap.py` helper module（spec 描述合约，不内嵌 ctypes 验证代码）| §4.4.2 / §5.1 `apply` | C-rev6 闭合：Y-corr-2（SIGKILL 窗口）+ Y-arch-3（parent-dir-writable precondition 缺）+ Y-arch-4（`.old-*` silent leak）。决策 #88 / §4.4.2 / §5.1 `apply` 的 atomicity 部分 **[SUPERSEDED-BY #96]**。**C-rev7 闭合追加**：Y-c6-arch-1 + Y-corr-rev6-1 + Y-corr-rev6-2 + Y-corr-rev6-8 + R-impl-1（spec 内嵌 ctypes 代码 → helper module 抽取 #98）+ Y-corr-rev6-7（access mode 强化） |
 | 97 | **决策日志 grooming 约定**：见 §0.3.1。superseded 项以 `[SUPERSEDED-BY #N]` 后缀标记保留（不删；audit trail）；milestone 滚动 ≥ 3 个 milestone 才考虑收集到"历史决策"附录；编号 monotonic 不重排；rationale ≤ 5 行 | §0.3.1 | C-rev6 闭合：Y-arch-6（决策日志膨胀治理） |
+| 98 | **`_atomic_swap` helper module 抽取**：所有 `renameat2(RENAME_EXCHANGE)` 探测 + fallback 调度逻辑落在 `nanobot/evolve/_atomic_swap.py`（单文件 helper，使用 `ctypes.util.find_library("c")` 跨平台 libc 解析、`os.fsencode()` 处理 surrogateescape 路径、Linux `RENAME_EXCHANGE = 2` 常量），暴露 `try_atomic_swap(staging: Path, target: Path) -> Literal["renameat2", "fallback"]` 单一入口。Spec §4.4.2 仅描述 helper 合约（输入 / 返回值 / 错误传播 / SIGKILL 窗口标注），**不**内嵌 ctypes 验证片段。Helper module **不**引入新异常类 —— 环境性失败（libc 未找到、syscall ENOSYS 等）走决策 #100 的 `EvolveEnvironmentError`；fs 错误透传裸 `OSError` 由 §4.6 dispatch 表统一处理 | §4.4.2 / §5.1 | C-rev7 闭合：R-impl-1（spec 文本不应包含可执行 ctypes 代码）+ Y-c6-arch-1（mechanism vs contract 边界混淆）+ Y-corr-rev6-1（surrogateescape）+ Y-corr-rev6-2（libc 解析跨平台）+ Y-corr-rev6-8（platform-conditional 测试） |
+| 99 | **`MUST_PRECEDE` acyclic invariant + `STRUCTURED_KWARGS` no-MRO discovery**：见决策 #95 amend。Discovery 走 `cls.__dict__.get(...)`，DFS cycle detection 在 `test_must_precede_acyclic` 中机械化（含 self-loop + 长环情形）；非完整 contract 名（`raise self.X()` / `raise cls.X()`）由 `_resolve_raised_class_name` 直接拒绝，不进入 raise-point 集合（避免 NoneType 漏判） | §5.3 | C-rev7 闭合：Y-corr-rev6-3（MRO 渗透 false-positive）+ Y-corr-rev6-4（registry 环检测缺失）+ Y-corr-rev6-6（self/cls raise 解析 silent-pass） |
+| 100 | **`EvolveCliError` → `EvolveEnvironmentError` rename + drop `exit_code` 字段（Option A / Z5）**：library 层异常类**不**携带 CLI exit code 字段；exit code 归属由 §4.6 dispatch 表 + §5.3 异常→exit code 映射表是 SoT 决定（本类 → exit 2）。类身份（`isinstance(exc, EvolveEnvironmentError)`）是稳定 anchor，与 `ConfigError` / `ApplyTerminalError` / `JudgeError` 一致 layering。**Alternative B/C 未采纳**：(B) 保留 `exit_code` 字段让 CLI handler 直接消费 → library 层污染 CLI 语义、违反单一职责；(C) 引入 `CliExitCodeMixin` → 过度抽象（M4 仅 1 个 environmental error 类）。Option A 最低增量、最清晰 layering | §4.4.2 / §5.1 / §5.3 / §5.4.6 | C-rev7 闭合：Y-c6-arch-2（exit_code 字段是 CLI 语义泄漏到 library 层）+ Y-c6-arch-3（`EvolveCliError` 命名误导：暗示"CLI 通用错误" 实际仅环境前置）+ Y-corr-rev6-5（dispatch 表 SoT 未明确） |
 | *待 §6+ 起追加* | | | |
 
 ### 0.3.1 决策日志约定（C-rev6 / 决策 #97 / YELLOW-Y8 / Y-arch-6）
@@ -66,7 +69,7 @@
 
 3. **决策编号**：M1 至今 monotonic 递增，跨 milestone 不重置（已落地实践）。**永不**因为决策被 supersede 而重新编号 —— 编号是稳定的 issue tracker 锚点，下游 PR / commit message / spec 注释会用 `决策 #N` 引用，重编号会让所有引用失效。
 
-4. **Rationale 长度上限**：每条决策的 rationale 字段 ≤ 5 行散文。更长的讨论应放在当轮 reviewer-fix-brief 评论或对应 round 的 progress doc（如 `docs/hermes-evolution/retros/m4-offline-skeleton.md` 草稿）中；决策表保留浓缩理由。
+4. **Rationale 长度上限**：每条决策的 rationale 字段 ≤ 5 行散文。更长的讨论应放在当轮 reviewer-fix-brief 评论或对应 round 的 progress doc（如 `docs/hermes-evolution/retros/m4-offline-skeleton.md` 草稿）中；决策表保留浓缩理由。**Grandfather 条款（C-rev7 / Z7 / Y-c6-arch-5）**：本规则**仅**适用于 C-rev6 及以后新增 / 修订的决策（即 #95 起）。Pre-C-rev6 已落地的决策（含决策 #87 ~12 行的"替代方案考量"块）保留原始 rationale 长度 —— 决策日志的 audit-trail 稳定性高于本规则的格式统一；不为格式统一而追溯性修改已 committed 的 rationale 文本。
 
 5. **更新触发要求**：任何同时修改 §0.3 表与其它 spec 章节（§1–§14 / §0.2）的 PR，commit message 中必须分行列出涉及的决策编号；reviewer 检查时把"决策表 row" 视为契约 anchor。
 
@@ -1111,33 +1114,45 @@ nanobot evolve apply DOES NOT touch git, branches, or remotes by design.
 
 **`--force` 真原子语义（C-rev6 / 决策 #96；supersedes C-rev5 staging+os.rename two-step）**：
 
-**Pre-step 0a — parent-dir-writable 前置（Y-arch-3）**：
+**Pre-step 0a — parent-dir access 前置（Y-arch-3 + Y-corr-rev6-7 / Z4）**：
 
 ```python
 parent = output_dir.parent
-if not os.access(parent, os.W_OK):
-    raise EvolveCliError(
-        f"parent of {output_dir} not writable: {parent}; "
-        f"--force needs sibling staging slot",
-        exit_code=2,
+# Z4 / Y-corr-rev6-7：必须同时具备 R_OK | W_OK | X_OK；缺 R_OK 或 X_OK 时
+# pre-step 0b 的 iterdir() 会抛 PermissionError → 落 unmapped OSError → exit 6,
+# 破坏"pre-step → exit 2"契约。
+if not os.access(parent, os.R_OK | os.W_OK | os.X_OK):
+    raise EvolveEnvironmentError(
+        f"parent of {output_dir} not accessible (need R|W|X): {parent}; "
+        f"--force needs sibling staging slot + iterdir sweep"
     )
 ```
 
-`--force` 要求在 `output_dir.parent` 内构造 sibling staging 目录；parent 不可写直接 fail，不进入后续 swap 流程。
+`--force` 要求在 `output_dir.parent` 内构造 sibling staging 目录；parent 不可读 / 不可写 / 不可执行 直接 fail，不进入后续 swap 流程。
 
 **Pre-step 0b — pre-flight sweep `.old-*` / `.staging-*` 残留（Y-arch-4 / Y-corr-2 recovery）**：
 
 ```python
-for sibling in output_dir.parent.iterdir():
+# Z4 belt-and-suspenders：iterdir 自身亦可能抛 PermissionError / OSError；
+# pre-step 0a 已对 R|W|X 做硬前置，但 race（permissions 在两步之间变更）/
+# bind-mount 边界等仍可能让 iterdir 失败，统一映射到 exit 2 而非 unmapped exit 6.
+try:
+    siblings = list(output_dir.parent.iterdir())
+except OSError as e:
+    raise EvolveEnvironmentError(
+        f"cannot iterdir {output_dir.parent} for sweep: {e}; "
+        f"check parent permissions (R|W|X required)"
+    ) from e
+
+for sibling in siblings:
     if sibling.name.startswith(f"{output_dir.name}.old-") or \
        sibling.name.startswith(f"{output_dir.name}.staging-"):
         try:
             shutil.rmtree(sibling, ignore_errors=False)
             logger.info("pre-flight sweep removed stale debris: %s", sibling)
         except OSError as e:
-            raise EvolveCliError(
-                f"stale debris at {sibling} blocks --force; clean manually: {e}",
-                exit_code=2,
+            raise EvolveEnvironmentError(
+                f"stale debris at {sibling} blocks --force; clean manually: {e}"
             ) from e
 ```
 
@@ -1151,39 +1166,40 @@ for sibling in output_dir.parent.iterdir():
       （同 parent 目录确保 rename 在同一 mount）。
    b. 若 staging 构建失败（磁盘满 / `OSError` / `KeyboardInterrupt`）→ cleanup
       时 rmtree staging 目录、保留旧 `output_dir` 不变、向上 raise。
-   c. **Atomic swap**（preferred path，Linux ≥ 3.15 + ext4/btrfs/xfs）：
-      ```python
-      import ctypes, os
-      libc = ctypes.CDLL("libc.so.6", use_errno=True)
-      RENAME_EXCHANGE = 1 << 1  # 2
-      AT_FDCWD = -100
-      ret = libc.renameat2(
-          AT_FDCWD, str(staging).encode(),
-          AT_FDCWD, str(output_dir).encode(),
-          RENAME_EXCHANGE,
-      )
-      if ret != 0:
-          err = ctypes.get_errno()
-          # EINVAL on platforms without RENAME_EXCHANGE → fall through to fallback
-          if err == errno.EINVAL:
-              _fallback_two_step_rename(staging, output_dir)
-          else:
-              raise OSError(err, os.strerror(err))
-      ```
-      `RENAME_EXCHANGE` 让 staging 与 output_dir 在内核内**单 syscall** 原子互换——
-      crash 在 syscall 之前 / 之后是合法状态，无中间窗口。swap 后 staging 路径
-      指向旧 bundle 内容，重命名为 `<output_dir>.old-<run_id_short>` 准备 cleanup。
-   d. **Fallback path**（macOS / 旧 Linux 内核 / 非 ext/btrfs/xfs FS / `renameat2` syscall
-      不可用）：回退到 C-rev5 两步 `os.rename`：
-      ```python
-      os.rename(output_dir, f"{output_dir}.old-{run_id_short}")  # step c
-      os.rename(staging, output_dir)                              # step d
-      ```
-      **Caveat**：本路径在 step c 与 step d 之间存在 SIGKILL 窗口 ——
-      crash 留下 `output_dir` 缺失而 `.old-*` 存在的中间状态。该状态由**下次
-      `--force` 调用的 pre-step 0b sweep** 透明恢复（把 `.old-*` 视为 debris 清掉，
-      然后正常 build 到 `output_dir`）。除此之外，本 SIGKILL 窗口不会让 bundle
-      内容损坏（旧内容仍在 `.old-*` 内，新内容仍在 staging 内或已就位）。
+   c. **Atomic swap**（契约层；实现细节移至 `nanobot/evolve/_atomic_swap.py` helper —— 决策 #98 / Z1）：
+      在 Linux ≥ 3.15 配合 ext4 / btrfs / xfs 时，swap 通过 `renameat2(RENAME_EXCHANGE)`
+      单 syscall 完成 staging 与 output_dir 的原子互换 —— crash 在 syscall 之前或
+      之后均为合法状态，**无中间窗口**。在不支持的平台（macOS、Alpine/musl、*BSD、
+      pre-3.15 Linux、tmpfs 等）上自动回退到两步 `os.rename`，回退路径的 SIGKILL
+      窗口由下次 `--force` 调用的 pre-step 0b sweep 透明恢复。swap 后 staging 路径
+      指向旧 bundle 内容，命名为 `<output_dir>.old-<run_id_short>` 准备 cleanup。
+
+      **Helper 模块契约（`nanobot/evolve/_atomic_swap.py`，决策 #98 / Z1）** —— 详细
+      实现机制（含 ctypes 调用、errno 触发集合、libc 路径解析、路径编码）封装在
+      helper 内；spec 仅约束契约：
+        - 公共函数 `atomic_swap(src: Path, dst: Path) -> bool` —— 返回 `True` 当
+          `RENAME_EXCHANGE` 单 syscall 成功；返回 `False` 当 fallback 已 engaged
+          且两步 `os.rename` 完成。
+        - **lookup hardening**：以 `ctypes.util.find_library("c")` 解析 libc 位置
+          （**不**硬编码 `libc.so.6`），并把 `ctypes.CDLL(...)` 与 `libc.renameat2`
+          符号查找均包在 `try/except (OSError, AttributeError)` 中；任一失败立即
+          fallback。覆盖 macOS（无 `libc.so.6`）/ Alpine musl（`libc.musl-*.so.1`）/
+          *BSD（`libc.so.7`）/ pre-glibc-2.28（无 `renameat2` wrapper）。
+        - **fallback 触发 errno 集合**：`{errno.EINVAL, errno.ENOSYS, errno.ENOTSUP,
+          errno.EOPNOTSUPP}`；其它任何 errno → 以未映射 `OSError` 上抛（经 §4.6
+          dispatch 落 exit 6）。
+        - **路径编码**：以 `os.fsencode(path)` 处理 src / dst（**不**使用
+          `str(path).encode()`），兼容 surrogateescape 文件名与非 UTF-8
+          `PYTHONIOENCODING`。
+        - **跨 mount 前置**：caller 必须保证 src 与 dst 同 mount；当前 `--force`
+          流程通过"sibling 同 parent dir"已天然满足，helper 内不重复校验。
+   d. **Fallback path 契约**（caller-visible 行为）：当 `atomic_swap` 返回 `False`
+      （fallback engaged），保证 staging 与 output_dir 的"位置交换"语义不变，唯一
+      差异是中间存在 SIGKILL 窗口 —— crash 留下 `output_dir` 缺失而 `.old-*` 存在
+      的中间状态。该状态由**下次 `--force` 调用的 pre-step 0b sweep** 透明恢复
+      （把 `.old-*` 视为 debris 清掉，然后正常 build 到 `output_dir`）。除此之外，
+      SIGKILL 窗口不会让 bundle 内容损坏（旧内容仍在 `.old-*` 内，新内容仍在
+      staging 内或已就位）。
    e. `shutil.rmtree(<output_dir>.old-<run_id_short>)` —— 包 try/except 仅 WARN，
       不 raise（swap 已成功，残留是 cosmetic；下次 `--force` 的 pre-step 0b 会再清）：
       ```python
@@ -1533,7 +1549,7 @@ class OfflineHarness:
             ApplyTerminalError: manifest.final_status != 'promoted_to_pr'（**exit 8**，apply 业务终态；决策 #88 / #90 YELLOW-Y5）。专属异常与 `pydantic.ValidationError`（亦 `ValueError` 子类）解耦
             ManifestPrivacyViolation: manifest 含 §3.7.1 禁字段（exit 4）
             FileExistsError: output_dir 已存在且 force=False（**exit 6**，filesystem 可纠正前置；决策 #88，原 8 → 6）
-            EvolveCliError(exit=2): `--force` 时 pre-step 0a parent-dir-writable 失败 / pre-step 0b sweep 残留无法清理（C-rev6 / 决策 #96）；用户应纠正环境后重试
+            EvolveEnvironmentError: `--force` 时 pre-step 0a parent-dir access 失败 / pre-step 0b iterdir 或 sweep 残留无法清理（C-rev6 / 决策 #96；C-rev7 / 决策 #100 重命名自 `EvolveCliError`，drop `exit_code` 字段 — 类身份是 SoT，exit 2 由 §4.6 CLI dispatch 隐式归属）；用户应纠正环境后重试
             OSError: `--force` 时 staging 构建或 swap (`renameat2` / fallback `os.rename`) 失败（**exit 6**，C-rev6 / 决策 #96）；调用方可纠正后重试
             KeyboardInterrupt: `--force` staging 阶段中断 → cleanup staging 目录后 propagate；不映射到固定 exit code
         """
@@ -1636,59 +1652,19 @@ def record_self_eval(
            `ManifestPrivacyViolation`。
         3. **Directory creation + atomic write**（仅当 precondition 通过）。
 
-        测试契约（`tests/evolve/test_record_self_eval.py::test_disabled_no_fs_probe`，
-        YELLOW-Y7 C-rev4 扩展）：
+        **测试契约（Z9 / Y-prod-2 — 实现住 `tests/evolve/test_record_self_eval.py::test_disabled_no_fs_probe`，spec 仅约束契约）**：disabled fast-path **不得**触发任何文件系统 syscall。测试以 monkeypatch 把以下 7 个 syscall 挂为 `pytest.fail`，调用 `record_self_eval(..., config.evolve.self_eval_enabled=False)`，任一被命中即 fast-path 契约破裂：
 
-        ```python
-        import os, pathlib, pytest
+        - `os.stat`
+        - `os.open`
+        - `os.mkdir`
+        - `os.listdir`
+        - `os.scandir`
+        - `pathlib.Path.mkdir`（belt-and-suspenders；底层走 `os.stat` 但单独捕获防 patch 顺序漏检）
+        - `pathlib.Path.exists`（同上）
 
-        # 7 个被显式 monkeypatch 的 fs syscall（每个 patch 出口直接 pytest.fail）。
-        # 任一被命中即整个 disabled fast-path contract 破裂。
-        FS_SYSCALLS_PROHIBITED = [
-            ("os", "stat"),
-            ("os", "open"),
-            ("os", "mkdir"),
-            ("os", "listdir"),
-            ("os", "scandir"),
-            # pathlib 层（belt-and-suspenders，即便底层走 os.stat 也单独捕获）
-            ("pathlib.Path", "mkdir"),
-            ("pathlib.Path", "exists"),
-        ]
+        相比 C-rev3 仅 patch `os.stat` 的窄覆盖，本 7-syscall 集合阻止未来贡献者用 `os.mkdir(...)` / `Path.exists()` 等绕过。
 
-        def test_disabled_no_fs_probe(tmp_path, monkeypatch):
-            # config.evolve.self_eval_enabled 默认 False
-            def _make_fail(name: str):
-                def _fail(*a, **kw):
-                    pytest.fail(
-                        f"disabled fast-path attempted fs syscall: {name}"
-                    )
-                return _fail
-
-            monkeypatch.setattr(os, "stat", _make_fail("os.stat"))
-            monkeypatch.setattr(os, "open", _make_fail("os.open"))
-            monkeypatch.setattr(os, "mkdir", _make_fail("os.mkdir"))
-            monkeypatch.setattr(os, "listdir", _make_fail("os.listdir"))
-            monkeypatch.setattr(os, "scandir", _make_fail("os.scandir"))
-            monkeypatch.setattr(pathlib.Path, "mkdir", _make_fail("pathlib.Path.mkdir"))
-            monkeypatch.setattr(pathlib.Path, "exists", _make_fail("pathlib.Path.exists"))
-
-            # disabled fast-path 应当**完全不**触发任何上述 syscall + **不**抛异常
-            record_self_eval(
-                task_id="t1",
-                input={}, output={}, verdict={"passed": True},
-                workspace=tmp_path,
-            )
-        ```
-        覆盖 7 个 syscall 名字（`os.stat` / `os.open` / `os.mkdir` / `os.listdir` /
-        `os.scandir` / `pathlib.Path.mkdir` / `pathlib.Path.exists`），相比 C-rev3
-        仅 patch `os.stat` 的窄覆盖，能阻止未来贡献者用 `os.mkdir(...)` /
-        `Path.exists()` 等绕过；`pathlib.Path.exists` 虽然底层走 `os.stat` 也单独
-        patch 作 belt-and-suspenders（防 patch 顺序 / 缓存导致漏检）。
-
-        **POSIX 限定（YELLOW-Y3 / C-rev5）**：本测试 monkeypatch 的 7 个 syscall
-        覆盖 Linux/macOS CI 的 `builtins.open` 走 `os.open` 内部路径。Windows 走
-        `_winapi.CreateFile` 不在本测试覆盖范围；当前 CI 仅 Linux，Windows CI 若
-        M5 引入需补 `_winapi.CreateFile` monkeypatch 或改用 `pyfakefs` 重写。
+        **POSIX 限定（YELLOW-Y3 / C-rev5）**：上述 7 个 syscall 覆盖 Linux/macOS CI 的 `builtins.open` 走 `os.open` 内部路径。Windows 走 `_winapi.CreateFile` 不在本测试覆盖范围；当前 CI 仅 Linux，Windows CI 若 M5 引入需补 `_winapi.CreateFile` monkeypatch 或改用 `pyfakefs` 重写。
 
     Atomicity & concurrency contract:
         - 三个文件（`input.json` / `output.json` / `verdict.json`）各自走
@@ -1778,7 +1754,8 @@ class ApplyTerminalError(ValueError):
     这就是 handler-order 契约存在的原因 —— 若 CLI dispatch 把 `except ValueError:`
     写在 `except ApplyTerminalError:` 之前，本异常会被静默归到 exit 2 而非 exit 8。
     `pydantic.ValidationError` 同为 `ValueError` 子类；CLI 已通过 wrap 转 `ConfigError`
-    路径处理（详见 §5.3 dispatch 表）。
+    路径处理（详见本节末尾「异常 → CLI 退出码映射」表 + `pydantic.ValidationError`
+    包装详解段；COH-002 / Z8 — 正式 anchor 替代旧 "§5.3 dispatch 表" 简写）。
 
     构造参数:
       message:       人读说明
@@ -1792,8 +1769,10 @@ class ApplyTerminalError(ValueError):
         `tests/evolve/test_decoupling.py` introspection 读取，无须测试侧
         硬编码 dict）。
       - `MUST_PRECEDE`：CLI dispatch try/except 中**必须**在以下任一 `except <X>:`
-        子句之**前**捕获本异常，否则触发隐式 isinstance 屏蔽（详见 §5.3
-        dispatch-order contract）。
+        子句之**前**捕获本异常，否则触发隐式 isinstance 屏蔽（机械化执行 test
+        见 §5.3 末尾 `test_cli_handler_order_in_evolve_dispatch` 契约段 + 异常 →
+        CLI 退出码映射表；COH-002 / Z8 — 正式 anchor 替代旧 "§5.3 dispatch-order
+        contract" 简写）。
     """
     STRUCTURED_KWARGS: ClassVar[frozenset[str]] = frozenset({"final_status", "manifest_path"})
     MUST_PRECEDE: ClassVar[frozenset[str]] = frozenset({"ValueError", "ConfigError"})
@@ -1842,21 +1821,24 @@ class ManifestPrivacyViolation(RuntimeError):
         self.offending_path = offending_path
         self.offending_fields = offending_fields or []
 
-class EvolveCliError(RuntimeError):
-    """CLI 前置环境失败（C-rev6 / 决策 #96）。专用于 `--force` 的 pre-step 0a
-    parent-dir-writable 与 pre-step 0b stale-debris sweep 等"环境不就绪"错误,
-    与 `ConfigError`（参数错误）和裸 `OSError`（运行时 fs 错）区分；CLI handler
-    在 isinstance 分支直接读取 `exit_code` 字段映射 exit。
+class EvolveEnvironmentError(RuntimeError):
+    """CLI 前置环境失败（C-rev6 / 决策 #96；C-rev7 / 决策 #100 重命名自
+    `EvolveCliError` + drop `exit_code` 字段 / Z5）。专用于 `--force` 的
+    pre-step 0a parent-dir access 与 pre-step 0b stale-debris sweep 等
+    "环境不就绪"错误，与 `ConfigError`（参数错误）和裸 `OSError`（运行时
+    fs 错）区分。
+
+    **Layering 决策（决策 #100 Option A / Z5）**：本类位于 `nanobot/evolve/exceptions.py`
+    library 层；CLI 退出码归属由 §4.6 dispatch 表 + §5.3 异常→exit code 映射
+    表是 SoT 决定（本类 → exit 2）。本类**不**携带 `exit_code` 字段 —— 类
+    身份本身即是 exit-code 的稳定 anchor，外部 CI 通过
+    `isinstance(exc, EvolveEnvironmentError)` 捕获并按表查 exit code（与
+    `ConfigError` / `ApplyTerminalError` / `JudgeError` 一致的 layering）。
 
     构造参数:
       message:    人读说明
-      exit_code:  CLI 直接退出码（典型 2；调用方按场景指定）
     """
-    STRUCTURED_KWARGS: ClassVar[frozenset[str]] = frozenset({"exit_code"})
-
-    def __init__(self, message: str, *, exit_code: int) -> None:
-        super().__init__(message)
-        self.exit_code = exit_code
+    STRUCTURED_KWARGS: ClassVar[frozenset[str]] = frozenset()
 
 class ConfigError(ValueError):
     """`EvolveDefaults` / `RubricWeights` / `JudgePool` / CLI 参数互斥违反等；CLI exit 2。
@@ -1929,20 +1911,31 @@ def test_precondition_incomplete_gitignore(tmp_path):
 
 `STRUCTURED_KWARGS` 与 `MUST_PRECEDE` 不再以测试侧硬编码 dict 形式存在；它们是每个异常类自身的 `ClassVar[frozenset[str]]` 属性（详见 §5.3 异常定义）。测试通过 `inspect.getmembers(nanobot.evolve.exceptions, inspect.isclass)` 在导入时自动发现所有声明这两个属性的异常类。M5 引入新结构化异常（如 `GateRejected` / `JudgeQuorumFailure`），只需在异常类上声明 `STRUCTURED_KWARGS` / `MUST_PRECEDE`，**无须**改测试 —— registry 由生产侧 SoT 驱动。
 
+**Test contract（Z9 / Y-prod-1 — 实现见 `tests/evolve/test_decoupling.py`，spec 仅约束契约 + helper 签名）**：
+
+测试模块（canonical 实现路径 `tests/evolve/test_decoupling.py`）由以下 5 个独立断言构成；spec 仅锁定每条契约的语义与 helper API 签名，verbatim test bodies / fixtures / assert 语句以代码 SoT 为准（避免 spec 与 test code 双向漂移）：
+
+1. `test_structured_exc_kwargs_present` —— 扫描 `nanobot/` + `tests/`，对每个 `raise X(...)` / `raise mod.X(...)`（不含 self/cls 间接），如 `X.__dict__` 含 `STRUCTURED_KWARGS: frozenset[str]`，则 `**kwargs` spread 不允许，且 missing kwargs ⊆ 空集。
+2. `test_cli_handler_order_in_evolve_dispatch` —— 扫描 `nanobot/cli/commands.py` 内所有 `try` 块，按 `MUST_PRECEDE` 关系断言 `except <specific>` 出现 index 严格小于 `except <ancestor>` 出现 index。
+3. `test_no_bare_except_in_evolve_cli` —— 拒绝 `nanobot/evolve/cli/*.py`（fallback `nanobot/cli/`）下任何 `except:` / `except BaseException:` / 含 `BaseException` 的 tuple handler。
+4. `test_no_self_raises_in_evolve` —— 拒绝 `nanobot/evolve/**/*.py` 下任何 `raise self.X(...)` / `raise cls.X(...)`。
+5. `test_must_precede_acyclic` —— 对 `_discover_must_precede()` 返回的图做 DFS 环检测，循环即 fail 并打印 cycle path。
+
+**Helper API 签名（spec-locked，实现住 test module）**：
+
 ```python
-# tests/evolve/test_decoupling.py 中与 §5.4.2 同模块
+# tests/evolve/test_decoupling.py — API surface only
+
 import ast
 import inspect
-import itertools
 from pathlib import Path
 from typing import ClassVar, Iterator
 
 import nanobot.evolve.exceptions as _evolve_exc
 
-# Directories to exclude from AST scan (Y-corr-5 / C-rev6).
-# Frozen set declared as ClassVar attribute on test class so future contributors
-# can discover and extend without grep'ing for magic literals.
 class _ScannerConfig:
+    """AST scan 排除目录集合；frozenset ClassVar 让 M5 contributor 可发现并扩展。
+    保留在 spec 是因为此集合是测试契约的一部分（决定扫描覆盖范围）。"""
     EXCLUDED_DIRS: ClassVar[frozenset[str]] = frozenset({
         ".venv", "venv",
         "__pycache__",
@@ -1952,164 +1945,88 @@ class _ScannerConfig:
         ".mypy_cache", ".ruff_cache", ".pytest_cache",
     })
 
+
 def _iter_py_files(root: Path) -> Iterator[Path]:
     """Walk root.rglob('*.py') skipping EXCLUDED_DIRS at any depth."""
-    for path in root.rglob("*.py"):
-        if any(part in _ScannerConfig.EXCLUDED_DIRS for part in path.parts):
-            continue
-        yield path
 
 
 def _discover_structured_kwargs() -> dict[str, frozenset[str]]:
-    """Build STRUCTURED_KWARGS dict by introspecting production exception module."""
-    out: dict[str, frozenset[str]] = {}
-    for name, cls in inspect.getmembers(_evolve_exc, inspect.isclass):
-        kwargs = getattr(cls, "STRUCTURED_KWARGS", None)
-        if isinstance(kwargs, frozenset):
-            out[name] = kwargs
-    return out
+    """Build {cls_name: STRUCTURED_KWARGS frozenset} from production exception
+    module via introspection. **MUST use `cls.__dict__.get(...)` (NOT
+    `getattr(cls, ...)`)** — ClassVar registries are NOT inherited via MRO
+    (Z2 / Y-corr-rev6-4 / 决策 #99): a subclass with a different `__init__`
+    signature would silently inherit a parent frozenset that doesn't match its
+    own ctor kwargs, defeating the AST contract. Each exception subclass MUST
+    redeclare its own frozenset."""
 
 
 def _discover_must_precede() -> dict[str, frozenset[str]]:
-    """Build MUST_PRECEDE_RULES dict by introspecting production exception module."""
-    out: dict[str, frozenset[str]] = {}
-    for name, cls in inspect.getmembers(_evolve_exc, inspect.isclass):
-        rules = getattr(cls, "MUST_PRECEDE", None)
-        if isinstance(rules, frozenset):
-            out[name] = rules
-    return out
+    """Build {cls_name: MUST_PRECEDE frozenset} via introspection. Same
+    `cls.__dict__.get(...)` semantics as `_discover_structured_kwargs` —
+    no MRO inheritance allowed."""
 
 
 def _resolve_raised_class_name(call: ast.Call) -> str | None:
-    """Extract the class name from a `raise <expr>(...)` AST Call (Y-corr-1 / C-rev6).
-
-    Handles both `ast.Name` (`raise Foo(...)`) and `ast.Attribute`
-    (`raise pkg.mod.Foo(...)`) forms. The latter is fully legal Python
-    that the C-rev5 scanner silently skipped, missing fully-qualified raises.
-    """
-    func = call.func
-    if isinstance(func, ast.Name):
-        return func.id
-    if isinstance(func, ast.Attribute):
-        # Walk to the rightmost attribute name (e.g. nanobot.evolve.errors.Foo → "Foo")
-        return func.attr
-    return None
+    """Extract class name from `raise <expr>(...)` AST Call. Handles
+    `ast.Name` (`raise Foo(...)`) and `ast.Attribute` (`raise mod.Foo(...)`).
+    Returns None for `self.X(...)` / `cls.X(...)` forms (Z3 / Y-corr-rev6-5):
+    AST cannot resolve runtime attribute routing — companion test
+    `test_no_self_raises_in_evolve` rejects such forms outright."""
 
 
 def _walk_raise_sites(tree: ast.AST) -> Iterator[ast.Raise]:
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
-            yield node
-
-
-def test_structured_exc_kwargs_present():
-    """Every raise of a class declaring STRUCTURED_KWARGS must pass all required kwargs.
-
-    Catches positional-only / **kwargs-spread / Attribute-form raises that bypass
-    the structured contract. Run across nanobot/ and tests/ to catch fixture drift.
-    """
-    registry = _discover_structured_kwargs()
-    assert registry, "no STRUCTURED_KWARGS-bearing classes discovered — registry empty?"
-    for path in itertools.chain(
-        _iter_py_files(REPO / "nanobot"),
-        _iter_py_files(REPO / "tests"),
-    ):
-        tree = ast.parse(path.read_text())
-        for raise_node in _walk_raise_sites(tree):
-            call = raise_node.exc
-            exc_name = _resolve_raised_class_name(call)
-            if exc_name is None:
-                continue
-            required = registry.get(exc_name)
-            if required is None:
-                continue
-            # Reject **kwargs spread — defeats the contract
-            has_kw_spread = any(kw.arg is None for kw in call.keywords)
-            assert not has_kw_spread, (
-                f"{path}:{raise_node.lineno}: `raise {exc_name}(**...)` "
-                f"bypasses structured-kwargs contract"
-            )
-            actual = {kw.arg for kw in call.keywords if kw.arg is not None}
-            missing = required - actual
-            assert not missing, (
-                f"{path}:{raise_node.lineno}: `raise {exc_name}` missing kwargs {missing}"
-            )
+    """Yield every `raise X(...)` (ast.Raise with .exc being ast.Call)."""
 
 
 def _enclosing_try_handlers(tree: ast.AST) -> Iterator[ast.Try]:
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Try):
-            yield node
+    """Yield every ast.Try node (for handler-order scan)."""
 
 
-def test_cli_handler_order_in_evolve_dispatch():
-    """C-rev6 / 决策 #95 merged in from former test_cli_handler_order.py.
+# ─── Test functions (canonical bodies live in tests/evolve/test_decoupling.py) ───
 
-    Reads MUST_PRECEDE_RULES from production-side ClassVar registry (无测试侧
-    hard-coded dict)。
-    """
-    rules = _discover_must_precede()
-    assert rules, "no MUST_PRECEDE-bearing classes discovered — registry empty?"
-    cli_path = REPO / "nanobot" / "cli" / "commands.py"
-    tree = ast.parse(cli_path.read_text())
-    for try_node in _enclosing_try_handlers(tree):
-        handlers = try_node.handlers
-        type_seq: list[str] = []
-        for h in handlers:
-            if h.type is None:  # bare except (also caught by separate test below)
-                type_seq.append("__bare__")
-            elif isinstance(h.type, ast.Name):
-                type_seq.append(h.type.id)
-            elif isinstance(h.type, ast.Tuple):
-                for elt in h.type.elts:
-                    if isinstance(elt, ast.Name):
-                        type_seq.append(elt.id)
-        for specific, ancestors in rules.items():
-            if specific not in type_seq:
-                continue
-            specific_idx = type_seq.index(specific)
-            for anc in ancestors:
-                if anc in type_seq:
-                    anc_idx = type_seq.index(anc)
-                    assert specific_idx < anc_idx, (
-                        f"{cli_path}: `except {specific}` must come BEFORE `except {anc}` "
-                        f"(found {specific} at handler {specific_idx}, {anc} at {anc_idx}). "
-                        f"See 决策 #90 / #95 / §5.3 dispatch-order contract."
-                    )
+def test_structured_exc_kwargs_present(): ...
+# Contract: walks _iter_py_files(REPO/"nanobot") + REPO/"tests"; for every
+# raise site where the resolved class name has a STRUCTURED_KWARGS frozenset,
+# assert `**kwargs` spread is absent AND required kwargs ⊆ actual kwargs.
+# Asserts registry non-empty to catch silent introspection failure.
 
+def test_cli_handler_order_in_evolve_dispatch(): ...
+# Contract: walks every ast.Try in nanobot/cli/commands.py; for each MUST_PRECEDE
+# entry (specific → {ancestors}), asserts specific's handler index < every present
+# ancestor's index. Asserts rules non-empty (silent-failure guard).
 
-def test_no_bare_except_in_evolve_cli():
-    """Y-corr-4 / C-rev6: bare `except:` in evolve CLI dispatch breaks exit-code
-    stratification by swallowing KeyboardInterrupt / SystemExit.
+def test_no_bare_except_in_evolve_cli(): ...
+# Contract (Y-corr-4 / Z3 / Y-corr-rev6-6): in nanobot/evolve/cli/*.py
+# (fallback nanobot/cli/), reject any ExceptHandler with type=None,
+# type=ast.Name(id="BaseException"), or type=ast.Tuple containing
+# Name(id="BaseException"). All three swallow KeyboardInterrupt/SystemExit
+# equivalently — same exit-code-stratification harm.
 
-    Walks every ast.ExceptHandler under nanobot/evolve/cli/*.py and fails if
-    any has type=None (bare except).
-    """
-    cli_dir = REPO / "nanobot" / "evolve" / "cli"
-    if not cli_dir.is_dir():
-        # cli subdir may not exist if CLI handlers live in nanobot/cli/commands.py;
-        # in that case scan that file instead for evolve dispatch sub-tree
-        cli_dir = REPO / "nanobot" / "cli"
-    for path in _iter_py_files(cli_dir):
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ExceptHandler) and node.type is None:
-                raise AssertionError(
-                    f"{path}:{node.lineno}: bare `except:` is banned in evolve CLI "
-                    f"dispatch (Y-corr-4 / C-rev6); use specific exception class."
-                )
+def test_no_self_raises_in_evolve(): ...
+# Contract (Z3 / Y-corr-rev6-5): walks nanobot/evolve/**/*.py raise sites;
+# reject any whose .exc.func is ast.Attribute with value=ast.Name(id in
+# {"self","cls"}). Forces direct raise so AST contract holds.
+
+def test_must_precede_acyclic(): ...
+# Contract (Z2 / Y-corr-rev6-3 / 决策 #99): DFS cycle-check on
+# _discover_must_precede() graph at module-load time. Cycle → AssertionError
+# naming the offending path. Catches the impossibility-to-satisfy condition
+# independently of CLI dispatch site (which only surfaces it when both
+# offending classes appear in same try-block).
 ```
 
 实现要点：
 
-1. **生产侧 SoT（C-rev6 / 决策 #95）**：`STRUCTURED_KWARGS` 与 `MUST_PRECEDE` 是异常类自身的 `ClassVar[frozenset[str]]`。测试 introspection 自动发现，**无须**测试侧硬编码 dict。M5 增异常 → 只在异常类上声明属性即可。
-2. **`MUST_PRECEDE_RULES` 命名（Y-arch-2）**：旧 `HANDLER_ORDER_RULES` 命名误导（暗示"规则集"）；新命名 `MUST_PRECEDE_RULES`（dict）/ `MUST_PRECEDE`（ClassVar）反映实际语义"X 必须在 Y 之前被捕获"。
+1. **生产侧 SoT（C-rev6 / 决策 #95）**：`STRUCTURED_KWARGS` 与 `MUST_PRECEDE` 是异常类自身的 `ClassVar[frozenset[str]]`。测试 introspection 自动发现，**无须**测试侧硬编码 dict。M5 增异常 → 只在异常类上声明属性即可。**ClassVar 不经 MRO 继承（Z2 / Y-corr-rev6-4 / 决策 #99）**：discovery helper 使用 `cls.__dict__.get(...)`（而非 `getattr(cls, ...)`）—— 每个异常子类**必须**重新声明自己的 `STRUCTURED_KWARGS` / `MUST_PRECEDE` frozenset。若依赖 MRO 继承，子类与父类 `__init__` 签名不一致时会静默漂移（父类的 frozenset 不匹配子类自己的 ctor kwargs），破坏 AST 契约。
+2. **`MUST_PRECEDE_RULES` 命名（Y-arch-2）**：旧 `HANDLER_ORDER_RULES` 命名误导（暗示"规则集"）；新命名 `MUST_PRECEDE_RULES`（dict，由 `_discover_must_precede()` 返回，测试中按惯例命名 `rules` 局部变量；COH-004 / Z8 澄清）/ `MUST_PRECEDE`（ClassVar）反映实际语义"X 必须在 Y 之前被捕获"。
 3. **Attribute-form raises（Y-corr-1）**：`_resolve_raised_class_name` 同时处理 `ast.Name`（`raise Foo(...)`）与 `ast.Attribute`（`raise pkg.mod.Foo(...)`）。C-rev5 scanner 仅处理前者，会漏掉合法但少见的全限定形态。
 4. **EXCLUDED_DIRS（Y-corr-5）**：扫描跳过 `.venv` / `__pycache__` / `node_modules` / `dist` / `build` / `.tox` / `.nox` / `.mypy_cache` / `.ruff_cache` / `.pytest_cache`。集合作为 `ClassVar[frozenset[str]]` 暴露在 `_ScannerConfig` 上，扩展时可发现。
-5. **Bare-except 禁令（Y-corr-4）**：独立 test 用 `ast.ExceptHandler` walk 拒绝 `nanobot/evolve/cli/*.py`（或 fallback `nanobot/cli/`）下的 `except:` 裸捕获 —— 会吞 `KeyboardInterrupt` / `SystemExit`，破坏 exit-code 分流。
-6. **覆盖范围**：structured-kwargs scan 覆盖 `nanobot/` + `tests/`；handler-order scan 仅 `nanobot/cli/commands.py`；bare-except scan 限 evolve CLI 目录（避免无关 try/except 噪声）。
-7. **合并旧 `test_cli_handler_order.py`（Y-scope-2 / C-rev6）**：~6 个 assertion 不值新文件；并入 `test_decoupling.py` 让"decoupling/dispatch 契约"集中维护。
-8. **registry 非空断言**：`assert registry, ...` / `assert rules, ...` 防止 introspection 静默返回空 dict（如生产侧 import 失败 / 属性命名漂移）让所有断言被跳过。
+5. **Bare-except 禁令（Y-corr-4）+ BaseException 等价禁令（Z3 / Y-corr-rev6-6）**：独立 test 用 `ast.ExceptHandler` walk 拒绝 `nanobot/evolve/cli/*.py`（或 fallback `nanobot/cli/`）下的 `except:` 裸捕获，**以及** `except BaseException:` / 含 `BaseException` 的 tuple —— 三种形式都吞 `KeyboardInterrupt` / `SystemExit`，对 exit-code 分流的破坏度等价，故统一同条 test 处理。
+6. **`raise self.X(...)` / `raise cls.X(...)` 禁令（Z3 / Y-corr-rev6-5）**：独立 test `test_no_self_raises_in_evolve` 拒绝 evolve 代码中通过 `self` / `cls` 属性间接 raise 的形态 —— AST 无法解析运行时属性路由的类身份，使 `STRUCTURED_KWARGS` AST 契约被绕过。强制要求 `raise X(...)` 或 `raise mod.X(...)` 两种可静态解析的形态，与 bare-except / BaseException 禁令同源（都为保护 exit-code 分层契约）。
+7. **MUST_PRECEDE 无环（Z2 / Y-corr-rev6-3 / 决策 #99）**：独立 test `test_must_precede_acyclic` 在模块加载期对 `_discover_must_precede()` 返回的图做 DFS / 拓扑序检查；环（如 `A.MUST_PRECEDE={"B"}` + `B.MUST_PRECEDE={"A"}`）即逻辑上不可满足，无须等 CLI dispatch 测试触发才暴露 —— 提前在 unit 层 fail-loud 并附 cycle path。
+8. **覆盖范围**：structured-kwargs scan 覆盖 `nanobot/` + `tests/`；handler-order scan 仅 `nanobot/cli/commands.py`；bare-except / BaseException / self-raise scan 限 evolve（CLI 目录 + `nanobot/evolve/**`），避免无关 try/except 噪声。
+9. **合并旧 `test_cli_handler_order.py`（Y-scope-2 / C-rev6）**：~6 个 assertion 不值新文件；并入 `test_decoupling.py` 让"decoupling/dispatch 契约"集中维护。
+10. **registry 非空断言**：`assert registry, ...` / `assert rules, ...` 防止 introspection 静默返回空 dict（如生产侧 import 失败 / 属性命名漂移）让所有断言被跳过。
 
 历史：C-rev3 窄扫描（仅 `ManifestPrivacyViolation`）→ C-rev5 测试侧 registry dict generalize → C-rev6 生产侧 introspection。每次升级都让"漏注册即失保护"的窗口更窄：测试侧 dict 时漏改测试即失保护；生产侧 ClassVar 时漏在异常类上声明即失保护（更接近 declaration-site，与 PR diff 同位）。
 
@@ -2126,6 +2043,7 @@ def test_no_bare_except_in_evolve_cli():
 | `ManifestPrivacyViolation` | 4 | `run` / `apply` / `record_self_eval` | 不重试，需修复 manifest 生成代码或 bootstrap .gitignore |
 | `BaselineMismatch` | 7 | `run` | **绝不重试**，harness invariant 破裂，报 bug |
 | `ApplyTerminalError`（`apply` 时 `manifest.final_status != promoted_to_pr`；决策 #90 YELLOW-Y5） | **8（决策 #88：apply 业务终态，narrowed）** | `apply` | 不重试，候选未通过 gate；专属异常与 `pydantic.ValidationError` 解耦 |
+| `EvolveEnvironmentError`（`apply --force` 时 pre-step 0a parent-dir access 失败 / pre-step 0b iterdir 或 sweep 失败；决策 #96 + #100 / C-rev7 / Z5） | **2** | `apply` | 用户应纠正环境（权限 / 残留）后重试 |
 | `OSError` | 6 | `init` / 任意 | 视情况（磁盘满 / 权限）人工处理 |
 
 未在表中列出的 Python 异常 → 兜底 exit 1（CLI traceback 入日志）。
@@ -2313,7 +2231,7 @@ M3 / M4 是两条独立 lane（§1.3）：
          'EvolveExtraNotInstalled', 'BaselineMismatch',
          'JudgeError', 'ManifestPrivacyViolation', 'ConfigError',
          'ApplyTerminalError',
-         'EvolveCliError',  # C-rev6 / 决策 #96
+         'EvolveEnvironmentError',  # C-rev7 / 决策 #100 — renamed from EvolveCliError
      }
      # YELLOW-Y7 (C-rev5): two-way equality on __all__ — catches both missing
      # and extraneous entries. Old subset check (expected - actual) silently
@@ -2447,14 +2365,14 @@ __all__ = [
     "ApplyTerminalError",
     "ManifestPrivacyViolation",
     "ConfigError",
-    "EvolveCliError",
+    "EvolveEnvironmentError",
 ]
 ```
 
-**`__all__` 公共表面（Y-arch-7 / C-rev6 — 取消硬编码 magic-number narrative）**：
-公共表面的精确名称集合是 `tests/evolve/test_probe_no_extra.py` 中的 `expected_all` 集合（详见 §5.4.5 step 6 探针；C-rev6 起包括 `EvolveCliError`）—— 该 fixture 是**单一事实之源**，narrative 不再重复列出 magic count（旧文案的"19 names"易在 C-rev / M5 增删时静默漂移）。任何 `__all__` 的增删都会让探针的 two-way equality 断言失败（YELLOW-Y7 C-rev5 引入），要求 PR 在同一 commit 同步更新 (a) 探针 `expected_all` 集合，(b) §0.3 新增 Decision 解释为什么调整。本段不再陈述精确 count，避免数字漂移。
+**`__all__` 公共表面（Y-arch-7 / C-rev6 — 取消硬编码 magic-number narrative；Z6 / Y-c6-arch-4 SoT 澄清）**：
+公共表面的精确名称集合是 `tests/evolve/test_probe_no_extra.py` 中的 `expected_all` 集合（详见 §5.4.5 step 6 探针；C-rev7 起包括 `EvolveEnvironmentError` 替代 `EvolveCliError`，决策 #100 / Z5）—— 该 fixture 是**审查侧**的稳定锚点，**不是**生产侧 `__all__` 运行时 SoT。`expected_all` 与 `nanobot.evolve.__all__`（生产侧 SoT）两侧维持 two-way equality 断言（YELLOW-Y7 C-rev5 引入），目的是让任何 `__all__` 的增删都必须**同步**编辑 expected_all —— 这样生产侧改动在 PR diff 中必然附带 test diff 与 §0.3 决策 entry，reviewer 能从 diff 直接看出公共表面变化。生产侧 `__all__` 仍是 import-time SoT；`expected_all` 是 review snapshot peer（同决策 #91 `EXPECTED_*` dict 同源的"双向锁"模式）。本段不再陈述精确 count，避免数字漂移。
 
-迁移说明 — C-rev6 起 `__all__` 包含 `EvolveCliError`：`EvolveCliError`（决策 #96）是 `apply --force` pre-step 0a/0b 失败 / 任何 CLI 前置环境失败的稳定异常类，外部 CI / 测试需 isinstance 捕获并读 `exit_code` 字段。
+迁移说明 — C-rev7 起 `__all__` 包含 `EvolveEnvironmentError`（C-rev6 → C-rev7 重命名自 `EvolveCliError`，决策 #100 / Z5）：`EvolveEnvironmentError`（决策 #96 + #100）是 `apply --force` pre-step 0a/0b 失败 / 任何 CLI 前置环境失败的稳定异常类；外部 CI / 测试通过 `isinstance(exc, EvolveEnvironmentError)` 精确捕获，exit code 归属由 §4.6 dispatch 表统一管理（→ exit 2）—— 类自身**不**携带 `exit_code` 字段（C-rev7 layering 修复：library 异常不持有 CLI-层语义）。
 
 **`init_workspace` 在 `__all__` 的理由（YELLOW-13）**：pytest fixtures 与外部脚本（如 M5 docs 中的 `evolve_quickstart` 示例）会直接调此函数，**不**先实例化 `OfflineHarness`。这是 deliberate 公开 API，不是误进。append-only 稳定性契约同样适用 —— rename / 改签名都需走 deprecation cycle（一个 minor 版本周期保留旧符号 + DeprecationWarning）。
 
