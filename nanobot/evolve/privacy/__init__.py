@@ -9,6 +9,7 @@ from nanobot.evolve.privacy.redact import (
     HOME_WIN_RE,
     OPENAI_KEY_RE,
     PHONE_RE,
+    VAR_FOLDERS_RE,
     RedactionResult,
     redact,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "HOME_WIN_RE",
     "OPENAI_KEY_RE",
     "PHONE_RE",
+    "VAR_FOLDERS_RE",
     "RedactionResult",
     "redact",
 ]

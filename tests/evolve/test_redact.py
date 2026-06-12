@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 import pytest
@@ -38,8 +39,16 @@ def test_anthropic_key_redacted_not_openai():
 
 
 def test_openai_key_redacted():
-    # Mixed alnum (no long digit-run) so the upstream PHONE_RE in stage 1
-    # does not pre-consume the digits inside the key.
+    """Modern ``sk-proj-`` shape (current OpenAI default for project keys)."""
+    src = "OPENAI_API_KEY=sk-proj-AbCdEf12Gh34Ij56Kl78MnOpQrStUv0123"
+    r = redact(src)
+    assert "[REDACTED:APIKEY:OPENAI]" in r.text
+    assert r.matches["apikey:openai"] == 1
+    assert "sk-proj-" not in r.text
+
+
+def test_openai_key_legacy_shape_redacted():
+    """Legacy synthetic ``sk-AbCdEf...`` shape — regression coverage."""
     result = redact("token=sk-AbCdEf12Gh34Ij56Kl78Mn")
     assert "[REDACTED:APIKEY:OPENAI]" in result.text
     assert result.matches.get("apikey:openai", 0) == 1
@@ -50,9 +59,26 @@ def test_github_pat_redacted():
     assert "[REDACTED:APIKEY:GITHUB]" in result.text
 
 
+def test_github_pat_new_format_redacted():
+    """Fine-grained ``github_pat_`` shape (Y3): 11-char prefix + 82-char body."""
+    # github_pat_ + 82 body chars = 93 total after the literal prefix.
+    body = "11ABCDEFG" + "a" * 73  # 9 + 73 = 82
+    src = f"auth=github_pat_{body}"
+    r = redact(src)
+    assert "[REDACTED:APIKEY:GITHUB]" in r.text
+    assert r.matches["apikey:github"] == 1
+
+
 def test_aws_key_redacted():
     result = redact("AKIAIOSFODNN7EXAMPLE")
     assert "[REDACTED:APIKEY:AWS]" in result.text
+
+
+def test_aws_asia_temp_creds_redacted():
+    """Y4: STS temp credentials use the ``ASIA`` prefix."""
+    r = redact("aws_session=ASIAIOSFODNN7EXAMPLE")
+    assert "[REDACTED:APIKEY:AWS]" in r.text
+    assert r.matches["apikey:aws"] == 1
 
 
 # CRITICAL — anchors the t-17 regression test referenced in §9.4 commentary.
@@ -79,16 +105,83 @@ def test_home_path_nix_redacted():
     assert "bob" not in result.text
 
 
+def test_home_path_nix_eos_redacted():
+    """R6: ``/Users/alice`` at end-of-string must redact (no trailing slash)."""
+    r = redact("see /Users/alice")
+    assert "alice" not in r.text
+    assert r.matches.get("path:home_nix", 0) >= 1
+
+
+def test_home_path_root_redacted():
+    """R4: bare ``/root`` home dir."""
+    r = redact("cwd /root/work/file.txt")
+    assert "/root/work" not in r.text
+    assert r.matches.get("path:home_nix", 0) >= 1
+
+
+def test_home_path_volumes_redacted():
+    """R4: ``/Volumes/...`` macOS external mounts."""
+    r = redact("on /Volumes/Backup/data.bin go")
+    assert "/Volumes/Backup" not in r.text
+    assert r.matches.get("path:home_nix", 0) >= 1
+
+
+def test_var_folders_redacted():
+    """R4: macOS ephemeral ``/var/folders/...`` and ``/private/var/folders/...``."""
+    r = redact("temp at /var/folders/xq/abc123/T/tmpfile and /private/var/folders/y_/d/e/x")
+    assert "/var/folders/xq" not in r.text
+    assert "/private/var/folders/y_" not in r.text
+    assert r.matches.get("path:var_folders", 0) >= 2
+
+
 def test_home_path_win_redacted():
-    result = redact("C:\\Users\\Alice\\Documents\\file")
-    assert "C:\\<REDACTED_HOME>\\" in result.text
-    assert "Alice" not in result.text
+    """R7: exact-equality on redacted output; no double-backslash artifact."""
+    r = redact("C:\\Users\\Alice\\Documents\\file")
+    assert r.text == "C:\\<REDACTED_HOME>\\Documents\\file"
+    assert "Alice" not in r.text
+    assert r.matches["path:home_win"] == 1
+
+
+def test_home_path_win_lowercase_drive_redacted():
+    """R5: case-insensitive drive + ``users``."""
+    r = redact("path c:\\users\\bob\\stuff")
+    assert "bob" not in r.text
+    assert r.matches.get("path:home_win", 0) == 1
+
+
+def test_home_path_win_forward_slash_redacted():
+    """R5: Windows-style path with forward-slash separators."""
+    r = redact("see C:/Users/Carol/notes")
+    assert "Carol" not in r.text
+    assert r.matches.get("path:home_win", 0) == 1
 
 
 # ---------------------------------------------------------------------------
-# Stage ordering / interaction
+# Stage ordering / interaction (R8 — these tests MUST bite)
 # ---------------------------------------------------------------------------
-def test_stage_order_pii_before_apikey():
+def test_stage_order_apikey_specificity_preserved():
+    """If PII stage ran before apikey AND PHONE_RE had no lookbehind, the digit
+    run in ``sk-ant-...`` would be consumed as a phone. This test bites if
+    either stage ordering changes OR the PHONE_RE lookbehind regresses (R1+R8)."""
+    src = "key=sk-ant-1234567890abcdefghij done"
+    r = redact(src)
+    assert r.matches.get("apikey:anthropic", 0) == 1
+    assert r.matches.get("phone", 0) == 0
+    assert "[REDACTED:APIKEY:ANTHROPIC]" in r.text
+    assert "sk-ant-1234567890abcdefghij" not in r.text
+
+
+def test_audit_trail_correct_for_github_pat_with_digit_run():
+    """§9.3 sidecar correctness: ``github_pat_...`` containing a digit run
+    must report ``apikey:github == 1`` and ``phone == 0`` (R8b)."""
+    body = "11ABCDEFG0123456789" + "a" * 63  # 19 + 63 = 82
+    src = f"use github_pat_{body} here"
+    r = redact(src)
+    assert r.matches.get("apikey:github", 0) == 1
+    assert r.matches.get("phone", 0) == 0
+
+
+def test_stage_order_pii_email_and_apikey():
     """Email + API key in same input must both redact cleanly, no interference."""
     result = redact("alice@example.com used sk-AbCdEf12Gh34Ij56Kl78Mn")
     assert "[REDACTED:EMAIL]" in result.text
@@ -102,6 +195,19 @@ def test_custom_pattern_applied_last():
     result = redact("see PROJ-42", custom_patterns=custom)
     assert "[REDACTED:PROJECT]" in result.text
     assert result.matches["project"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Idempotence (Y5)
+# ---------------------------------------------------------------------------
+def test_redact_is_idempotent():
+    """Round-2 Y5: redact(redact(x)) == redact(x) and second-pass matches
+    are empty (the placeholder tokens themselves are not secrets)."""
+    src = "alice@example.com and sk-AbCdEf12Gh34Ij56Kl78Mn"
+    r1 = redact(src)
+    r2 = redact(r1.text)
+    assert r2.text == r1.text
+    assert r2.matches == {} or all(v == 0 for v in r2.matches.values())
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +235,15 @@ def test_custom_pattern_amplification_raises():
     assert exc_info.value.violated_invariant == "§9.4 redaction stage failure"
 
 
+def test_amplification_message_pins_3x_threshold():
+    """Y6: the literal ``3`` must appear in the amplification message so a
+    silent threshold drift (e.g. to 5x) is caught."""
+    custom = [("amp", re.compile(r"a"), "x" * 100)]
+    with pytest.raises(ManifestPrivacyViolation) as exc:
+        redact("a" * 100, custom_patterns=custom)
+    assert "3" in str(exc.value)
+
+
 def test_empty_text_no_amplification():
     """Empty input must not trip the amplification guard (divide-by-zero edge)."""
     result = redact("")
@@ -144,6 +259,28 @@ def test_keyboard_interrupt_propagates():
 
     custom = [("ki", re.compile(r"x"), boom)]
     with pytest.raises(KeyboardInterrupt):
+        redact("xxx", custom_patterns=custom)
+
+
+def test_system_exit_propagates():
+    """Y2: SystemExit raised inside a stage callable must propagate untouched."""
+
+    def boom(_m: re.Match[str]) -> str:
+        raise SystemExit(2)
+
+    custom = [("sysexit", re.compile(r"x"), boom)]
+    with pytest.raises(SystemExit):
+        redact("xxx", custom_patterns=custom)
+
+
+def test_cancelled_error_propagates():
+    """Y2: asyncio.CancelledError raised inside a stage must propagate untouched."""
+
+    def boom(_m: re.Match[str]) -> str:
+        raise asyncio.CancelledError
+
+    custom = [("cancelled", re.compile(r"x"), boom)]
+    with pytest.raises(asyncio.CancelledError):
         redact("xxx", custom_patterns=custom)
 
 

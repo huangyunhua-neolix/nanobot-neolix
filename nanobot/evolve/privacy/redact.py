@@ -6,7 +6,7 @@ Spec refs: m4-offline-skeleton §9.2 (stage order), §9.3 (sidecar audit),
 Stage order is fixed:
     1. PII          (email, phone)
     2. apikey       (anthropic BEFORE openai, then github, aws)
-    3. file-path    (POSIX-style home dirs, Windows home dirs)
+    3. file-path    (POSIX-style home dirs, Windows home dirs, /var/folders)
     4. custom       (caller-supplied (label, pattern, replacement) tuples)
 
 Each stage is wrapped: any non-system exception is re-raised as
@@ -31,25 +31,55 @@ from nanobot.evolve.exceptions import ManifestPrivacyViolation
 # Stage 1: PII
 # ---------------------------------------------------------------------------
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-PHONE_RE = re.compile(r"\+?\d[\d\-\s().]{7,}\d")
+# PHONE_RE uses negative lookbehind / lookahead so it ONLY matches digit runs
+# that are not embedded inside identifier-like tokens. Without these guards,
+# ``sk-ant-1234567890abcdef...`` would match the digit run and corrupt the
+# downstream apikey stage (round-2 R1). Real phone numbers are typically
+# preceded by whitespace, line start, ``(`` or ``+`` — none of which trip
+# the lookbehind.
+PHONE_RE = re.compile(r"(?<![A-Za-z_\-])\+?\d[\d\-\s().]{7,}\d(?![A-Za-z_\-])")
 
 # ---------------------------------------------------------------------------
 # Stage 2: API keys.
-# ANTHROPIC_KEY_RE MUST be applied before OPENAI_KEY_RE; otherwise the more
-# permissive ``sk-[A-Za-z0-9]{20,}`` pattern would swallow ``sk-ant-...``.
+# Specificity ordering: ANTHROPIC_KEY_RE MUST run before OPENAI_KEY_RE, because
+# both share the ``sk-`` prefix and the openai pattern is now permissive enough
+# (modern ``sk-proj-``/``sk-svcacct-``/``sk-admin-`` shapes contain hyphens) to
+# swallow ``sk-ant-...`` if executed first. The stage-2 function below pins
+# this ordering — do NOT reorder without re-validating
+# ``test_anthropic_key_redacted_not_openai`` and the round-2 R1/R8 anchors.
 # Note: ``claude-*`` model identifiers do NOT match either pattern (no
-# ``sk-`` prefix) — this is anchored by `test_claude_model_id_not_redacted`.
+# ``sk-`` prefix) — this is anchored by ``test_claude_model_id_not_redacted``.
 # ---------------------------------------------------------------------------
 ANTHROPIC_KEY_RE = re.compile(r"sk-ant-[A-Za-z0-9\-]{20,}")
-OPENAI_KEY_RE = re.compile(r"sk-[A-Za-z0-9]{20,}")
-GITHUB_PAT_RE = re.compile(r"ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,}")
-AWS_KEY_RE = re.compile(r"AKIA[0-9A-Z]{16}")
+# Accepts both legacy ``sk-AbCdEf...`` and modern hyphenated prefixes
+# (``sk-proj-``, ``sk-svcacct-``, ``sk-admin-``, ``sk-None-``). Allowing
+# hyphens / underscores in the body covers project-key shapes that include
+# internal separators.
+OPENAI_KEY_RE = re.compile(r"sk-(?:proj-|svcacct-|admin-|None-)?[A-Za-z0-9_\-]{20,}")
+# GitHub PAT shapes:
+#   - Classic: ``ghp_`` + 36 alnum
+#   - Fine-grained: ``github_pat_`` + exactly 82 chars of [A-Za-z0-9_]
+# Word-boundary anchors prevent eating trailing context.
+GITHUB_PAT_RE = re.compile(r"ghp_[A-Za-z0-9]{36}\b|github_pat_[A-Za-z0-9_]{82}\b")
+# AWS access-key-ID prefixes (all 8): IAM user, STS temp, group, user, role,
+# instance-profile, managed-policy, virtual-MFA. Body is fixed 16 [0-9A-Z].
+AWS_KEY_RE = re.compile(r"(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[0-9A-Z]{16}")
 
 # ---------------------------------------------------------------------------
-# Stage 3: file paths (home directories).
+# Stage 3: file paths (home directories + ephemeral macOS dirs).
+# HOME_NIX_RE: ``/home``, ``/Users``, ``/Volumes`` and bare ``/root`` —
+# end-anchor allows trailing slash, word-boundary OR end-of-string so
+# ``/Users/alice`` at EOS gets redacted (round-2 R6).
+# HOME_WIN_RE: any drive letter (case-insensitive), forward OR backslash
+# separators — handles ``c:\users\bob``, ``C:/Users/Alice``, etc. (round-2 R5).
+# VAR_FOLDERS_RE: macOS ephemeral temp dirs ``/var/folders/xx/yy/...`` and the
+# ``/private`` mount-point variant.
 # ---------------------------------------------------------------------------
-HOME_NIX_RE = re.compile(r"/(?:home|Users)/[^/\s]+/")
-HOME_WIN_RE = re.compile(r"C:\\Users\\[^\\\s]+\\")
+HOME_NIX_RE = re.compile(r"/(?:home|Users|Volumes|root)(?:/[^/\s]+)?(?:/|\b|$)")
+HOME_WIN_RE = re.compile(r"[A-Za-z]:[/\\]Users[/\\][^/\\\s]+[/\\]?", re.IGNORECASE)
+VAR_FOLDERS_RE = re.compile(
+    r"/(?:private/)?var/folders/[A-Za-z0-9_+]+/[A-Za-z0-9_+]+(?:/[^\s]*)?"
+)
 
 
 __all__ = [
@@ -61,6 +91,7 @@ __all__ = [
     "AWS_KEY_RE",
     "HOME_NIX_RE",
     "HOME_WIN_RE",
+    "VAR_FOLDERS_RE",
     "RedactionResult",
     "redact",
 ]
@@ -82,7 +113,8 @@ class RedactionResult:
         Per-label substitution counts. Zero-count labels are omitted.
         Keys: ``"email"``, ``"phone"``, ``"apikey:anthropic"``,
         ``"apikey:openai"``, ``"apikey:github"``, ``"apikey:aws"``,
-        ``"path:home_nix"``, ``"path:home_win"``, plus any custom labels.
+        ``"path:home_nix"``, ``"path:home_win"``, ``"path:var_folders"``,
+        plus any custom labels.
     """
 
     text: str
@@ -90,6 +122,20 @@ class RedactionResult:
 
 
 _INVARIANT = "§9.4 redaction stage failure"
+
+
+def _redact_win_home(m: re.Match[str]) -> str:
+    """Preserve the original drive prefix and trailing separator semantics.
+
+    Round-2 R7: the original ``r"C:\\<REDACTED_HOME>\\\\"`` raw-string
+    replacement produced a double-trailing-backslash artifact and hard-coded
+    the drive letter. A callable lets us echo back the drive (``c:`` or
+    ``C:``) and whether the match consumed a trailing separator.
+    """
+    s = m.group(0)
+    drive = s[:2]  # e.g. "C:", "c:", "D:"
+    tail_sep = s[-1] if s and s[-1] in ("/", "\\") else ""
+    return f"{drive}\\<REDACTED_HOME>{tail_sep}"
 
 
 def _apply(
@@ -169,7 +215,8 @@ def redact(
 
     out = _run_stage("pii", lambda: _stage_pii(out))
 
-    # Stage 2: API keys. Anthropic first to preserve specificity.
+    # Stage 2: API keys. Anthropic first to preserve specificity (see
+    # stage-2 header comment for the full rationale).
     def _stage_apikey(s: str) -> str:
         s = _apply(
             s, ANTHROPIC_KEY_RE, "[REDACTED:APIKEY:ANTHROPIC]", "apikey:anthropic", matches
@@ -181,10 +228,15 @@ def redact(
 
     out = _run_stage("apikey", lambda: _stage_apikey(out))
 
-    # Stage 3: file paths
+    # Stage 3: file paths. HOME_WIN_RE FIRST so that a Windows path with
+    # forward-slash separators (``C:/Users/Carol/notes``) isn't pre-consumed
+    # by HOME_NIX_RE — the drive-letter prefix is the more specific marker.
+    # VAR_FOLDERS_RE before HOME_NIX_RE for the same reason (``/var/folders/...``
+    # would otherwise hit no rule cleanly; explicit takes precedence).
     def _stage_path(s: str) -> str:
+        s = _apply(s, HOME_WIN_RE, _redact_win_home, "path:home_win", matches)
+        s = _apply(s, VAR_FOLDERS_RE, "/<REDACTED:VAR_FOLDERS>", "path:var_folders", matches)
         s = _apply(s, HOME_NIX_RE, "/<REDACTED_HOME>/", "path:home_nix", matches)
-        s = _apply(s, HOME_WIN_RE, r"C:\<REDACTED_HOME>\\", "path:home_win", matches)
         return s
 
     out = _run_stage("file-path", lambda: _stage_path(out))
@@ -199,7 +251,8 @@ def redact(
         out = _run_stage("custom", lambda: _stage_custom(out))
 
     # Amplification guard (§9.4). Skip when input is empty to avoid the
-    # degenerate "any output is infinite expansion" case.
+    # degenerate "any output is infinite expansion" case. The 3x threshold
+    # is pinned in this message for `test_amplification_message_pins_3x_threshold`.
     if len(text) > 0 and len(out) > 3 * len(text):
         factor = len(out) / len(text)
         raise ManifestPrivacyViolation(
