@@ -352,3 +352,82 @@ def test_compute_cohen_kappa_bins_4_smoke() -> None:
     human = [0.1, 0.4, 0.6, 0.9]
     judge = [0.1, 0.4, 0.6, 0.9]
     assert compute_cohen_kappa(human, judge, bins=4) == pytest.approx(1.0, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# R3-6 — κ boundary verdict (exact 0.6 + epsilon underflow + true sub-threshold)
+# ---------------------------------------------------------------------------
+#
+# These tests inject a known per-axis κ by monkey-patching
+# ``compute_cohen_kappa`` in the calibration module so the verdict logic can be
+# exercised at exactly the threshold and just inside / outside the epsilon
+# tolerance, without having to hand-construct corpora that arithmetically land
+# on the FP boundary.
+
+
+def _patch_kappa_mean(monkeypatch: pytest.MonkeyPatch, target_kappa: float) -> None:
+    """Force every per-axis κ to ``target_kappa`` so the mean is also that
+    value (mean of three equal numbers). Spec axes are process / output / token
+    — all three iterations call ``compute_cohen_kappa`` exactly once."""
+    from nanobot.evolve.judges import calibration as _cal
+
+    def _fixed_kappa(
+        human: list[float], judge: list[float], *, bins: int = 3
+    ) -> float:
+        return target_kappa
+
+    monkeypatch.setattr(_cal, "compute_cohen_kappa", _fixed_kappa)
+
+
+def _trivial_records_and_pool() -> tuple[list[CalibrationRecord], _StubPool]:
+    records = [
+        _mk_record("r1", 0.5, 0.5, 0.5),
+        _mk_record("r2", 0.5, 0.5, 0.5),
+    ]
+    pool = _StubPool(
+        canned={
+            "r1": _mk_score(0.5, 0.5, 0.5),
+            "r2": _mk_score(0.5, 0.5, 0.5),
+        }
+    )
+    return records, pool
+
+
+def test_calibrate_passes_at_kappa_exactly_0_6(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """κ_mean == 0.6 → verdict=True (Landis & Koch threshold is INCLUSIVE)."""
+    _patch_kappa_mean(monkeypatch, 0.6)
+    records, pool = _trivial_records_and_pool()
+    report = calibrate(records, pool)
+    assert report.kappa_mean == pytest.approx(0.6, abs=1e-12)
+    assert report.passed is True
+
+
+def test_calibrate_passes_just_below_0_6_within_epsilon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """κ_mean = 0.6 - 5e-10 (within the 1e-9 epsilon) → verdict=True.
+
+    Guards against FP-underflow false-fails on borderline corpora where the
+    true κ is exactly 0.6 but accumulates ~1e-16 rounding error through
+    mean/3.
+    """
+    _patch_kappa_mean(monkeypatch, 0.6 - 5e-10)
+    records, pool = _trivial_records_and_pool()
+    report = calibrate(records, pool)
+    assert report.passed is True
+
+
+def test_calibrate_fails_below_epsilon_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """κ_mean = 0.6 - 1e-3 (well outside the epsilon) → verdict=False.
+
+    Confirms the epsilon is genuinely tiny (not so wide it lets meaningfully-
+    sub-threshold corpora pass).
+    """
+    _patch_kappa_mean(monkeypatch, 0.6 - 1e-3)
+    records, pool = _trivial_records_and_pool()
+    report = calibrate(records, pool)
+    assert report.passed is False

@@ -27,6 +27,12 @@ from nanobot.evolve.schemas import RubricScore
 # rounds to 0.6 as the hard gate.
 CALIBRATION_KAPPA_THRESHOLD: float = 0.6
 
+# Threshold-compare tolerance. Landis & Koch threshold is inclusive (κ ≥ 0.6);
+# FP accumulation in per-axis κ + mean/3 can underflow 0.6 by ~1e-16 on
+# borderline corpora, so a tiny epsilon prevents spurious calibration failures
+# when the true κ is exactly at the boundary.
+_KAPPA_EPSILON: float = 1e-9
+
 # Rubric axes evaluated per record. Mirrors RubricScore non-aggregate fields
 # (§7.2 — process / output / token are the 3 axes; ``aggregate`` is the
 # pre-computed scalar and is not κ'd independently).
@@ -86,13 +92,23 @@ def _bin_cutoffs(bins: int) -> list[float]:
 
     DUAL CONVENTION (intentional, do not "unify"):
 
-    * ``bins == 3`` — returns LITERAL ``[0.33, 0.66]`` (truncated-decimal form
-      pinned by spec §7.2 / decision #124). This is the production path.
-      Note the deliberate ~0.003 gap vs the mathematical thirds
-      ``[1/3, 2/3] ≈ [0.3333…, 0.6666…]`` — values in ``[1/3, 0.33)`` land in
-      bin 0 under this convention, not bin 1. The truncated form is what the
-      human-labelling guideline shipped to annotators uses, so the κ math
+    * ``bins == 3`` — returns the SPEC-PINNED LITERAL ``[0.33, 0.66]`` (the
+      truncated-decimal form from spec §7.2 / decision #124, NOT mathematical
+      thirds ``[1/3, 2/3] ≈ [0.3333…, 0.6666…]``). The truncated form is what
+      the human-labelling guideline shipped to annotators uses, so the κ math
       must match it exactly or human/judge bin assignments diverge silently.
+      This is the production path.
+
+      Concrete worked examples (under ``bisect_right([0.33, 0.66], v)``):
+
+        * ``_bin_index(0.33, 3)`` → 1 (0.33 is NOT strictly less than 0.33;
+          ``bisect_right`` places the equal value past the cutoff).
+        * ``_bin_index(0.333, 3)`` → 1 (0.333 > 0.33, past first cutoff).
+        * ``_bin_index(0.3333, 3)`` → 1 (the mathematical 1/3 lands in bin 1
+          because 0.3333 > 0.33 — there is a ~0.003 quantization gap rounding
+          DOWN from mathematical thirds to the spec-pinned cutoffs).
+        * ``_bin_index(0.32, 3)`` → 0 (0.32 < 0.33, before first cutoff).
+
     * ``bins != 3`` — equal-width fallback ``[i / bins for i in 1..bins-1]``
       (e.g. bins=4 → ``[0.25, 0.5, 0.75]``). Provided for future rubric
       revisions; NOT spec-pinned and NOT exercised by the production gate.
@@ -200,5 +216,5 @@ def calibrate(records: list[CalibrationRecord], pool: _JudgeScorer) -> Calibrati
     return CalibrationReport(
         kappa_mean=kappa_mean,
         kappa_per_axis=kappa_per_axis,
-        passed=kappa_mean >= CALIBRATION_KAPPA_THRESHOLD,
+        passed=kappa_mean >= CALIBRATION_KAPPA_THRESHOLD - _KAPPA_EPSILON,
     )
