@@ -72,7 +72,12 @@ class JudgeError(EvolveError, RuntimeError):
 
 # noqa: N818 — spec §5.3 verbatim name
 class ManifestPrivacyViolation(EvolveError, RuntimeError):  # noqa: N818
-    STRUCTURED_KWARGS: ClassVar[frozenset[str]] = frozenset({"violated_invariant"})
+    # All three kw-only fields of __init__ are part of the public structured
+    # surface — consumers iterating STRUCTURED_KWARGS to e.g. log structured
+    # context need the full set; under-declaration would silently drop fields.
+    STRUCTURED_KWARGS: ClassVar[frozenset[str]] = frozenset(
+        {"violated_invariant", "offending_path", "offending_fields"}
+    )
     MUST_PRECEDE: ClassVar[frozenset[str]] = frozenset({"RuntimeError"})
 
     def __init__(

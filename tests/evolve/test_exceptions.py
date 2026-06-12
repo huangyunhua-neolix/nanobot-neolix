@@ -101,6 +101,17 @@ def test_manifest_privacy_violation_ctor():
     assert inst.offending_fields == ["email", "phone"]
 
 
+def test_manifest_privacy_violation_structured_kwargs_complete():
+    """R3-8: STRUCTURED_KWARGS must enumerate every kw-only field of __init__.
+
+    Pins the contract going forward — under-declaration would silently drop
+    fields for consumers that iterate the set (e.g. structured log handlers).
+    """
+    assert ManifestPrivacyViolation.STRUCTURED_KWARGS == frozenset(
+        {"violated_invariant", "offending_path", "offending_fields"}
+    )
+
+
 def test_manifest_privacy_violation_message_positional_or_kwarg():
     pos = ManifestPrivacyViolation("m", violated_invariant="inv")
     kw = ManifestPrivacyViolation(message="m", violated_invariant="inv")
