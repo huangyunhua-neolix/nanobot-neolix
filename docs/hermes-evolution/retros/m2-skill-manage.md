@@ -1,7 +1,7 @@
 # M2 skill_manage 回顾
 
 > 完成日期：2026-06-12 · PR #4（15 个 plan task + 4 轮 reviewer fix + 1 处 spec erratum）
-> 规模：37 commits / 36 files / +7110 −37 · R4 149 passed / 1 platform-skipped · R5 ruff 0 issue · R6 仅 3 个非 M2 触及文件的 pre-existing failure
+> 规模：37 commits (34 non-merge + 3 merge) / 36 files / +7110 −37 · R4 149 passed / 1 platform-skipped · R5 ruff 0 issue · R6 仅 3 个非 M2 触及文件的 pre-existing failure
 
 ## 与设计的偏差
 
