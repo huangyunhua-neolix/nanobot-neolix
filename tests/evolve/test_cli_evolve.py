@@ -356,3 +356,84 @@ def test_run_init_not_implemented_raises_runtime_exit():
     # NotImplementedError subclasses RuntimeError → exit 1.
     rc = evolve_cli.dispatch(args)
     assert rc == 1
+
+
+def test_run_report_not_implemented_raises_runtime_exit():
+    """Mirror of init coverage — report stub MUST land on EXIT_RUNTIME (T16-FIX-2)."""
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report", "run-abc"])
+    rc = evolve_cli.dispatch(args)
+    assert rc == evolve_cli.EXIT_RUNTIME
+
+
+def test_run_apply_not_implemented_raises_runtime_exit():
+    """Mirror of init coverage — apply stub MUST land on EXIT_RUNTIME (T16-FIX-2)."""
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "apply", "run-xyz"])
+    rc = evolve_cli.dispatch(args)
+    assert rc == evolve_cli.EXIT_RUNTIME
+
+
+# ---------------------------------------------------------------------------
+# typer-shim integration (T16-FIX-2)
+#
+# nanobot/cli/commands.py registers an ``evolve`` typer command that
+# prepends ``"evolve"`` to ctx.args, runs argparse register/dispatch, and
+# translates the int return code into ``typer.Exit(rc)``. The shim is the
+# actual user surface (``nanobot evolve ...``) — exercise it directly.
+# ---------------------------------------------------------------------------
+
+
+def test_typer_shim_evolve_help_lists_subcommands():
+    """The typer shim must hand --help through to argparse and exit cleanly."""
+    from typer.testing import CliRunner
+
+    from nanobot.cli.commands import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["evolve", "--help"])
+    # argparse --help exits 0 via SystemExit; typer translates to exit_code 0.
+    assert result.exit_code == 0
+    # argparse writes --help to stdout; CliRunner captures via .output.
+    out = result.output
+    for sub in ("init", "run", "report", "apply"):
+        assert sub in out, f"subcommand {sub!r} missing from help: {out!r}"
+
+
+def test_typer_shim_propagates_dispatch_exit_code(monkeypatch):
+    """Synthetic ``dispatch`` override returning 4 must surface as exit_code 4."""
+    from typer.testing import CliRunner
+
+    from nanobot.cli import evolve as _evolve
+    from nanobot.cli.commands import app
+
+    monkeypatch.setattr(_evolve, "dispatch", lambda _args: 4)
+
+    runner = CliRunner()
+    # init is a registered subcommand with no required flags so argparse
+    # parsing succeeds; the patched dispatch then returns 4.
+    result = runner.invoke(app, ["evolve", "init"])
+    assert result.exit_code == 4
+
+
+def test_typer_shim_run_missing_workspace_returns_config_exit(tmp_path):
+    """End-to-end: nonexistent workspace path → ConfigError → exit 2."""
+    from typer.testing import CliRunner
+
+    from nanobot.cli.commands import app
+
+    missing = tmp_path / "nope"
+    runner = CliRunner()
+    result = runner.invoke(app, ["evolve", "run", "--workspace", str(missing)])
+    assert result.exit_code == evolve_cli.EXIT_CONFIG
+
+
+def test_typer_shim_run_valid_workspace_returns_zero(tmp_path):
+    """End-to-end: valid workspace dir → run_run → exit 0."""
+    from typer.testing import CliRunner
+
+    from nanobot.cli.commands import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["evolve", "run", "--workspace", str(tmp_path)])
+    assert result.exit_code == evolve_cli.EXIT_OK
