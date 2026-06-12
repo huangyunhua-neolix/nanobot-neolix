@@ -2,7 +2,7 @@
 
 > **Milestone**：M4（离线进化骨架）。属于 [Hermes 风格自我进化能力路线图](../roadmap.md) 的第四阶段。
 >
-> **状态**：草稿中（2026-06-12，C-rev15 §6 fix pass：闭合 C-rev14 reviewer round 中 3 条 ≥60% confidence must-fix YELLOW（C-Y1 `GATE_TIMEOUT_MS_HARD` 未定义 / C-Y2 `test_no_orphan_gate_subclass` scope 不全 / C-Y3 `gepa_iteration` cross-link 行号漂移）；6 条 50–55% confidence advisory YELLOW 按 C-rev10/11/13 sanctioned 路线 carry-forward 至新增 §12.5（CF-C-rev15-1..6）；新增决策 #122（`Gate.__init_subclass__` 注册表，承载 RF-2 选项 b）。本轮触发 CF-C-rev11-1 hard threshold（§12 register 累计 ≥10 未关闭 entry，post-rev15 ≈ 14），已登记于 CF-C-rev15-5 待 C-rev16 / 下一非-§6 round 执行抽离选项。§0 决策已锁定，§0–§5 已 4-reviewer 收敛 PASS，body §6 已 7-subsection drafted + C-rev14/15 reviewer-fix 双轮落地，§6 仍待 4-reviewer C-rev15 收敛验收，§7+ 待 Round E 起草。前轮 C-rev14 闭合 4 RED + 12 must-fix YELLOW（决策 #115–#121）；C-rev13 §6 7-subsection draft（决策 #109–#114）；C-rev11 闭合 1 RED + 6 YELLOW + 2 tighten（决策 #107 / #108 + CF-C-rev11-1/2）。
+> **状态**：草稿中（2026-06-12，C-rev16 §6 fix-round close-out：闭合 C-rev15 reviewer round 7 条 inline RF —— RF-1 time-box CF-C-rev15-5 close criterion（user adjudication / Arch path-b time-box）+ RF-2/3 dual-filter（`__module__` prefix + `inspect.isabstract`）on `Gate._subclasses` orphan assertion + RF-4 ABC docstring import-ordering & ABC metadata accumulation forward-note + RF-5 `GATE_TIMEOUT_MS_HARD` location forward-marker（M5 gate-4 触发即迁 `_constants.py`）+ RF-6 derivation cross-link comment + RF-7 #122 vs #104 cross-ref distinguisher；新增 1 条 §12.6 entry（CF-C-rev16-1，CF-C-rev15-1 "Round H" trigger 软度，由 RF-1 deadline 一并兜底）；C-rev15 Scope-5 self-aware-non-executing 折叠入 CF-C-rev15-5 / RF-1 hard deadline 不另起 entry；决策 #122 inline-amended（per 决策 #108 amend pattern）。§12 未关闭 ≈ 14 → ≈ 15。§0 决策已锁定，§0–§5 已 4-reviewer 收敛 PASS，body §6 已 7-subsection drafted + C-rev14/15/16 reviewer-fix 三轮落地，§6 仍待 4-reviewer C-rev16 收敛验收，§7+ 待 Round E 起草。前轮 C-rev15 闭合 3 must-fix YELLOW（C-Y1/2/3）+ 6 advisory CF（CF-C-rev15-1..6）+ 决策 #122；C-rev14 闭合 4 RED + 12 must-fix YELLOW（决策 #115–#121）；C-rev13 §6 7-subsection draft（决策 #109–#114）；C-rev11 闭合 1 RED + 6 YELLOW + 2 tighten（决策 #107 / #108 + CF-C-rev11-1/2）。
 >
 > **依赖**：M1（[`m1-foundations.md`](./m1-foundations.md)）—— 需要 provenance 字段（`origin: agent`、`created_by`、`created_at`）作为离线进化候选的来源标签；不依赖 M2、不依赖 M3（M3 是运行时 lane，M4 是离线 lane，两条 lane 并行无耦合）。
 >
@@ -78,7 +78,7 @@
 | 119 | **Helper module location: `nanobot/evolve/_skill_sandbox.py`（C-rev14 / B-Y10）**：§6.1.2 用到的 `_invoke_skill_in_sandbox(record)` + env-strip subprocess wrapper helper 落在 **`nanobot/evolve/_skill_sandbox.py`** 单文件 helper（与 `_atomic_swap.py` / `_cache_key.py` 并列；下划线前缀 internal namespace）。Gate 1 (`gates/test_pass.py`) 通过 `from nanobot.evolve._skill_sandbox import invoke_skill_in_sandbox` 引用。本决策同步触发**决策 #93 forward-looking trigger 满足条件检查**：`_skill_sandbox.py` 是 evolve 子系统第二个跨模块 helper（除 `_atomic_swap.py` 外），但 #93 forward-looking 触发条件是"第二个**跨模型 validator helper**"（schema validator，如 weight-bounds checker）—— `_skill_sandbox.py` 是 runtime helper 而非 validator，**不**触发抽取至 `validators.py`。`_skill_sandbox.py` 自己作为独立 helper module 存在，与 #93 forward-looking 范围正交。**Alternative 未采纳**：(A) gate-private（落在 `gates/test_pass.py` 内）→ 未来 gate 4 LLM-judge 也需 isolated subprocess invocation 时无法复用；(C) 落 `nanobot/evolve/validators.py` → 误用 #93 forward-looking 触发条件，validator 与 sandbox 是两类关注点 | §6.1.2 / §0.3 (#93 trigger 检查) | C-rev14 闭合 B-Y10：helper 模块归属 ambiguity |
 | 120 | **`tier_*_total == 0` 触发 fail（C-rev14 / A-RED-4）**：§6.1.4 中 "total=0 → rate=1.0" 除零 convention 在 fixture loader 回归（Tier C 数据集为空）时让 gate 1 trivially-pass，defeats §1.1 "≥5 core golden = gate 1 lower bound"。修复：`tier_c_total == 0 OR tier_a_total == 0 → verdict='fail'` + `failure_reason='tier-{a,c}-empty: gate-1 requires ≥1 record'`。同时把 §1.1 narrative 中"≥5 core golden"从 prose 提升为 §6.1.2 runtime precondition assert：gate 1 进入 evaluate body 第一步 `if len(tier_c_records) < 5: raise GateInternalError('tier-c-below-floor')`（gate-internal-error → §6.0 point 3 path → `verdict='fail'`），让 fixture 回归 fail-loud 而非 silent vacuous-pass。**Alternative 未采纳**：(B) 保留 `total=0 → rate=1.0` 但加 warn-log → log-only 不阻断，pipeline 仍 promoted_to_pr，破坏 hard gate 性质；(C) 把 floor 5 移到 `EvolveDefaults` 暴露为 user-tunable → 与决策 #111 spec-locked 哲学冲突 | §6.1.2 / §6.1.4 | C-rev14 闭合 A-RED-4：tier-c-empty silent vacuous-pass |
 | 121 | **Gate 1 hard timeout 机制：post-hoc warning + per-record deadline（C-rev14 / A-RED-3）**：§6.0 point 5 原"`duration_ms > GATE_TIMEOUT_MS_HARD` 由 harness 主动 cancel"在 sync `evaluate()` + thread-executor 模型下不可实现（`Future.cancel()` for running thread is no-op；threads 不可强 kill；check after return → cancel 无效）。修复：(a) Hard timeout 由 **gate 内部** per-record deadline 累加 + 显式 budget check 实现 —— gate 1 在每条 record 完成后 `if time.perf_counter() - gate_start_ns/1e9 > GATE_TIMEOUT_MS_HARD/1000: break loop, set verdict='fail', failure_reason='timeout-hard:<elapsed>ms'`；剩余 record 跳过但已跑 record 的 metrics 保留（partial signal 给 GEPA）；(b) Gate 2/3 是 O(1)，timeout 不适用；(c) Harness `_run_gates` 仍记 wall-clock `duration_ms`，但**不**再尝试 cancel —— 仅在 gate 返回 verdict 后 post-hoc 写 warn 日志（"gate exceeded soft 5min"），不改 verdict。SIGTERM/SIGKILL 仅作用于**单 record subprocess**（§6.1.2 step 5 既有），不作用于整 gate。**Alternative 未采纳**：(b) 把 long-running gate 全部改 subprocess（让 harness `os.kill()` 可达）→ 引入 multiprocessing IPC 复杂度 + pickle 限制，M4 仅 1 个 long-running gate 不值得；(c) 用 POSIX `signal.alarm` → not thread-safe（harness 跑在 asyncio loop + executor thread 上，signal 仅 main thread 可达），跨平台 Windows 不支持 | §6.0 / §6.1.2 | C-rev14 闭合 A-RED-3：thread-cancel impossible → 重新定义 hard-timeout SoT |
-| 122 [NEW C-rev15 / RF-2] | **`Gate.__init_subclass__` 子类注册表（C-rev15 / C-Y2）**：§3.6 `Gate` ABC 增加 `_subclasses: ClassVar[list[type["Gate"]]] = []` + `__init_subclass__` hook，每个具体 `Gate` 子类在 class-body 执行时自动 append 到 `_subclasses`。`tests/evolve/test_gates_registry.py::test_no_orphan_gate_subclass` 改用 `assert {type(g) for g in GATES} >= set(Gate._subclasses)` 闭合 B-Y9 covering hole —— 原 `inspect.getmembers(nanobot.evolve.gates, ...)` 仅遍历 package object 上 re-export 的属性，新增 `gates/foo.py` 但忘 `__init__.py` re-export 的 orphan 子类逃出检测。**Alternative 未采纳**：(a) 用 `pkgutil.iter_modules(...) + importlib.import_module(...)` 在测试中递归加载每个 submodule 后再 `getmembers` → 引入 import 副作用 / 顺序敏感（依 importlib cache 状态）；(b) 改用 entry-point 注册（pyproject.toml `[project.entry-points]`） → 跨进程发现机制对 `Gate` 这种 in-process registry 过重。形态对齐决策 #117 `NONDETERMINISTIC` ClassVar + #95 `STRUCTURED_KWARGS` ClassVar，无 import-time 副作用，与 `GATES` explicit ordered list 角色正交（`GATES` 是 ordered execution；`_subclasses` 是 declaration registry） | §3.6 / §6.4.1 | C-rev15 闭合 C-Y2：B-Y9 contract test scope 不全（仅遍历 package re-exports） |
+| 122 [NEW C-rev15 / RF-2] [AMENDED-INLINE C-rev16 / RF-2+RF-3] | **`Gate.__init_subclass__` 子类注册表（C-rev15 / C-Y2）**：§3.6 `Gate` ABC 增加 `_subclasses: ClassVar[list[type["Gate"]]] = []` + `__init_subclass__` hook，每个具体 `Gate` 子类在 class-body 执行时自动 append 到 `_subclasses`。`tests/evolve/test_gates_registry.py::test_no_orphan_gate_subclass` 改用 `assert {type(g) for g in GATES} >= set(Gate._subclasses)` 闭合 B-Y9 covering hole —— 原 `inspect.getmembers(nanobot.evolve.gates, ...)` 仅遍历 package object 上 re-export 的属性，新增 `gates/foo.py` 但忘 `__init__.py` re-export 的 orphan 子类逃出检测。**Alternative 未采纳**：(a) 用 `pkgutil.iter_modules(...) + importlib.import_module(...)` 在测试中递归加载每个 submodule 后再 `getmembers` → 引入 import 副作用 / 顺序敏感（依 importlib cache 状态）；(b) 改用 entry-point 注册（pyproject.toml `[project.entry-points]`） → 跨进程发现机制对 `Gate` 这种 in-process registry 过重。形态对齐决策 #117 `NONDETERMINISTIC` ClassVar + #95 `STRUCTURED_KWARGS` ClassVar，无 import-time 副作用，与 `GATES` explicit ordered list 角色正交（`GATES` 是 ordered execution；`_subclasses` 是 declaration registry）。**[AMENDED-INLINE C-rev16 / RF-2+RF-3]** contract test 改用 dual-filter（`__module__` prefix 排除 fixture 污染 Corr-1 + `inspect.isabstract` 排除 M5 abstract intermediate Corr-2/Arch-2）；distinct from #104（§3.6 docstring forward-notes 详） | §3.6 / §6.4.1 | C-rev15 闭合 C-Y2：B-Y9 scope 不全；C-rev16 RF-2+RF-3 inline-amend：dual-filter |
 | *待 §7+ 起追加* | | | |
 
 ### 0.3.1 决策日志约定（C-rev6 / 决策 #97 / YELLOW-Y8 / Y-arch-6）
@@ -827,6 +827,42 @@ class Gate(ABC):
     # （即使新增 `gates/foo.py` 但忘 `__init__.py` re-export，orphan 也被捕获）。
     # 与 `GATES` ordered execution list 角色正交：`GATES` 是顺序执行清单；
     # `_subclasses` 是 declaration-time registry（不影响 evaluate 调用顺序）。
+    #
+    # ── C-rev16 / RF-2 + RF-3 + RF-4 + RF-7 forward-notes ──
+    # 1) Test-fixture isolation（RF-2 / Corr-1 70%）：测试代码 MUST NOT 直接
+    #    subclass `Gate`（class-level mutable `_subclasses` list 会被 fixture
+    #    持久化污染，破坏后续 assertion）。改用 `unittest.mock.Mock(spec=Gate)`
+    #    或 duck-typed double。§6.4.1 contract test 通过 `__module__` prefix
+    #    filter（仅保留 `nanobot.evolve.gates.*` 子类）作为 defense-in-depth
+    #    容忍 accidental 违规，但 canonical 规则仍是"`tests/` 不 subclass Gate"。
+    # 2) Abstract-intermediate forward-compat（RF-3 / Corr-2 + Arch-2 60%）：
+    #    M5+ 引入的 abstract intermediate（如 `class JudgedGate(Gate, ABC):
+    #    ...` 承载 LLM-judge gate 4 的共享逻辑）会落入 `_subclasses` 但因
+    #    abstract 无法实例化进 `GATES`。§6.4.1 contract test 用
+    #    `inspect.isabstract` filter 排除此类 case，避免 false-fail。仅
+    #    concrete production 子类必须出现在 `GATES`。
+    # 3) Import-ordering invariant（RF-4 / Scope-2 75%）：任何 declare `Gate`
+    #    子类的模块 MUST 在 `nanobot.evolve.gates.Gate` 自身 import 之后被
+    #    import。production 代码通过 `gates/__init__.py` 的 `from .test_pass
+    #    import TestPassGate` (etc.) 自然满足；M5 plugin 作者必须确保 gate
+    #    模块走 `nanobot.evolve.gates` 命名空间被加载，**不**通过 deferred /
+    #    lazy loader 绕过 package init —— 否则 `__init_subclass__` hook 不会
+    #    触发，子类不进 `_subclasses` registry。
+    # 4) ABC metadata accumulation forward-marker（RF-4 / Arch-4 YELLOW）：
+    #    `Gate` ABC 当前承载两个 harness-introspection ClassVar
+    #    （`NONDETERMINISTIC` 来自 #117，`_subclasses` 来自 #122，
+    #    `__init_subclass__` 是 #122 的 hook）。若 M5+ 再增第三个 such hook
+    #    （e.g. `IS_ASYNC: ClassVar[bool]` per §6.6.1 forward-note for gate-5
+    #    human-PR async 路径），则需拆分为：(i) `Gate`（business contract：
+    #    `evaluate()` 签名）+ (ii) `_GateHarnessMetadata` mixin 或 sidecar
+    #    模块承载 introspection ClassVar。M5 spec 起草时 acknowledge 此
+    #    splitting trigger；若推迟过 M5 gate-5 引入则在 §12 carry-forward
+    #    新登记 entry 跟踪。
+    # 5) Distinct from #104（RF-7 / Arch-5 informational）：决策 #104 的
+    #    `__init_subclass__` enforces 字段 redeclaration（缺失即 raise
+    #    `TypeError`）；本决策 #122 的 hook 是 collection-only（registry
+    #    append，**不** validate）。两 pattern 共享 Python idiom 但解决不同
+    #    问题，cosmetic similarity 不构成语义重叠。
     _subclasses: ClassVar[list[type["Gate"]]] = []
 
     def __init_subclass__(cls, **kwargs: object) -> None:
@@ -2884,7 +2920,7 @@ __all__ = [
    - 网络 hardening 是 **cooperative leak prevention**：proxy block 仅防止"诚实 skill 在执行 toolcall 时**意外**触达真实 endpoint"；candidate skill 若主动 import socket 仍可绕过 —— M4 spec 不防御 adversarial candidate（all candidates 均由 GEPA 在我方 prompt 模板控制下生成，trust boundary 在 GEPA 而非 gate）。M5 若引入 third-party-evolved candidate（外部 Darwinian Evolver subprocess）需重新评估威胁模型。
 3. **Failure mode 分类**：`evaluate` 抛任何 `Exception` 子类（**不**含 `BaseException` 直系如 `KeyboardInterrupt` / `SystemExit` / `asyncio.CancelledError`，这些 MUST 透传至 harness top-level 并由 `OfflineHarness.run()` 顶层 try/except 捕获后映射为 `final_status='harness_error'` + 上抛供 CLI handler 转 SIGINT/exit 130 / 标准退出语义；harness 内 `_run_gates` 不得 swallow 这三类）→ harness 把该 gate 视为 `verdict="fail"`，`failure_reason = f"gate-internal-error: {type(exc).__name__}: {str(exc)[:200]}"`，traceback 写到 **`<run_id>/gates/<candidate-hash-prefix>/<N>-<name>.error.txt`**（决策 #116 / B-Y5；与 §6.4.4 既有 per-candidate sub-dir `*.json` 路径对齐，避免同 run 多 candidate gate 失败的 traceback 互相覆盖）。Cleanup policy: 文件持久至 run 全程结束，由 `nanobot evolve report <run-id>` 输出 "internal-error candidates" appendix 表列举。Gate 内部异常**不**冒泡为 `EvolveError` —— gate 的对外语义只有 `pass` / `fail`，不区分"业务 fail"与"实现 bug"。CI 监控可通过扫描 `*.error.txt` 文件检测实现 bug 累积（决策 #109）。
 4. **`metrics` / `evidence` 字段稳定性公约**：每个 gate 的 `metrics: dict[str, float]` 含一个**契约**键集（必填，schema 锁定）+ 任意**诊断**键（可选，自由扩展）；新增 `evidence: Optional[dict[str, str]]`（决策 #116）承载非数值 audit-trail 标识，亦区分契约键 vs 诊断键。两 dict 角色正交：`metrics` 仅承载可参与 fitness aggregation / report 数值聚合的浮点量，`evidence` 仅承载只读字符串标识（hex hash / 路径 / external job-id）。契约键集是 SoT —— 跨 milestone 对外 contract 仅承诺契约键的语义稳定性。M4 三 gate 的契约键集见 §6.1.4 / §6.2.4 / §6.3.4。
-5. **Gate execution telemetry + hard timeout**（决策 #121 / C-rev14 / A-RED-3）：harness 在调用 `evaluate` 前后记 `time.perf_counter_ns()`，差值 / 1e6 写入 `GateResult.duration_ms`（int）。**Hard timeout 的 SoT 在 gate 内部** —— sync `evaluate()` 在 thread executor 中无法被 harness 强 cancel（`Future.cancel()` 对已开跑的 thread 是 no-op；threads 不可强 kill）。**常量定义位置**（C-rev15 / C-Y1 / RF-1）：`GATE_TIMEOUT_MS_HARD: int = 600_000`（10 分钟），module-level constant 落在 `nanobot/evolve/gates/test_pass.py`，与 `PER_RECORD_TIMEOUT_S = 30` 同位放置（§6.1.2 line ~2945）。Sourcing rationale：5 records × 30s `PER_RECORD_TIMEOUT_S` × ~4× slack ≈ 10min — 与原决策 #121 hard timeout intent 一致（GEPA 单候选 gate-1 不应吞噬 CI runner 半小时以上）。Gate 2/3 不需要此常量（O(1) 操作）。约定：
+5. **Gate execution telemetry + hard timeout**（决策 #121 / C-rev14 / A-RED-3）：harness 在调用 `evaluate` 前后记 `time.perf_counter_ns()`，差值 / 1e6 写入 `GateResult.duration_ms`（int）。**Hard timeout 的 SoT 在 gate 内部** —— sync `evaluate()` 在 thread executor 中无法被 harness 强 cancel（`Future.cancel()` 对已开跑的 thread 是 no-op；threads 不可强 kill）。**常量定义位置**（C-rev15 / C-Y1 / RF-1）：`GATE_TIMEOUT_MS_HARD: int = 600_000`（10 分钟），module-level constant 落在 `nanobot/evolve/gates/test_pass.py`，与 `PER_RECORD_TIMEOUT_S = 30` 同位放置（§6.1.2 line ~2945）。Sourcing rationale：5 records × 30s `PER_RECORD_TIMEOUT_S` × ~4× slack ≈ 10min — 与原决策 #121 hard timeout intent 一致（GEPA 单候选 gate-1 不应吞噬 CI runner 半小时以上）。Gate 2/3 不需要此常量（O(1) 操作）。**Layering forward-marker**（C-rev16 / RF-5 / Arch-3 YELLOW）：此常量概念上是**跨 gate** 的（任何 long-running gate 的 hard wall-clock）；M4 co-locate 在 gate 1 模块内可接受（M4 仅 1 long-running gate + harness post-hoc warn 是唯一 second consumer）。一旦 M5 引入 gate-4（LLM-judge）或其他 long-running gate，MUST 把常量迁至 `nanobot/evolve/_constants.py`（与 `_atomic_swap.py` / `_cache_key.py` / `_skill_sandbox.py` 并列 internal namespace），原 `gates/test_pass.py` 路径保留 deprecation re-export 一个 milestone 后删除。若迁移推迟过 M5 gate-4 引入，新登记 §12 carry-forward entry 跟踪。约定：
    - **Gate 1 (long-running)** MUST 在每条 record 完成后 budget-check：`if (time.perf_counter() - gate_start) * 1000 > GATE_TIMEOUT_MS_HARD: break loop, set verdict='fail', failure_reason='timeout-hard:<elapsed>ms'`；剩余 record 跳过但已跑 record 的 metrics 保留（partial signal 给 GEPA）。
    - **Gate 2/3 (O(1))**：timeout 不适用（hash compare / int compare 永远 < ms 级）；budget-check 省略。
    - **Harness 端**：`_run_gates` 仍记 wall-clock `duration_ms`，但**不**再尝试 cancel；仅在 gate 返回 verdict 后 post-hoc：若 `duration_ms > GATE_TIMEOUT_MS_HARD`（同 SoT 常量，import from `nanobot.evolve.gates.test_pass`）但 verdict 已 pass / fail（gate 内部 budget-check 未触发即收尾），写 warn-log "gate exceeded hard timeout but completed (suspicious)"；不改 verdict。
@@ -2958,6 +2994,24 @@ verdict:
 **Per-record timeout**：`PER_RECORD_TIMEOUT_S = 30`（module-level constant，与 6.1.1 阈值同放置 reasoning）。subprocess 超过 30s 即 SIGTERM → 5s 后 SIGKILL → 该条 `outcome=False`，写诊断键 `metrics["timeouts"][record_id] = duration_ms`。
 
 **Hard-timeout 常量同位声明**（C-rev15 / C-Y1 / RF-1）：`GATE_TIMEOUT_MS_HARD: int = 600_000` 同放 `nanobot/evolve/gates/test_pass.py` module top（紧邻 `PER_RECORD_TIMEOUT_S` / `TIER_*_PASS_RATE_FLOOR_BPS`）；`from nanobot.evolve.gates.test_pass import GATE_TIMEOUT_MS_HARD` 是 §6.0 point 5 harness post-hoc warn-check 的 import 来源。Sourcing：5 records × 30s × ~4× slack ≈ 10min，与决策 #121 hard timeout intent 一致。
+
+```python
+# nanobot/evolve/gates/test_pass.py
+PER_RECORD_TIMEOUT_S: int = 30
+TIER_A_PASS_RATE_FLOOR_BPS: int = 80
+TIER_C_PASS_RATE_FLOOR_BPS: int = 100
+# Layering note: this constant is conceptually cross-gate (any long-running gate's hard wall-clock).
+# M4 co-locates with PER_RECORD_TIMEOUT_S (single consumer = gate-1 + harness post-hoc warn).
+# At M5 gate-4 (LLM-judge) introduction, migrate to `nanobot/evolve/_constants.py` and keep this
+# import path as a deprecation re-export. See CF-C-rev16-? if migration is deferred past M5 gate-4.
+# Derivation (RF-6 / Scope-4): = ceil(TIER_C_FLOOR=5) * PER_RECORD_TIMEOUT_S=30 * SLACK_FACTOR≈4
+#                                ≈ 600_000 ms (10 min). Revisit at M5 if either input invariant changes.
+GATE_TIMEOUT_MS_HARD: int = 600_000
+```
+
+**Forward-markers**（C-rev16 / RF-5 / Arch-3 + RF-6 / Scope-4 lifted-from-advisory）：
+- **Layering**：此常量当前 co-locate 在 `gates/test_pass.py` 是 M4 唯一 long-running gate + harness post-hoc warn 的 sole-consumer 妥协；M5 gate-4 (LLM-judge) 引入即触发迁至 `nanobot/evolve/_constants.py`，原路径保留一个 milestone 的 deprecation re-export。
+- **Derivation cross-link**：`600_000 = ceil(TIER_C_FLOOR=5) × PER_RECORD_TIMEOUT_S=30 × SLACK_FACTOR≈4`；三个输入分别由 §1.1（Tier C floor，决策 #120 precondition assert）/ 本节 `PER_RECORD_TIMEOUT_S` / Sourcing 段 slack rationale 锚定。任一输入变更需同步重新计算并在 M5 retro 评估 SLACK_FACTOR 是否仍合理。
 
 #### 6.1.3 失败归因（`failure_reason`）
 
@@ -3109,7 +3163,24 @@ verdict:
 **Registry contract test**（C-rev14 / B-Y9）：手动维护的 `GATES` list 与"name 前缀按位置对齐"约定靠 `tests/evolve/test_gates_registry.py` 强制：
 
 - `test_gates_ordering_matches_name_prefix`：MUST 断言 `for i, gate in enumerate(GATES): assert gate.name.startswith(f"{i+1}-")`，防止 list 位置与 name 前缀漂移。
-- `test_no_orphan_gate_subclass`（C-rev15 / 决策 #122 / C-Y2 / RF-2）：MUST 断言 `set(Gate._subclasses) <= {type(g) for g in GATES}`（§3.6 `Gate._subclasses` registry 经 `__init_subclass__` 在 class-body 执行时自动 populate）—— 任何具体 `Gate` 子类（无论是否被 `nanobot/evolve/gates/__init__.py` re-export）若未在 `GATES` 中实例化即 fail。原 C-rev14 草稿 `inspect.getmembers(nanobot.evolve.gates, ...)` 仅遍历 package object 上的 re-export 属性 —— 新增 `gates/foo.py` 但忘 `__init__.py` re-export 的 orphan 子类逃出检测；`_subclasses` registry 闭合该 covering hole（B-Y9 真正闭合）。测试需在 `from nanobot.evolve.gates import *` 之后断言（确保所有 submodule 在 `__init__.py` 已被 import 一次，触发各 submodule 的 class-body → `__init_subclass__` 副作用）。
+- `test_no_orphan_gate_subclass`（C-rev15 / 决策 #122 / C-Y2 / RF-2；C-rev16 / RF-2+RF-3 dual-filter）：MUST 用**双 filter** 后断言 —— `production_subclasses = {c for c in Gate._subclasses if c.__module__.startswith("nanobot.evolve.gates.") and not inspect.isabstract(c)}` → `assert production_subclasses <= {type(g) for g in GATES}`（§3.6 `Gate._subclasses` registry 经 `__init_subclass__` 在 class-body 执行时自动 populate）。两 filter 的角色：
+  - **`__module__` prefix filter（RF-2 / Corr-1 70%）**：tolerate 测试 fixture 误用（如 `class MockGate(Gate): ...` 在 `tests/` 内 declared）—— fixture 子类持久化进 class-level mutable list 会污染后续 assertion；prefix filter 将其排除。Canonical 规则仍是"测试代码 MUST NOT subclass `Gate`"（用 `unittest.mock.Mock(spec=Gate)` 或 duck-typed double 替代），filter 是 defense-in-depth 而非许可门。
+  - **`inspect.isabstract` filter（RF-3 / Corr-2 + Arch-2 60%）**：forward-compat 容许 M5 abstract intermediate（如 `class JudgedGate(Gate, ABC): ...`）落入 `_subclasses` 而**不**进 `GATES`（abstract base 无法实例化）；isabstract filter 确保此类 forward-compat case 不 false-fail。仅 concrete production 子类必须出现在 `GATES`。
+
+  原 C-rev14 草稿 `inspect.getmembers(nanobot.evolve.gates, ...)` 仅遍历 package object 上的 re-export 属性 —— 新增 `gates/foo.py` 但忘 `__init__.py` re-export 的 orphan 子类逃出检测；`_subclasses` registry + dual-filter 共同闭合该 covering hole（B-Y9 + Corr-1 + Corr-2/Arch-2 真正闭合）。测试需在 `from nanobot.evolve.gates import *` 之后断言（确保所有 submodule 在 `__init__.py` 已被 import 一次，触发各 submodule 的 class-body → `__init_subclass__` 副作用）。
+
+  **示例形态**：
+  ```python
+  import inspect
+  production_subclasses = {
+      c for c in Gate._subclasses
+      if c.__module__.startswith("nanobot.evolve.gates.")
+      and not inspect.isabstract(c)
+  }
+  assert production_subclasses <= {type(g) for g in GATES}, (
+      f"orphan production gate subclass(es): {production_subclasses - {type(g) for g in GATES}}"
+  )
+  ```
 
 理由：introspection-derived `GATES`（自动按 name 前缀排序）虽更"自动"但破坏 `GATES` 作为 explicit ordered list 的可读性 + 让"加 gate 4 时显式 append"的 audit trail 模糊；contract test 是更轻量级的执行（决策 #104 enforcement 精神镜像 —— 让规则机械化但不引入 introspection 副作用）。M5 加 gate 4 / gate 5 时这两条测试自动覆盖。
 
@@ -3209,7 +3280,7 @@ def _compute_final_status(promoted, all_candidates, baseline):
 | `final_status == 'promoted_to_pr'` ⇒ `len(gate_verdicts) == len(GATES) and all(pass)` | §6.5.2 `_select_promoted` | M5 加 gate 4–5 时 `len(GATES)=5`，`promoted_to_pr` 自动要求 5-pass |
 | Gate 实现 deterministic + offline | §6.0 point 1 | M5 `SemanticFidelityGate` 调 LLM judge → 非 deterministic → 例外条款必须在 §14 显式 carve-out（gate 4 是计划中第一个例外，M5 spec 必须正面处理） |
 
-> §6 Gate 详细定义完。本章 C-rev13 引入决策 #109–#114（6 条），C-rev14 闭合 4 RED + 12 must-fix YELLOW 后追加决策 #115–#121（7 条），4 条 advisory YELLOW 至 §12.4（CF-C-rev13-1..4）。C-rev15 闭合 3 条 ≥60% confidence must-fix YELLOW（C-Y1 `GATE_TIMEOUT_MS_HARD` 常量定义 / C-Y2 `_subclasses` 注册表 / C-Y3 `gepa_iteration` stable anchor）后追加决策 #122（1 条，承载 RF-2 `__init_subclass__` 选项），6 条 advisory YELLOW 至 §12.5（CF-C-rev15-1..6）。下一节 §7 Judge rubric 与 calibration。
+> §6 Gate 详细定义完。本章 C-rev13 引入决策 #109–#114（6 条），C-rev14 闭合 4 RED + 12 must-fix YELLOW 后追加决策 #115–#121（7 条），4 条 advisory YELLOW 至 §12.4（CF-C-rev13-1..4）。C-rev15 闭合 3 条 ≥60% confidence must-fix YELLOW（C-Y1 `GATE_TIMEOUT_MS_HARD` 常量定义 / C-Y2 `_subclasses` 注册表 / C-Y3 `gepa_iteration` stable anchor）后追加决策 #122（1 条，承载 RF-2 `__init_subclass__` 选项），6 条 advisory YELLOW 至 §12.5（CF-C-rev15-1..6）。**C-rev16** 闭合 C-rev15 reviewer round 7 条 inline RF（RF-1 time-box CF-C-rev15-5 per user adjudication / RF-2+RF-3 `Gate._subclasses` orphan assertion dual-filter / RF-4 §3.6 ABC docstring import-ordering & metadata accumulation forward-note / RF-5 `GATE_TIMEOUT_MS_HARD` location forward-marker / RF-6 derivation cross-link comment / RF-7 #122 vs #104 distinguisher），决策 #122 inline-amended（per #108 amend pattern），1 条 advisory at §12.6（CF-C-rev16-1）；C-rev15 Scope-5 fold 入 CF-C-rev15-5 不另起 entry。下一节 §7 Judge rubric 与 calibration。
 
 ## 7. Judge rubric 与 calibration
 
@@ -3375,13 +3446,13 @@ M5+ 启动 retro 时 MUST review §12 全部未关闭 entry；满足 close crite
 - **Defer reason**: rule 定义本身的 self-application 是程序化合规问题，不影响读者对决策内容的理解（决策 #115 / #121 文本含义清晰）；提前在 C-rev15 强制 grandfather marker 或 lint 脚本会让 §0.3 改写量超出 RF 三条修复 scope。属 advisory governance hygiene
 - **Future close criterion**: 至下一次决策日志 grooming round（或 M5 spec start retro），二选一闭合：(i) 落地 `scripts/lint_decision_log.py` 作为 M5 in-scope 任务（CI 上 enforce ≤8 单元 + ≤1500 char）；(ii) 在决策 #115 / #121 标题行追加 `[GRANDFATHERED PRE-RULE-FINALIZATION]` marker（保留 audit 可见）。任一落地本 CF 关闭
 
-#### CF-C-rev15-5 — §12 register threshold trip + sub-section proliferation（cluster: A-Y4-b + Scope-Y2 + CF-C-rev11-1 trigger）
+#### CF-C-rev15-5 — §12 register threshold trip + sub-section proliferation（cluster: A-Y4-b + Scope-Y2 + CF-C-rev11-1 trigger；C-rev16 / RF-1 time-boxed per user adjudication）
 
-- **Source**: C-rev14 reviewer round / Arch-Y4-b + Scope-Y2（cluster collapse；同时是 CF-C-rev11-1 hard threshold trip）
+- **Source**: C-rev14 reviewer round / Arch-Y4-b + Scope-Y2（cluster collapse；同时是 CF-C-rev11-1 hard threshold trip）。**Responding to**（C-rev16 fold-in）：C-rev15 Scope-5（§12 proliferation self-aware-but-non-executing pattern）—— 本 entry 自身是 CF-C-rev11-1 hard-threshold 触发的 register entry，再以 §12 entry 形态承接 close-path 即"自我感知但不执行"governance recursion 的具体形态；fold 入本条而**不**另起 §12.6 entry，使该 pattern 一并受 RF-1 hard deadline 约束
 - **Confidence**: 50%
-- **Conflict**: §12.1 / 决策 #106 GREEN on register format；CF-C-rev11-1 已声明 ≥10 未关闭 entry 是 hard threshold；C-rev15 后实际计数：§12.2 (3) + §12.3 (2) + §12.4 (3 active；CF-C-rev13-1 已 CLOSED) + §12.5 (6) ≈ **14 未关闭 entry**（含本 CF 自身），跨过阈值。同时 sub-section 形态（§12.2 / 12.3 / 12.4 / 12.5 per-round）对决策 #106 强制的 `Source` 字段（已承载轮次 chronology）冗余，导航开销上升
-- **Defer reason**: C-rev15 是 §6 fix pass，scope 仅限 RF-1/2/3 + CF 登记。§12 整章重组（CF-C-rev11-1 闭合方案）属 spec 结构化重排，会跨章节大量 churn，不应在 C-rev15 round 内执行；同时也是 CF-C-rev11-1 自身的 future close criterion 触发，二者一起在 C-rev16 / 下一非-§6 round 处理更经济
-- **Future close criterion**: 至 C-rev16（或下一非-§6 round），执行 CF-C-rev11-1 既定的两选项：**(a) 推荐**：抽离 `docs/hermes-evolution/specs/m4-carry-forward.md` 独立 tracking 文件 —— 按 chronological list（保留 Source 字段承载轮次归属），spec 内仅留 cross-link 占位 §12，废弃 per-round sub-sections。**(b)**：迁移 active CFs 至 GitHub Issues（labels: `m4` / `carry-forward` / `confidence-50`），spec 内 §12 仅保留 closed entry audit trail 与 link template。任一落地后本 CF + CF-C-rev11-1 共同闭合
+- **Conflict**: §12.1 / 决策 #106 GREEN on register format；CF-C-rev11-1 已声明 ≥10 未关闭 entry 是 hard threshold；C-rev15 后实际计数：§12.2 (3) + §12.3 (2) + §12.4 (3 active；CF-C-rev13-1 已 CLOSED) + §12.5 (6) ≈ **14 未关闭 entry**（含本 CF 自身），跨过阈值。同时 sub-section 形态（§12.2 / 12.3 / 12.4 / 12.5 per-round）对决策 #106 强制的 `Source` 字段（已承载轮次 chronology）冗余，导航开销上升。**Governance recursion finding**（C-rev15 Arch-1 FIX）：将 CF-C-rev11-1 的 hard-threshold 触发再登记成新 §12 register entry（且该 entry 自身 count 入 threshold），构成 close-path 的延迟通道 —— meta-rule 的 hard-threshold 构造原意是 force close-path execution，再 defer 即 debt-evasion
+- **Defer reason**: C-rev15 是 §6 fix pass，scope 仅限 RF-1/2/3 + CF 登记。§12 整章重组（CF-C-rev11-1 闭合方案）属 spec 结构化重排，会跨章节大量 churn，不应在 C-rev15 round 内执行；同时也是 CF-C-rev11-1 自身的 future close criterion 触发。**deferral 在 RF-1 hard deadline 处终止**（不 open-ended），见下条
+- **Future close criterion** **[AMENDED-INLINE C-rev16 / RF-1 / user adjudication 2026-06-12, Arch path-b time-box]**: MUST 执行 CF-C-rev11-1 close-path **(a)** 抽离 `docs/hermes-evolution/specs/m4-carry-forward.md` 独立 tracking 文件 —— 按 chronological list（保留 Source 字段承载轮次归属），spec 内仅留 cross-link 占位 §12，废弃 per-round sub-sections；**OR** close-path **(b)** 迁移 active CFs 至 GitHub Issues（labels: `m4` / `carry-forward` / `confidence-50`），spec 内 §12 仅保留 closed entry audit trail 与 link template。**Hard deadline**：在 **C-rev17 4-reviewer 收敛 PASS** **OR** **§10（Round H）4-reviewer 收敛 PASS** 二者**先到者**之前必须执行 close-path —— 不允许再 defer。本 CF entry 的存在已经代表 governance recursion 可接受的最大深度（user adjudication 2026-06-12, Arch path-b "time-box deadline preserves meta-rule integrity via hard deadline"）。逾期未执行 ⇒ 下一轮 reviewer 自动将本 CF promote 至 RED。任一 close-path 落地后本 CF + CF-C-rev11-1 共同闭合，同时 CF-C-rev16-1（CF-C-rev15-1 trigger 软度）依附于此 deadline 一并 housekeep
 
 #### CF-C-rev15-6 — SIGINT → exit 130 mapping ambiguity（C-Y4）
 
@@ -3390,6 +3461,18 @@ M5+ 启动 retro 时 MUST review §12 全部未关闭 entry；满足 close crite
 - **Conflict**: §4.6 dispatch table 当前**无** KeyboardInterrupt / exit 130 行；§5.3 line ~1772 表达 "SIGINT 不映射到固定 exit code"；§6.0 point 3 line ~2872 表达 "CLI handler 转 SIGINT/exit 130 / 标准退出语义"。两处 phrasing 留下两种合理读法：(i) harness 不显式 map，让 Python interpreter SIGINT 默认 handler 透传产生 130；(ii) CLI handler 显式 map exit 130。实现者分歧风险存在
 - **Defer reason**: M4 单元测试与 §6.0 point 3 traceback 落库路径已定义，KeyboardInterrupt 在 `_run_gates` 内不被 swallow（透传至 harness top-level）这一点 §6.0 point 3 已锁；上层 mapping ambiguity 仅影响 CLI 表面 exit code 一致性，不影响 gate / harness 数据完整性。属 §4-§5 dispatch 章节的小 cleanup，留待下一次 §4-§5 fix round 一并处理更高效
 - **Future close criterion**: 下一次 §4-§5 fix round（Round F 或更晚），二选一闭合：(a) §4.6 dispatch 表追加行 `130 | KeyboardInterrupt 透传 / SIGINT 默认行为 | 用户 Ctrl-C | 是` + §10 不变量章节为 KeyboardInterrupt 添加 carve-out（不参与"任何异常都被 dispatch 表覆盖"普遍量化）；(b) 改写 §6.0 point 3 句式为 "CLI handler 让 KeyboardInterrupt 透传至 Python 默认 SIGINT 处理（exit 130 由 interpreter 默认提供，harness 不显式 map）"。任一落地本 CF 关闭；不允许 M4 ship 仍同时存在两 phrasings
+
+### 12.6 C-rev15 user-sanctioned carry-forward entries (C-rev16 round close-out)
+
+本批次 1 条 entry 来自 C-rev15 §6 reviewer round 中 50% confidence advisory 观察。C-rev16 fix-round 中按 C-rev10/11/13/15 sanctioned 路线保留为 register entry，等待真实 trigger 验证后再决定关闭或上升为 must-fix。**注**：C-rev15 reviewer round 的 RF-grade headline finding（governance recursion / Arch-1 FIX）经 user adjudication 2026-06-12 决定走 Arch path-b time-box（不另起 entry，inline-amend CF-C-rev15-5 close criterion + hard deadline，见 §12.5 RF-1 amendment）；C-rev15 Scope-5（§12 proliferation self-aware-but-non-executing pattern）已 fold 入 CF-C-rev15-5 body 作为 "Responding to" 交叉链接，不另起 entry。本批次仅 CF-C-rev16-1 一条新 entry。
+
+#### CF-C-rev16-1 — CF-C-rev15-1 "Round H" trigger 软度（Scope-3）
+
+- **Source**: C-rev15 reviewer round / Scope reviewer focus area 6（advisory 50%）
+- **Confidence**: 50%
+- **Conflict**: CF-C-rev15-1 的 "Future close criterion" 引用 "§10（Round H）drafter MUST 满足三条全部" —— "Round H" 是内部 orchestration phase 标签，若 CF 跨 M4 ship 仍未关闭，phase 标签会失去稳定语义。§10 章节引用本身稳定，但 trigger noun（"drafter"）是 round-specific 的瞬态语义
+- **Defer reason**: 现在处理需要再触动 CF-C-rev15-1，而 CF-C-rev15-1 自身已被 RF-1 hard deadline（C-rev17 4-reviewer 收敛 PASS OR §10 Round H 4-reviewer 收敛 PASS 二者先到者）兜底；trigger 语言收紧自然 fold 入 RF-1 mandate 的同一 housekeeping pass，分开做属重复 churn
+- **Future close criterion**: 当 CF-C-rev15-5 的 hard deadline 触发（C-rev17 OR §10 Round H 4-reviewer PASS），CF-C-rev15-1 的 trigger 语言 MUST 在同一 housekeeping pass 中由 "Round H drafter" 改写为 "§10 4-reviewer 收敛 PASS"（消除 phase-label 依赖）。本 CF 与 CF-C-rev15-5 共同闭合
 
 ## 13. 决策日志
 
