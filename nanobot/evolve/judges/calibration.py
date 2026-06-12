@@ -79,10 +79,20 @@ class CalibrationReport(EvolveBase):
 def _bin_cutoffs(bins: int) -> list[float]:
     """Internal upper-cutoffs (length ``bins - 1``) used by ``_bin_index``.
 
-    For ``bins == 3`` the spec (§7.4) pins explicit cutoffs ``[0.33, 0.66]``
-    so 0.33 lands in bin 1 and 0.66 lands in bin 2 (these are NOT the natural
-    ``1/3 ≈ 0.3333…`` thirds — the truncated-decimal form is spec-locked).
-    For other ``bins`` we fall back to equal-width ``i / bins`` cutoffs.
+    DUAL CONVENTION (intentional, do not "unify"):
+
+    * ``bins == 3`` — returns LITERAL ``[0.33, 0.66]`` (truncated-decimal form
+      pinned by spec §7.2 / decision #124). This is the production path.
+      Note the deliberate ~0.003 gap vs the mathematical thirds
+      ``[1/3, 2/3] ≈ [0.3333…, 0.6666…]`` — values in ``[1/3, 0.33)`` land in
+      bin 0 under this convention, not bin 1. The truncated form is what the
+      human-labelling guideline shipped to annotators uses, so the κ math
+      must match it exactly or human/judge bin assignments diverge silently.
+    * ``bins != 3`` — equal-width fallback ``[i / bins for i in 1..bins-1]``
+      (e.g. bins=4 → ``[0.25, 0.5, 0.75]``). Provided for future rubric
+      revisions; NOT spec-pinned and NOT exercised by the production gate.
+      A caller passing a variable ``bins`` that drifts off 3 silently
+      switches semantics — call sites should treat ``bins`` as a constant.
     """
     if bins == 3:
         return [0.33, 0.66]
