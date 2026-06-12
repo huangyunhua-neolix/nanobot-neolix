@@ -1,9 +1,9 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import Field, computed_field, field_validator, model_validator
 
-from nanobot.evolve._base import EvolveBase
+from nanobot.evolve._base import EvolveBase, FrozenEvolveBase
 from nanobot.evolve.schemas import RubricScore, RubricWeights, assert_odd_pool_size
 
 
@@ -28,8 +28,7 @@ class JudgeConsensus(EvolveBase):
     consensus_verdict: Literal["agree", "split", "single"]
 
 
-class JudgePool(EvolveBase):
-    model_config = ConfigDict(**{**EvolveBase.model_config, "frozen": True})
+class JudgePool(FrozenEvolveBase):
     judges: list[JudgeConfig] = Field(..., min_length=1)
     weights: RubricWeights = Field(default_factory=RubricWeights)
     require_consensus: bool = False

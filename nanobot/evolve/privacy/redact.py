@@ -101,6 +101,8 @@ Replacement = Union[str, Callable[[re.Match[str]], str]]
 CustomPattern = tuple[str, re.Pattern[str], Replacement]
 
 
+# Intentional @dataclass (not EvolveBase): internal-only return type, not serialised
+# into the RunManifest sidecar — avoids the camelCase alias-generation overhead.
 @dataclass
 class RedactionResult:
     """Output of :func:`redact`.

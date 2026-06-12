@@ -234,3 +234,103 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Conflict**: None
 - **Defer reason**: §9.3 "12-week rotation" + "weekly rotated `redaction.log.YYYY-WW`" 是 prose-only 描述，无 enforcement test（rotation logic 实现细节散落 in `nanobot evolve` CLI startup lazy trigger）。Fold 入 CF-C-rev15-4 lint-script umbrella（同为"规则定义 prose-only / 无 CI 强制"的 governance hygiene 类）
 - **Future close criterion**: lint script (CF-C-rev15-4 owner = M5 in-scope `scripts/lint_decision_log.py`) 增加 audit-log rotation 检查（验证 `redaction.log.*` 文件 mtime 与命名 week stamp 一致 + 12-week-stale 文件自动 prune）；**OR** housekeeping retro 把 retention 转化为单元测试（`test_redaction_log_rotation_drops_stale`）
+
+## 9. Phase-4 cleanup round-2 review fan-in (Group-4 consolidation commit)
+
+本批次 9 条 entry 来自 M4 Phase-4 实现期的三轨 round-2 reviewer 收敛：t-11 (OfflineHarness gate iteration) round-2、t-13 (judge calibration κ) round-2、cross-cutting holistic sanity sweep (review id `a6fb1801f68b46fe2`)，以及 t-12 (redaction) round-3 fix scoping 推迟项。三轨结论 VERDICT_PASS，9 条 advisory ≤60% confidence 项按 sanctioned 路线登记本 sibling file，等待 t-14 / t-15 pipeline 实施期或 M5 起跑期触发关闭条件。Group-4 consolidation commit 同步落地 `FrozenEvolveBase` 抽象 + `@dataclass` 选择 rationale 注释（C1/C2 in `nanobot/evolve/_base.py` / `harness.py` / `judges/rubric.py` / `privacy/redact.py` / `judges/calibration.py`），spec 同批次新增本 §9。
+
+### CF-t14-a — `_compute_final_status(gate_traces=None)` 默认静默降级 rejected→no_improvement（t-11 R2）
+
+- **Source**: t-11 round-2 reviewer / advisory observation
+- **Confidence**: 60%
+- **Conflict**: None（t-11 R2 VERDICT_PASS；本项 deferred to t-14）
+- **Defer reason**: `OfflineHarness._compute_final_status(gate_traces=None)` 当前默认值在 `promoted is None` 路径下将 `rejected_by_gate` 静默降级为 `no_improvement`，触发条件是 caller 忘记线 trace 参数。M4 round-4 仅 ship skeleton（无 caller 在生产路径触发），t-14 / t-15 pipeline 编写期是首个真实 caller 接入点，届时 default-drop / assert 选择更有上下文
+- **Future close criterion**: t-14 实施 `OfflineHarness.run()` orchestrator 时二选一闭合 —— (a) 移除 `gate_traces=None` 默认值，签名改为 keyword-required；(b) 在 `promoted is None` 分支前 assert `gate_traces is not None`（accept default-None 但 fail-loud on caller bug）
+
+### CF-t14-b — 错误文件路径缺 `<run_id>/<N>-<name>` 段（t-11 R2）
+
+- **Source**: t-11 round-2 reviewer / advisory observation
+- **Confidence**: 60%
+- **Conflict**: §6.0 point 3 / 决策 #109 规定 per-gate error file 路径为 `<workspace>/<run_id>/<N>-<name>.error.txt`；M4 skeleton 当前实现是 `<workspace>/gates/<hash-prefix>/<gate.name>.error.txt`，缺 `run_id` 段且未走 `N-name` 命名
+- **Defer reason**: M4 round-4 skeleton 期无 `run_id` 上下文（`OfflineHarness.__init__` 仅持 workspace）；线 `run_id` 进 `_write_gate_error` 需要先在 `run()` orchestrator 建立 run-id allocation，是 t-14 范围
+- **Future close criterion**: t-14 实施 `run()` 时 (a) 线 `run_id` 入 harness 实例状态（`self._run_id`），(b) 把 error path 改写为 `<workspace>/<run_id>/<N>-<gate.name>.error.txt`（N 为 0-based gate index in `self._gates`），(c) 同步 `<workspace>/gates/<hash-prefix>/` 旧路径作为 transitional symlink 或直接弃用（视 t-14 review）
+
+### CF-t14-c — 合成 gate-internal-error 的 `GateResult.evidence` 为 None（t-11 R2）
+
+- **Source**: t-11 round-2 reviewer / advisory observation
+- **Confidence**: 50%
+- **Conflict**: None；属 forward-looking ergonomics
+- **Defer reason**: 当前合成 GateResult 的 `evidence=None`（默认）；可以挂 `{"error_file": str(err_path)}` 让下游工具（report.md generator / CI annotation）直接拿到 traceback 路径而无需重新推导 hash-prefix 目录。M4 skeleton 期无下游消费者，零 active 收益
+- **Future close criterion**: CF-t14-b 闭合时（path 形态最终确定）一并 fold 进合成 GateResult 的 `evidence={"error_file": str(err_path)}`；或 t-15 report.md generator 首次需要 error file 路径时反推闭合
+
+### CF-t13-a — `compute_cohen_kappa([0.5],[0.5])` (n=1, pe==1) 退化回归测试未补（t-13 R2）
+
+- **Source**: t-13 round-2 reviewer / advisory observation
+- **Confidence**: 50%
+- **Conflict**: None；属测试覆盖度补强
+- **Defer reason**: M4 t-13 ship 的 κ 实现在 n=1 / pe==1 退化路径上数学上正确（返回 NaN-或-定值，视实现 branch），但缺一个 explicit pin test 把行为锁定。M5 calibration 真实 corpus 接入前是 low-active-risk
+- **Future close criterion**: M5 calibration corpus 接入或更早 housekeeping pass 中追加 `test_compute_cohen_kappa_degenerate_pe_one`，pin n=1 / pe==1 时的返回值（NaN raise 或固定 sentinel，视实际行为）
+
+### CF-t13-b — `CalibrationReport.model_dump → model_validate` round-trip test 未补（t-13 R2）
+
+- **Source**: t-13 round-2 reviewer / advisory observation
+- **Confidence**: 50%
+- **Conflict**: None；属 serialisation regression guard
+- **Defer reason**: M4 t-13 ship `CalibrationReport` 是 `EvolveBase` 子类，继承 camelCase alias contract；当前测试覆盖了字段语义但未 round-trip serialisation。M4 阶段 CalibrationReport 不进 RunManifest sidecar（calibration 是 pre-flight 独立 artefact），round-trip break 低风险
+- **Future close criterion**: M5 calibration artefact 进入持久化路径（写盘 / 上传）时追加 `test_calibration_report_serialisation_round_trip`，pin `CalibrationReport.model_dump(by_alias=True) → model_validate` 等价
+
+### CF-t13-c — `calibrate()` 对全部 record 调用 `pool.score` 在 axis 校验之前（t-13 R2）
+
+- **Source**: t-13 round-2 reviewer / advisory observation
+- **Confidence**: 55%
+- **Conflict**: None；属 cost-on-error 路径优化
+- **Defer reason**: 当前 `calibrate()` 实现先 for-loop 全 `pool.score(record)` 再做 `human_scores` axis 校验；若 axis 缺失，已花费的 judge call 全数浪费在 ValueError 路径上。stub-injected scorer 下零成本，real `JudgePool.score` 接入后每次 ValueError run 浪费一倍 token spend
+- **Future close criterion**: t-14（或 wherever real `JudgeRunner.score` 落地）重构 `calibrate()`：先 sweep `record.human_scores.keys() == RUBRIC_AXES`，再启动 scoring loop；fail-fast on missing axes
+
+### CF-cc-a — `_JudgeScorer` Protocol 与 `JudgePool.score` 实接缺位（cross-cutting holistic sweep）
+
+- **Source**: holistic sanity sweep `a6fb1801f68b46fe2` / cross-cutting finding
+- **Confidence**: 60%
+- **Conflict**: None；属未来接线义务的 audit trail
+- **Defer reason**: `_JudgeScorer` Protocol 在 `calibration.py` 引用 `pool.score(record)`，但 `JudgePool` (`judges/rubric.py`) 当前未实现 `score` 方法 —— 只有 stub-injected tests 走通。M4 round-4 skeleton 范围合规（calibration 是独立预-flight 模块，不依赖 judge runtime），但 audit trail 需显式 marker 防止未来 contributor 误以为 production path 已 wired。本 commit 同步在 `calibration.py` `_JudgeScorer.score` docstring 加 `TODO(m4-followup CF-cc-a)` inline marker
+- **Future close criterion**: t-14 / t-15 pipeline 落地 `JudgePool.score(record: CalibrationRecord) -> RubricScore` real 实现（调 aux_provider）；inline TODO marker 同步移除，本 CF 闭合
+
+### CF-cc-b — `ManifestPrivacyViolation` 未声明 kwargs 与 `STRUCTURED_KWARGS` 一致性（cross-cutting holistic sweep）
+
+- **Source**: holistic sanity sweep `a6fb1801f68b46fe2` / cross-cutting finding
+- **Confidence**: 50%
+- **Conflict**: 与 §0.3 决策 #95 `STRUCTURED_KWARGS` registry 形态约定的 governance hygiene；运行时合规（`set(declared).issubset(kw_only)` 允许子集），但未来若有 `**kwargs`-forwarding wrapper（logger / telemetry）会静默丢失 `offending_path` / `offending_fields`
+- **Defer reason**: M4 内无 `**kwargs`-forwarding consumer；当前两 kw-only 字段仅在 raise site 与 traceback formatter 间往返，丢失风险为零。决议两选一（扩 `STRUCTURED_KWARGS` 容纳全部 vs 删未用 kwargs）需 M5 评估 ManifestPrivacyViolation 在 evolve telemetry 中的真实消费形态
+- **Future close criterion**: M5 evolve telemetry 接线（如 redaction.log structured emission）首次消费 `ManifestPrivacyViolation` 字段时二选一闭合 —— (a) `STRUCTURED_KWARGS = frozenset({"violated_invariant", "offending_path", "offending_fields"})`；(b) 删除 `offending_path` / `offending_fields` kwargs，将信息折入 `violated_invariant` message 字符串
+
+### CF-cc-d — 异常吞咽约定未在 `.agent/design.md` 文档化（cross-cutting holistic sweep）
+
+- **Source**: holistic sanity sweep `a6fb1801f68b46fe2` / cross-cutting finding
+- **Confidence**: 50%
+- **Conflict**: None；属 governance documentation gap
+- **Defer reason**: `_run_gates` (gate-time exception → synthetic fail GateResult) + `_run_stage` (manifest-pipeline exception → ManifestPrivacyViolation) + data-shape validation (raise ValueError) 三套约定在代码层 de-facto 已贯彻，但未写入 `.agent/design.md`。新贡献者读单一文件无法推导跨文件约定
+- **Future close criterion**: 下一次 `.agent/design.md` housekeeping pass 中追加 3-line 节："exception handling conventions: data-shape errors → raise ValueError; gate-time exceptions → swallow into GateResult.failure_reason via synthetic fail (§6.0 point 3 / 决策 #109); manifest-pipeline exceptions → raise ManifestPrivacyViolation (§9.4 redaction stage failure invariant)"
+
+### CF-t12-a — 额外 secret-shape 覆盖（API keys 扩展）（t-12 R3 fix scoping）
+
+- **Source**: t-12 round-3 fix scoping / deferred to M5 expansion
+- **Confidence**: 50%
+- **Conflict**: None；属 redaction surface 增量扩展
+- **Defer reason**: M4 t-12 ship 的 redaction 覆盖 Anthropic / OpenAI / GitHub PAT / AWS 四类 + email / phone / 路径 prefix。未覆盖：Google API keys (`AIza...`)、Slack tokens (`xox[bpars]-...`)、Stripe (`sk_live_` / `pk_live_`)、Twilio (`SK[0-9a-f]{32}`)、JWT (`eyJ...`)、PEM private key blocks、`.env`-style `PASSWORD=...` 行。每条是 dev log 例行泄漏向量，但 t-12 R3 fix 收敛在 4 类核心 vendor 即关帧 scope；剩余作为 M5 expansion candidate
+- **Future close criterion**: M5 redaction expansion task 落地上述 7 类正则 + 测试 fixture；或 M4 首月生产 retro 显示任一未覆盖类已发生实泄漏 → 升级为 must-fix hot-patch
+
+### CF-t12-b — 网络 / 身份标识 redaction 扩展（t-12 R3 fix scoping）
+
+- **Source**: t-12 round-3 fix scoping / deferred to M5 expansion
+- **Confidence**: 50%
+- **Conflict**: None；属 redaction surface 增量扩展
+- **Defer reason**: 未覆盖 IPv4 / IPv6 地址、MAC 地址、`Authorization: Bearer ...` 头、unicode-homoglyph emails (Cyrillic 'а')、URL-encoded `alice%40example.com`。t-12 R3 scope 同 CF-t12-a 理由收敛
+- **Future close criterion**: 与 CF-t12-a 同 M5 expansion pass 合并落地；homoglyph 与 URL-encoded 变体可能需要 NFKC normalization step 预处理，设计待 M5 评估
+
+### CF-t12-c — 幂等性 hypothesis fuzz 测试（t-12 R3 fix scoping）
+
+- **Source**: t-12 round-3 fix scoping / deferred to M5 expansion
+- **Confidence**: 50%
+- **Conflict**: None；属测试覆盖度补强（property-based）
+- **Defer reason**: M4 t-12 R3 已 pin 几条 canonical input 的 `redact(redact(x).text).matches == {}` example-based 测试；hypothesis-driven fuzz 是 high-value 但 high-investment（property strategy 设计 + shrinking budget tuning），M5 redaction expansion pass 是合适落点（fuzz 同时覆盖 CF-t12-a / b 的扩展正则）
+- **Future close criterion**: M5 redaction expansion 任务一并 ship `test_redaction_idempotence_property`（hypothesis ≥ 200 examples，shrink budget ≥ 10s），覆盖全部已实施正则的幂等性

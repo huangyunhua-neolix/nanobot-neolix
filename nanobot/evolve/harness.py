@@ -14,9 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import ConfigDict
-
-from nanobot.evolve._base import EvolveBase
+from nanobot.evolve._base import EvolveBase, FrozenEvolveBase
 from nanobot.evolve.exceptions import ConfigError
 from nanobot.evolve.gates import GATES, Gate, GateResult
 
@@ -66,16 +64,10 @@ class JudgeSummary(EvolveBase):
     consensus_split_count: int
 
 
-class RunManifest(EvolveBase):
-    # Override only the bits the spec §3.7 requires: the manifest is immutable
-    # once written. Keep the parent alias_generator + populate_by_name so the
-    # camelCase JSON contract is identical to every other EvolveBase model.
-    model_config = ConfigDict(
-        extra="forbid",
-        alias_generator=EvolveBase.model_config["alias_generator"],
-        populate_by_name=True,
-        frozen=True,
-    )
+class RunManifest(FrozenEvolveBase):
+    # FrozenEvolveBase carries the immutable-once-written contract (§3.7) while
+    # propagating EvolveBase's camelCase alias contract — see `_base.py` for the
+    # rationale on centralising this overlay.
 
     run_id: str
     started_at: datetime

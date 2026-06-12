@@ -33,6 +33,8 @@ CALIBRATION_KAPPA_THRESHOLD: float = 0.6
 RUBRIC_AXES: tuple[str, ...] = ("process", "output", "token")
 
 
+# Intentional @dataclass (not EvolveBase): test/runtime input record, not serialised
+# into the RunManifest sidecar — keeps fixture construction terse without alias plumbing.
 @dataclass(frozen=True)
 class CalibrationRecord:
     """One human-labelled calibration sample.
@@ -57,6 +59,9 @@ class _JudgeScorer(Protocol):
     (M4 t-04 / t-05 only defined the config + result types). ``calibrate``
     invokes ``pool.score(record)`` so tests can pass a stub now and the real
     pool can grow the method in a follow-up without breaking this signature.
+
+    TODO(m4-followup CF-cc-a): wire the real ``JudgePool.score`` entry point
+    during the t-14 / t-15 pipeline task — see ``m4-carry-forward.md`` §9.
     """
 
     def score(self, record: CalibrationRecord) -> RubricScore: ...
