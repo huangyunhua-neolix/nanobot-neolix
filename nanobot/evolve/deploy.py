@@ -201,6 +201,17 @@ def _validate_no_newlines(**fields: str) -> None:
                     f"char U+{ord(ch):04X} — would break the 5-section "
                     f"markdown invariant"
                 )
+        # Threat: triple-backtick opens a fenced code block in the RENDERED
+        # PR view that swallows following ``## `` headers, corrupting the
+        # visible 5-section layout even though the raw-text invariant
+        # (R3-5 ``re.findall``) still passes. Defense-in-depth — block at
+        # leaf so no future GateResult plugin can leak it through.
+        if "```" in value:
+            raise ValueError(
+                f"assemble_pr_body: field {name!r} contains triple-backtick — "
+                f"would open a fenced code block and break rendered PR layout "
+                f"(swallowing subsequent ## section headers from rendered view)"
+            )
 
 
 def assemble_pr_body(

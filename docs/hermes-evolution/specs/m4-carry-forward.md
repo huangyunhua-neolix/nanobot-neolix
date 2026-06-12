@@ -393,11 +393,7 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 
 ### CF-R3-f — Backtick / code-fence injection via `gate_name` / `failure_reason`（R3 security）
 
-- **Source**: R3 holistic sweep / security finding
-- **Confidence**: 60%
-- **Conflict**: None；与 R3-2 newline 防御正交
-- **Defer reason**: 当前 `_validate_no_newlines` 已升级覆盖 Unicode 行分隔符；但一个恶意 gate plugin 可在 `failure_reason` 注入 ` ``` ` / `</code>` 等 markdown / HTML 控制 token 打乱 PR 渲染（不破坏 5-section 结构，但视觉欺骗 reviewer）。M4 skeleton 期 gate plugin 是 trusted-internal
-- **Future close criterion**: M5 加 renderer-level allowlist —— `failure_reason` 仅允许 `[A-Za-z0-9 .,:;()<>/=_'-]`，其它字符 escape 为 `\xNN`
+- **CF-R3-f (security):** Triple-backtick injection in `failure_reason` / `gate_name` is rejected at the input-validation leaf (R3.5 follow-up commit). Richer markdown-injection audit — link spoofing via `[text](javascript:...)`, image refs (`![alt](evil.png)`), HTML comment smuggling, autolink abuse — deferred to M5 when production gate plugins land and an explicit injection threat model is needed.
 
 ### CF-R3-g — Regex-DoS 审计未对 PHONE_RE / OPENAI_KEY_RE 做 100KB+ 对抗输入（R3 security）
 

@@ -374,6 +374,43 @@ def test_assemble_pr_body_rejects_each_forbidden_line_break_char(
     assert f"U+{codepoint_hex}" in msg
 
 
+def test_assemble_pr_body_rejects_triple_backtick_in_failure_reason() -> None:
+    """R3.5 follow-up: triple-backtick in ``failure_reason`` would open a
+    fenced code block in the rendered PR view that swallows subsequent
+    ``## `` headers, breaking the visible 5-section layout (raw-text
+    invariant still passes — this is a defense-in-depth rendered-layout
+    guard)."""
+    # Use a single-line payload so the triple-backtick check wins (the more
+    # common newline error correctly takes precedence on inputs with both —
+    # see the per-char loop ordering in deploy.py).
+    manifest = _make_run_manifest()
+    gates = [
+        _gate_result(
+            "2-size-cap", verdict="fail", reason="```sh rm -rf / ```"
+        ),
+    ]
+    with pytest.raises(ValueError) as exc_info:
+        assemble_pr_body(manifest, gates)
+    msg = str(exc_info.value)
+    assert "failure_reason" in msg
+    assert "triple-backtick" in msg
+
+
+def test_assemble_pr_body_allows_single_backtick_in_failure_reason() -> None:
+    """Boundary pin: single backticks are legitimate markdown inline-code
+    syntax (e.g. naming a missing config file) and MUST survive through to
+    the rendered PR body unchanged. Only triple-backtick (fenced block) is
+    blocked."""
+    manifest = _make_run_manifest()
+    gates = [
+        _gate_result(
+            "2-size-cap", verdict="fail", reason="missing `config.json`"
+        ),
+    ]
+    body = assemble_pr_body(manifest, gates)
+    assert "`config.json`" in body
+
+
 def test_assemble_pr_body_accepts_safe_punctuation_and_spaces() -> None:
     """Boundary pin: regular spaces, quotes, ampersands, and other 'looks weird
     but is fine in markdown' chars must NOT be rejected."""
