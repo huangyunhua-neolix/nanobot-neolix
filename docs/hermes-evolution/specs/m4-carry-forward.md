@@ -334,3 +334,19 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Conflict**: None；属测试覆盖度补强（property-based）
 - **Defer reason**: M4 t-12 R3 已 pin 几条 canonical input 的 `redact(redact(x).text).matches == {}` example-based 测试；hypothesis-driven fuzz 是 high-value 但 high-investment（property strategy 设计 + shrinking budget tuning），M5 redaction expansion pass 是合适落点（fuzz 同时覆盖 CF-t12-a / b 的扩展正则）
 - **Future close criterion**: M5 redaction expansion 任务一并 ship `test_redaction_idempotence_property`（hypothesis ≥ 200 examples，shrink budget ≥ 10s），覆盖全部已实施正则的幂等性
+
+### CF-t16-a — `assert_not_main` 仅 case-sensitive exact-match，未 normalise（t-15 R2）
+
+- **Source**: t-15 round-2 reviewer / advisory observation
+- **Confidence**: 55%
+- **Conflict**: None；属 caller-side normalisation 义务的 audit trail
+- **Defer reason**: `assert_not_main(branch)` 当前用 `branch in PROTECTED_BRANCHES` 做完全相等匹配。`"MAIN"` / `" main"` / `"main\n"` / `"refs/heads/main"` 都会 silently bypass 保护。M4 skeleton 期 caller 不存在；t-16 CLI / pipeline 接入是首个真实 caller，届时 caller 侧 normalisation（`git rev-parse --abbrev-ref HEAD` 短名）是更干净的闭合点
+- **Future close criterion**: t-16 实施 CLI 落地时二选一闭合 —— (a) caller 全部走 `git rev-parse --abbrev-ref HEAD` 后再传入（推荐，单一 normalisation 点）；(b) 在 `assert_not_main` 入口加 `branch = branch.strip()` + case-insensitive lookup（`branch.lower() in PROTECTED_BRANCHES`），并补 `refs/heads/<name>` prefix 剥离
+
+### CF-m5-a — `assemble_pr_body` Diff stats section 是 deterministic stub（t-15 R2）
+
+- **Source**: t-15 round-2 reviewer / advisory observation
+- **Confidence**: 60%
+- **Conflict**: None；属 M5 pipeline 接线义务的 audit trail
+- **Defer reason**: `assemble_pr_body` 的 Diff stats section 当前硬编码 `files changed: 1 (skill <name> SKILL.md)`，因为 M4 skeleton 期 `RunManifest` 未承载 `Patch` 对象。本 commit 同步在 deploy.py 该 section 上方加 `TODO(M5)` inline marker 防止 stub 变成 load-bearing 数据
+- **Future close criterion**: M5 `pipeline.py` 线 `Patch` 入 `RunManifest`（携带真实 +/- counts 与 files-touched 列表）时重写本 section 输出真实 diff stats；inline `TODO(M5)` marker 同步移除，本 CF 闭合

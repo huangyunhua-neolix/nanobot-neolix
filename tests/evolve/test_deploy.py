@@ -244,3 +244,87 @@ def test_assemble_pr_body_is_deterministic() -> None:
     body1 = assemble_pr_body(manifest, gates)
     body2 = assemble_pr_body(manifest, gates)
     assert body1 == body2
+
+
+# ---------------------------------------------------------------------------
+# assemble_pr_body — newline-injection guard (round-2 security finding)
+# ---------------------------------------------------------------------------
+#
+# A field containing ``\n## ...`` would forge extra level-2 headers and break
+# the 5-section invariant the renderer promises. ``assemble_pr_body`` is a
+# leaf renderer; it MUST NOT rely on caller hygiene. The guard raises
+# ValueError naming the offending field so callers can fail loudly.
+
+
+def test_assemble_pr_body_rejects_newline_in_skill_name() -> None:
+    manifest = _make_run_manifest().model_copy(
+        update={"skill_name": "foo\n## Pwned\n"}
+    )
+    with pytest.raises(ValueError) as exc_info:
+        assemble_pr_body(manifest, [])
+    msg = str(exc_info.value)
+    assert "skill_name" in msg
+    assert "newline" in msg
+
+
+def test_assemble_pr_body_rejects_carriage_return_in_final_status() -> None:
+    manifest = _make_run_manifest().model_copy(update={"final_status": "\rmain"})
+    with pytest.raises(ValueError) as exc_info:
+        assemble_pr_body(manifest, [])
+    msg = str(exc_info.value)
+    assert "final_status" in msg
+    assert "newline" in msg
+
+
+def test_assemble_pr_body_rejects_newline_in_run_id() -> None:
+    manifest = _make_run_manifest().model_copy(update={"run_id": "run\n## Pwned"})
+    with pytest.raises(ValueError) as exc_info:
+        assemble_pr_body(manifest, [])
+    msg = str(exc_info.value)
+    assert "run_id" in msg
+    assert "newline" in msg
+
+
+def test_assemble_pr_body_rejects_newline_in_gate_name() -> None:
+    manifest = _make_run_manifest()
+    gates = [_gate_result("boom\n## evil")]
+    with pytest.raises(ValueError) as exc_info:
+        assemble_pr_body(manifest, gates)
+    msg = str(exc_info.value)
+    assert "gate_name" in msg
+    assert "newline" in msg
+
+
+def test_assemble_pr_body_rejects_newline_in_failure_reason() -> None:
+    manifest = _make_run_manifest()
+    gates = [
+        _gate_result("2-size-cap", verdict="fail", reason="multi\nline\nstack"),
+    ]
+    with pytest.raises(ValueError) as exc_info:
+        assemble_pr_body(manifest, gates)
+    msg = str(exc_info.value)
+    assert "failure_reason" in msg
+    assert "newline" in msg
+
+
+def test_assemble_pr_body_accepts_none_failure_reason() -> None:
+    # ``failure_reason=None`` is legal (passing gates leave it unset); the
+    # guard must not blow up on the ``or ""`` shim path.
+    manifest = _make_run_manifest()
+    gates = [_gate_result("1-test-pass", verdict="pass", reason=None)]
+    body = assemble_pr_body(manifest, gates)
+    assert "1-test-pass" in body
+
+
+def test_assemble_pr_body_5_section_invariant_holds_under_safe_input() -> None:
+    # Reconfirm the count==5 + ordering after the validation pass to prove
+    # the guard didn't accidentally regress the happy path.
+    manifest = _make_run_manifest()
+    gates = [
+        _gate_result("1-test-pass", verdict="pass"),
+        _gate_result("2-size-cap", verdict="fail", reason="lines>cap"),
+    ]
+    body = assemble_pr_body(manifest, gates)
+    headers = _section_headers_in_order(body)
+    assert len(headers) == 5
+    assert headers == list(PR_BODY_SECTIONS)

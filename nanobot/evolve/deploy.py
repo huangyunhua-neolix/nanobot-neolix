@@ -67,6 +67,24 @@ PR_BODY_SECTIONS: tuple[str, ...] = (
 )
 
 
+def _validate_no_newlines(**fields: str) -> None:
+    """Defense-in-depth leaf guard for ``assemble_pr_body``.
+
+    A single ``\\n`` smuggled into ``skill_name`` / ``final_status`` /
+    ``run_id`` / ``gate_name`` / ``failure_reason`` would let the caller forge
+    extra ``## `` headers and break the 5-section invariant pinned by §8.2.
+    Caller-side validation (slug enforcement on skill names, manifest writer
+    schemas) is the first line; this leaf check guarantees the contract no
+    matter what reached us.
+    """
+    for name, value in fields.items():
+        if "\n" in value or "\r" in value:
+            raise ValueError(
+                f"assemble_pr_body: field {name!r} contains newline — "
+                f"would break the 5-section markdown invariant"
+            )
+
+
 def assemble_pr_body(
     manifest: "RunManifest", gate_results: list["GateResult"]
 ) -> str:
@@ -79,7 +97,25 @@ def assemble_pr_body(
     Per §8.2 / §8.5 the Rollback line is a single ``git revert <sha>`` placeholder
     — the real squash-merge SHA is amended in by a webhook / follow-up tool
     after GitHub creates it; M4 candidates do not require additional cleanup.
+
+    Precondition: interpolated string fields (``manifest.skill_name``,
+    ``manifest.final_status``, ``manifest.run_id``, and ``gate_name`` /
+    ``failure_reason`` on each ``GateResult``) MUST NOT contain ``\\n`` or
+    ``\\r``. Validation raises :class:`ValueError` naming the offending field
+    — this is a defense-in-depth leaf check; the 5-section invariant cannot
+    rely on caller hygiene.
     """
+    _validate_no_newlines(
+        skill_name=manifest.skill_name,
+        final_status=manifest.final_status,
+        run_id=manifest.run_id,
+    )
+    for r in gate_results:
+        _validate_no_newlines(
+            gate_name=r.gate_name,
+            failure_reason=r.failure_reason or "",
+        )
+
     promoted = manifest.promoted_candidate_hash or "<none>"
     short_sha = promoted[:8] if promoted != "<none>" else "<none>"
 
@@ -126,6 +162,9 @@ def assemble_pr_body(
     # Skeleton: full +/- line counts require the diff plumbing in t-14 pipeline.
     # We render a deterministic stub including the candidate short SHA; pipeline
     # is expected to post-process this section once it has the patch in hand.
+    # TODO(M5): replace stub with real +/- counts from the candidate diff
+    # (see CF-t14-pipeline-wiring — pipeline.py needs to thread `Patch` into
+    # RunManifest first).
     diff_lines = [
         "## Diff stats",
         f"candidate hash: `{short_sha}` (full: `{promoted}`)",
