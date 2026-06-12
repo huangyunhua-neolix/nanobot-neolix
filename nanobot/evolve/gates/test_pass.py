@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, ClassVar
 
 from nanobot.evolve.exceptions import GateInternalError
-from nanobot.evolve.gates import GATES, Gate, GateResult
+from nanobot.evolve.gates import Gate, GateResult
 from nanobot.evolve.gates._constants import (
     TIER_A_PASS_RATE_FLOOR_BPS,
     TIER_C_PASS_RATE_FLOOR_BPS,
@@ -81,11 +81,17 @@ class TestPassGate(Gate):
         # per decision #115 avoids FP wobble at the bps boundary.
         if tier_c_pass * 100 < TIER_C_PASS_RATE_FLOOR_BPS * tier_c_total:
             verdict = "fail"
-            failure_reason = "tier-c-rate-floor: P/T (rate) < 1.0"
+            failure_reason = (
+                f"tier-c-rate-floor: {tier_c_pass}/{tier_c_total} "
+                f"({tier_c_pass / tier_c_total:.2f}) < 1.0"
+            )
         # Path 2 — only evaluated when Tier C passes.
         elif tier_a_pass * 100 < TIER_A_PASS_RATE_FLOOR_BPS * tier_a_total:
             verdict = "fail"
-            failure_reason = "tier-a-rate-floor: P/T (rate) < 0.80"
+            failure_reason = (
+                f"tier-a-rate-floor: {tier_a_pass}/{tier_a_total} "
+                f"({tier_a_pass / tier_a_total:.2f}) < 0.80"
+            )
 
         end = datetime.now(timezone.utc)
         duration_ms = int((end - start).total_seconds() * 1000)
@@ -101,9 +107,3 @@ class TestPassGate(Gate):
             timestamp=end,
             duration_ms=duration_ms,
         )
-
-
-# NOTE: registration in GATES happens in the coordinated commit on
-# nanobot/evolve/gates/__init__.py after t-08/t-09/t-10 land. Do not append
-# from this module — keep import side effects minimal.
-_ = GATES  # re-export touch silences linters and documents the relationship.

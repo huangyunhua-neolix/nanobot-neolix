@@ -81,7 +81,7 @@ def test_pass_verdict():
 
 
 def test_tier_a_fail_verdict():
-    """Spec DoD: 5/5 tier-C, 17/25 tier-A → fail with tier-a-rate-floor reason."""
+    """Spec §6.1.3 DoD: 5/5 tier-C, 17/25 tier-A → fail with populated reason."""
     gate = TestPassGate()
     cand = _make_candidate(
         tier_c_pass=5, tier_c_total=5, tier_a_pass=17, tier_a_total=25
@@ -90,18 +90,23 @@ def test_tier_a_fail_verdict():
     assert result.verdict == "fail"
     assert result.failure_reason is not None
     assert result.failure_reason.startswith("tier-a-rate-floor")
+    # Spec §6.1.3 example: exact format string with counts + ratio.
+    assert result.failure_reason == "tier-a-rate-floor: 17/25 (0.68) < 0.80"
 
 
 def test_tier_c_fail_verdict():
-    """Tier C below 100% floor — fail with tier-c-rate-floor reason. Path 1 wins."""
+    """Tier C below 100% floor — fail with populated tier-c-rate-floor reason."""
     gate = TestPassGate()
     cand = _make_candidate(
-        tier_c_pass=4, tier_c_total=5, tier_a_pass=25, tier_a_total=25
+        tier_c_pass=4, tier_c_total=5, tier_a_pass=20, tier_a_total=25
     )
     result = gate.evaluate(cand, _FakeBaseline())
     assert result.verdict == "fail"
     assert result.failure_reason is not None
     assert result.failure_reason.startswith("tier-c-rate-floor")
+    # Spec §6.1.3 example: exact format string with counts + ratio.
+    # Tier A is 20/25 here, which would pass — so path-1 must win on its own.
+    assert result.failure_reason == "tier-c-rate-floor: 4/5 (0.80) < 1.0"
 
 
 def test_tier_c_fail_takes_precedence_over_tier_a():
