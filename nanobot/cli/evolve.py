@@ -14,7 +14,12 @@ hints in ``nanobot.evolve.exceptions``):
   terminal-failure context that ``ConfigError``'s handler would silently
   swallow if reordered.
 * ``JudgeError`` / ``ManifestPrivacyViolation`` / ``EvolveEnvironmentError``
-  BEFORE bare ``RuntimeError`` — same MRO trap on the ``RuntimeError`` side.
+  / ``GateInternalError`` BEFORE bare ``RuntimeError`` — same MRO trap on
+  the ``RuntimeError`` side. ``GateInternalError`` carries
+  ``MUST_PRECEDE = {"RuntimeError"}`` and maps to its own
+  ``EXIT_GATE_INTERNAL`` slot so operators can distinguish a gate
+  precondition violation (malformed inputs, tier sizes below floor) from a
+  generic runtime fault.
 
 The ``pydantic.ValidationError`` → ``ConfigError`` wrap happens at the
 dispatch boundary so callers (including stubs in this module) can rely on
@@ -33,11 +38,15 @@ from nanobot.evolve.exceptions import (
     ApplyTerminalError,
     ConfigError,
     EvolveEnvironmentError,
+    GateInternalError,
     JudgeError,
     ManifestPrivacyViolation,
 )
 
 # Exit codes — keep aligned with spec §4.6.
+# EXIT_GATE_INTERNAL extends §4.6 with a dedicated slot for
+# GateInternalError so its MUST_PRECEDE invariant doesn't silently
+# degrade to EXIT_RUNTIME (the bare-RuntimeError slot).
 EXIT_OK = 0
 EXIT_RUNTIME = 1
 EXIT_CONFIG = 2
@@ -45,6 +54,7 @@ EXIT_APPLY_TERMINAL = 3
 EXIT_JUDGE = 4
 EXIT_PRIVACY = 5
 EXIT_ENV = 6
+EXIT_GATE_INTERNAL = 7
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +220,12 @@ def dispatch(args: argparse.Namespace) -> int:
     except EvolveEnvironmentError as exc:
         _print_err("environment", exc)
         return EXIT_ENV
+    except GateInternalError as exc:
+        # MUST precede bare RuntimeError; carries its own exit slot so
+        # operators can distinguish a gate precondition violation from a
+        # generic runtime fault (spec §6.1.2 / decision #120).
+        _print_err("gate-internal", exc)
+        return EXIT_GATE_INTERNAL
     except RuntimeError as exc:
         _print_err("runtime", exc)
         return EXIT_RUNTIME

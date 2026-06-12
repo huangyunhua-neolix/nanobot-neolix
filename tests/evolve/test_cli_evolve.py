@@ -22,6 +22,7 @@ from nanobot.evolve.exceptions import (
     ApplyTerminalError,
     ConfigError,
     EvolveEnvironmentError,
+    GateInternalError,
     JudgeError,
     ManifestPrivacyViolation,
 )
@@ -233,6 +234,43 @@ def test_environment_error_precedes_bare_runtime_error():
         raise EvolveEnvironmentError("env missing")
 
     assert evolve_cli.dispatch(_ns_with_handler(boom)) == 6
+
+
+def test_dispatch_gate_internal_error_maps_to_7():
+    """``GateInternalError`` MUST surface on its own exit slot (T16-FIX-1).
+
+    Before the explicit arm landed, ``GateInternalError(EvolveError,
+    RuntimeError)`` silently degraded to ``EXIT_RUNTIME=1`` via the bare
+    ``except RuntimeError`` arm, violating the ``MUST_PRECEDE={"RuntimeError"}``
+    invariant declared on the exception class.
+    """
+
+    def boom(_a):
+        raise GateInternalError("tier-C records missing for gate eval")
+
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == evolve_cli.EXIT_GATE_INTERNAL
+    assert evolve_cli.EXIT_GATE_INTERNAL == 7
+
+
+def test_gate_internal_error_precedes_bare_runtime_error_via_dual_inheritance():
+    """Pin handler-order against a future swap of the two RuntimeError arms.
+
+    A subclass that ISA both ``GateInternalError`` (specific) and
+    ``RuntimeError`` (bare) MUST hit the gate-internal arm first. If a
+    refactor moved ``except RuntimeError`` above ``except GateInternalError``
+    the result would silently become ``EXIT_RUNTIME=1``.
+    """
+    from typing import ClassVar
+
+    class _GateAndRuntimeError(GateInternalError):
+        # EvolveError.__init_subclass__ requires explicit STRUCTURED_KWARGS
+        # redeclaration when a parent declares it.
+        STRUCTURED_KWARGS: ClassVar[frozenset[str]] = frozenset()
+
+    def boom(_a):
+        raise _GateAndRuntimeError("synthetic dual-inheritance probe")
+
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 7
 
 
 # ---------------------------------------------------------------------------
