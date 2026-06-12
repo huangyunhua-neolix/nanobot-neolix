@@ -3035,9 +3035,11 @@ GATE_TIMEOUT_MS_HARD: int = 600_000
 
 verdict=`fail` 时 `failure_reason` 形如：
 
-- `"tier-c-rate-floor: 4/5 (0.80) < 1.0"` —— Tier C 未全过（path 1）
-- `"tier-a-rate-floor: 17/25 (0.68) < 0.80"` —— Tier C 全过但 Tier A rate 不达标（path 2，仅在 path 1 通过后评估）
+- `"tier-c-rate-floor: 4/5 (0.8000) < 1.0"` —— Tier C 未全过（path 1）
+- `"tier-a-rate-floor: 17/25 (0.6800) < 0.80"` —— Tier C 全过但 Tier A rate 不达标（path 2，仅在 path 1 通过后评估）
 - `"gate-internal-error: <ExcName>: <msg>"` —— gate.evaluate 自身抛异常（§6.0 point 3）
+
+> 注：ratio 显示精度由 `.2f` 提升为 `.4f`，避免整数交叉乘法判定 `fail` 但 `.2f` 四舍五入后显示恰好等于阈值（如 `799/1000 = 0.7990` 显示成 `0.80` 与 `< 0.80` 自相矛盾）的边界情形。
 
 #### 6.1.4 `metrics` 契约键
 

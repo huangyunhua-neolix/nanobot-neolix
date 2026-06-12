@@ -91,7 +91,7 @@ def test_tier_a_fail_verdict():
     assert result.failure_reason is not None
     assert result.failure_reason.startswith("tier-a-rate-floor")
     # Spec §6.1.3 example: exact format string with counts + ratio.
-    assert result.failure_reason == "tier-a-rate-floor: 17/25 (0.68) < 0.80"
+    assert result.failure_reason == "tier-a-rate-floor: 17/25 (0.6800) < 0.80"
 
 
 def test_tier_c_fail_verdict():
@@ -106,7 +106,7 @@ def test_tier_c_fail_verdict():
     assert result.failure_reason.startswith("tier-c-rate-floor")
     # Spec §6.1.3 example: exact format string with counts + ratio.
     # Tier A is 20/25 here, which would pass — so path-1 must win on its own.
-    assert result.failure_reason == "tier-c-rate-floor: 4/5 (0.80) < 1.0"
+    assert result.failure_reason == "tier-c-rate-floor: 4/5 (0.8000) < 1.0"
 
 
 def test_tier_c_fail_takes_precedence_over_tier_a():
@@ -139,6 +139,17 @@ def test_precondition_tier_a_empty():
     with pytest.raises(GateInternalError) as exc:
         gate.evaluate(cand, _FakeBaseline())
     assert "tier-a-empty" in str(exc.value)
+
+
+def test_precondition_missing_required_key_raises():
+    """Missing required size_metrics key raises GateInternalError, not silent 0/N fail."""
+    gate = TestPassGate()
+    # tier_c_total present, tier_c_pass MISSING — must NOT silently default to 0/total
+    cand = _FakeCandidate({"tier_c_total": 10, "tier_a_pass": 20, "tier_a_total": 25})
+    with pytest.raises(GateInternalError) as exc:
+        gate.evaluate(cand, _FakeBaseline())
+    assert "malformed-candidate" in str(exc.value)
+    assert "tier_c_pass" in str(exc.value)
 
 
 def test_precondition_tier_c_below_floor():

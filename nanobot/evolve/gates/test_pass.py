@@ -50,10 +50,16 @@ class TestPassGate(Gate):
         start = datetime.now(timezone.utc)
 
         sm = candidate.size_metrics
-        tier_c_pass = int(sm.get("tier_c_pass", 0))
-        tier_c_total = int(sm.get("tier_c_total", 0))
-        tier_a_pass = int(sm.get("tier_a_pass", 0))
-        tier_a_total = int(sm.get("tier_a_total", 0))
+        required = ("tier_c_pass", "tier_c_total", "tier_a_pass", "tier_a_total")
+        missing = [k for k in required if k not in sm]
+        if missing:
+            raise GateInternalError(
+                f"malformed-candidate: size_metrics missing required keys {missing}"
+            )
+        tier_c_pass = int(sm["tier_c_pass"])
+        tier_c_total = int(sm["tier_c_total"])
+        tier_a_pass = int(sm["tier_a_pass"])
+        tier_a_total = int(sm["tier_a_total"])
 
         # Preconditions (§6.1.2 / decision #120).
         if tier_c_total == 0:
@@ -83,14 +89,14 @@ class TestPassGate(Gate):
             verdict = "fail"
             failure_reason = (
                 f"tier-c-rate-floor: {tier_c_pass}/{tier_c_total} "
-                f"({tier_c_pass / tier_c_total:.2f}) < 1.0"
+                f"({tier_c_pass / tier_c_total:.4f}) < 1.0"
             )
         # Path 2 — only evaluated when Tier C passes.
         elif tier_a_pass * 100 < TIER_A_PASS_RATE_FLOOR_BPS * tier_a_total:
             verdict = "fail"
             failure_reason = (
                 f"tier-a-rate-floor: {tier_a_pass}/{tier_a_total} "
-                f"({tier_a_pass / tier_a_total:.2f}) < 0.80"
+                f"({tier_a_pass / tier_a_total:.4f}) < 0.80"
             )
 
         end = datetime.now(timezone.utc)
