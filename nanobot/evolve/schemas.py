@@ -26,8 +26,8 @@ class RubricWeights(EvolveBase):
         return self
 
 
-def _assert_odd_pool_size(n: int, *, context: str) -> None:
-    if n == 0 or n % 2 == 0:
+def assert_odd_pool_size(n: int, *, context: str) -> None:
+    if n < 1 or n % 2 == 0:
         raise ValueError(
             f"{context}: judge pool size must be odd and >= 1 (got {n})"
         )
