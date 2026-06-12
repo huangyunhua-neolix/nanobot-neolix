@@ -41,7 +41,10 @@
 | 82 | CLI 退出码全表（0=ok / 1=generic / 2=config / 3=extra-missing / 4=privacy / 5=JudgeError / 6=fs-or-not-found / 7=harness-invariant / 8=apply-precondition）；gate fail 不映射到非零 | §4.6 | CI / 自动化脚本需可分流不同失败模式（特别是「重试 provider」vs「报 bug」）；gate fail 是业务判定不是 CLI 错误。原 decision #82 of C-rev 只到 exit 7；C-rev2 增设 exit 8（见 #85） |
 | 83 | Default judge pool 选 3 家不同 provider（Anthropic Claude 3.5 Sonnet / OpenAI GPT-4o / Google Gemini 1.5 Pro），不重 provider | §4.5 | 同 provider 模型 bias 高度相关；跨 provider 最大化解耦 |
 | 84 | `RubricWeights` 为 canonical 权重类型；`EvolveDefaults.rubric_weights` 由 `dict[str, float]` 改为 `RubricWeights`；`RubricWeights` 加入 `__all__`（数 17）；求和不变量由 `RubricWeights._sum_to_one` 单一来源校验，`EvolveDefaults._weights_sum_to_one` 删除 | §3.3 / §4.5 / §5.4.6 | C-rev-3 揭示 Round C-rev 的 `_sum_to_one` 是空 stub（silent no-op），`_validate_aggregate` 也是 stub；统一类型 + 单一 validator 消除 dead code、提升类型安全 |
-| 85 | Exit code 8 保留给 `apply` 子命令的前置失败 terminal（`final_status != promoted_to_pr` / `FileExistsError` without `--force`）；exit 5 唯一保留给 `JudgeError`（瞬时可重试） | §4.6 / §4.4.3 / §5.3 | C-rev2 发现 exit 5 同时被瞬时 provider 抖动 + apply 前置失败共用，导致 CI 按 "exit 5 → 重试" 策略对 terminal 失败无限循环；拆分后语义清晰 |
+| 85 | Exit code 8 保留给 `apply` 子命令的前置失败 terminal（`final_status != promoted_to_pr` / `FileExistsError` without `--force`）；exit 5 唯一保留给 `JudgeError`（瞬时可重试） | §4.6 / §4.4.3 / §5.3 | C-rev2 发现 exit 5 同时被瞬时 provider 抖动 + apply 前置失败共用，导致 CI 按 "exit 5 → 重试" 策略对 terminal 失败无限循环；拆分后语义清晰。**被决策 #88 部分 supersede（FileExistsError 移至 exit 6）** |
+| 86 | `JudgePool` 重构：`min_quorum: int \| None = None`（哨兵）+ `effective_min_quorum` computed_field 供 runtime 消费；`frozen=True` 与 `RunManifest` / `EvolveDefaults` 对齐；删除 `object.__setattr__` 绕道 | §3.3 / §5.1 retry contract | Round C-rev3 揭示三处结构性问题：`min_quorum=0` 既是「未设」哨兵又是合法值（无法区分 default vs explicit-0）；`object.__setattr__` 在 frozen=False 类上是误导性"future-proof"；非 frozen 类允许运行时偷改 quorum 放宽 §5.1 contract。`int \| None` + `Field(ge=1)` + `@computed_field` 三件套一次性解决 |
+| 87 | `RubricWeights` + `RubricScore` 迁出 `judges/rubric.py` → 新模块 `nanobot/evolve/schemas.py`（零-extra-deps：仅 import pydantic + stdlib）。删除 `nanobot/config/_evolve_types.py` + `_import_rubric_weights()` lazy shim；`nanobot.config.schema` 改为直接 `from nanobot.evolve.schemas import RubricWeights`。新增 `tests/evolve/test_probe_no_extra.py` subprocess 探针锁定无-extra import cascade | §2.1 / §3.3 / §4.5 / §5.4.5 step 6 | 原方案让 config 加载触发 evolve 子包惰性 import（即便只 import 一行），部分破坏 §3.5.1 「no-extra 探针」契约；schemas.py 是 zero-dep 共享模块，让 `nanobot.config` → `nanobot.evolve.schemas` 单向 import 无副作用。同时消除 `model_rebuild()` / forward-ref 需求 |
+| 88 | Exit code 8 narrows to **apply 业务终态 only**（`manifest.final_status != promoted_to_pr`）。`FileExistsError`（`--output-dir` 冲突）移至 exit 6（filesystem family，与 `FileNotFoundError` 同族；调用方可纠正后重试）。**Supersedes 决策 #85 的 FileExistsError 归属** | §4.6 / §4.4.3 / §5.3 | CI 分流需要：exit 6 = "filesystem 前置可纠正，调用方可重试"，exit 8 = "业务终态，重跑无意义"。原 #85 把这两类合并 exit 8 后，CI 对 `--output-dir` 冲突按 "terminal" 处理 → 误判，本应只需 `--force` 重试 |
 | *待 §6+ 起追加* | | | |
 
 ### 0.4 跨 milestone 硬性约束的本 spec 化身
@@ -109,6 +112,11 @@ M4 引入两个新顶层目录 + 一个新 Python 包，均与 `nanobot/` / `web
 ├── nanobot/
 │   ├── evolve/                          # NEW Python 包；evolve extra gate
 │   │   ├── __init__.py                  # lazy guard：未装 extra → 抛 EvolveExtraNotInstalled
+│   │   ├── _base.py                     # EvolveBase 共形基类（§3.0）
+│   │   ├── schemas.py                   # NEW（决策 #87）：零-extra-deps 的共享数据 schema
+│   │   │                                # 含 RubricWeights / RubricScore；仅 import pydantic + stdlib
+│   │   │                                # 让 nanobot.config.schema 可直接 import RubricWeights 而不
+│   │   │                                # 触发 evolve extra 加载；取代旧的 nanobot/config/_evolve_types.py shim
 │   │   ├── harness.py                   # OfflineHarness 主入口（§5）
 │   │   ├── data/                        # 4-tier 数据加载器
 │   │   │   ├── __init__.py
@@ -250,7 +258,9 @@ class EvolveBase(BaseModel):
     )
 ```
 
-§3.1–§3.7 下文每个数据类的代码块中，`class X(BaseModel):` 行均替换为 `class X(EvolveBase):`，并 import 改为 `from nanobot.evolve._base import EvolveBase`。本节专门列示 base，下游代码块只展示业务字段，不重复 `model_config`。**例外**：`RunManifest`（§3.7）显式 override 为 `frozen=True`（详见 §3.7.1），以机械化锁定 manifest 写出后不可 mutate。
+§3.1–§3.7 下文每个数据类的代码块中，`class X(BaseModel):` 行均替换为 `class X(EvolveBase):`，并 import 改为 `from nanobot.evolve._base import EvolveBase`。本节专门列示 base，下游代码块只展示业务字段，不重复 `model_config`。**例外**：`RunManifest`（§3.7）与 `JudgePool`（§3.3）显式 override 为 `frozen=True`（详见 §3.7.1 / §3.3），以机械化锁定写出后不可 mutate。
+
+> **EvolveBase 稳定性公约（M4 → M5）**：`nanobot/evolve/_base.py`（以及决策 #87 下迁入 `nanobot/evolve/schemas.py` 的 `RubricWeights` / `RubricScore`）是 `__all__`-private 的内部模块，但其 `model_config`（`extra="forbid"`、`alias_generator=to_camel`、`populate_by_name=True`、`frozen=False`）是 M4 的稳定契约：M5 对 `EvolveBase.model_config` 的**任何**改动必须在 `docs/hermes-evolution/roadmap.md` §2 决策日志中新增一条 entry，**不可**就地编辑 `_base.py`。子类（`RunManifest` / `JudgePool` 等）**允许**单独 override 某些 key（如 `frozen=True`），前提是仍与 base 的语义兼容（不能放宽 `extra` 或拆掉 alias generator）。**并列公约（§5.4.5 lazy-import 纪律）**：`nanobot/evolve/__init__.py` 等 `__init__.py` 模块的 lazy-import 行为同样是 M4 → M5 的硬契约，任何打破 `tests/evolve/test_no_extra_in_init.py` / `tests/evolve/test_probe_no_extra.py` 探针的改动必须经过 roadmap 决策日志。
 
 ### 3.1 4-tier 评测数据 schema
 
@@ -377,11 +387,11 @@ class Candidate(SkillContent):
 
 落实 §0.2 #79 的 3 维度 0–1 rubric。score 与 result 分层：单条样本一个 `JudgeResult`，若 §7.4 inter-judge agreement 启用则一条样本可有多个 `JudgeResult`（每 judge 一个），聚合为 `JudgeConsensus`。
 
+**模块归属（决策 #87）**：`RubricScore` 与 `RubricWeights` 已从 `nanobot/evolve/judges/rubric.py` 迁出到 `nanobot/evolve/schemas.py`（零-extra-deps 共享 schema 模块，仅 import `pydantic` + stdlib，绝不 import `dspy/gepa/litellm/optuna`）。`judges/rubric.py` 内的 judge prompt / scoring helper 通过 `from ..schemas import RubricScore, RubricWeights` 引用。这是为了让 `nanobot.config.schema` 可以直接 `from nanobot.evolve.schemas import RubricWeights` 而无需触发 evolve extra 加载，断掉旧 `nanobot/config/_evolve_types.py` lazy shim 引入的反向耦合（YELLOW-Y2）。`JudgeResult` / `JudgeConsensus` / `JudgePool` 仍住 `judges/rubric.py`（这些类被 judge backend 直接消费）；**模块文件路径**与 `__all__` re-export 名字解耦，下游应通过 `from nanobot.evolve import RubricWeights, JudgePool` 引用，不依赖具体文件位置。
+
 ```python
-# nanobot/evolve/judges/rubric.py
-from typing import Literal
+# nanobot/evolve/schemas.py（决策 #87；RubricScore + RubricWeights 居住地）
 from pydantic import Field, model_validator
-from datetime import datetime
 from nanobot.evolve._base import EvolveBase
 
 class RubricScore(EvolveBase):
@@ -402,7 +412,7 @@ class RubricWeights(EvolveBase):
 
     canonical 类型：`EvolveDefaults.rubric_weights` 字段类型为 `RubricWeights`
     （非 `dict[str, float]`），保证求和不变量由本类的 `_sum_to_one` 一处校验
-    （决策 #84）。
+    （决策 #84）。模块归属：`nanobot/evolve/schemas.py`（决策 #87）。
     """
 
     process: float = Field(default=0.4, ge=0.0, le=1.0)
@@ -418,6 +428,29 @@ class RubricWeights(EvolveBase):
                 f"process={self.process}, output={self.output}, token={self.token}"
             )
         return self
+```
+
+```python
+# nanobot/evolve/judges/rubric.py（judge backend；保留 JudgeResult / Consensus / Pool）
+from typing import Literal
+from pydantic import ConfigDict, Field, computed_field, model_validator
+from datetime import datetime
+from nanobot.evolve._base import EvolveBase
+from nanobot.evolve.schemas import RubricScore, RubricWeights  # 决策 #87 单向依赖
+
+class JudgeConfig(EvolveBase):
+    """单个 judge 的最小描述（provider/model + 可选权重 override）。
+
+    M4 ships 仅含 `model`（字符串形如 `"anthropic/claude-3-5-sonnet"`），权重等
+    扩展字段留给 M5；保留独立类型以便 `JudgePool.judges` 类型推断稳定。
+
+    **CLI ↔ JudgePool 转换**：CLI `--judge-pool` 传 CSV 字符串
+    （`anthropic/claude-3-5-sonnet,openai/gpt-4o,...`），`EvolveDefaults.default_judge_pool`
+    也是 `list[str]`。`OfflineHarness.run()` 入口把字符串列表映射为
+    `JudgePool(judges=[JudgeConfig(model=s) for s in pool])`。CLI 表面始终是
+    `list[str]`；`JudgeConfig` 是 evolve 内部 runtime 类型。
+    """
+    model: str
 
 class JudgeResult(EvolveBase):
     """单 judge × 单 record 的评分。"""
@@ -440,35 +473,71 @@ class JudgeConsensus(EvolveBase):
     # split = 任一维 σ > 0.2；single = pool size == 1
 
 class JudgePool(EvolveBase):
-    """judge pool 配置；M4 推荐 size ≥ 3（决策 #81）。"""
+    """Judge pool 配置；M4 推荐 size ≥ 3（决策 #81）。
 
-    judges: list[str]                              # provider/model 列表
+    `min_quorum` 语义（决策 #86）：用户输入字段，`None`（默认）→ 由
+    `effective_min_quorum` computed property 解析为多数派
+    `(len(judges) // 2) + 1`；显式传 `int >= 1` 时按值生效（上限 `len(judges)`，
+    超出在 `_validate_quorum_bounds` 抛 `ValueError`）。**`None` 与显式 `0` 不
+    再混淆**：旧设计用 `0` 双关「未设 → 应用默认」与「合法用户值」，结构性歧义。
+    新方案以 `None` 充当未设哨兵，`Field(ge=1)` 让 `0` 直接被 Pydantic 拒绝。
+
+    **`frozen=True` override（决策 #86）**：与 `RunManifest` / `EvolveDefaults`
+    保持一致；不再允许运行时 mutate `min_quorum` 偷偷放宽 §5.1 retry contract。
+    旧设计的 `object.__setattr__` 绕道（伪 future-proof）一并删除：computed_field
+    本就不 mutate 字段，无须绕开 frozen。
+
+    **运行时消费规则**：所有 retry / quorum 判定**必须**读 `effective_min_quorum`，
+    禁止直接读 `min_quorum`（可能为 `None`）。§5.1 retry contract 已同步更新。
+    """
+    model_config = ConfigDict(
+        extra="forbid",
+        alias_generator=EvolveBase.model_config["alias_generator"],
+        populate_by_name=True,
+        frozen=True,
+    )
+
+    judges: list[JudgeConfig] = Field(..., min_length=1)
     weights: RubricWeights = Field(default_factory=RubricWeights)
     require_consensus: bool = False                # True 时 split → JudgeError 致整 record fail
-    min_quorum: int = Field(default=0)             # 0 = 哨兵，构造后由下方 validator 设为
-                                                    # `(len(judges) // 2) + 1`（多数派，保中位语义）。
-                                                    # 显式传值时必须满足 1 ≤ min_quorum ≤ len(judges)。
+    min_quorum: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "User-supplied quorum threshold. None = resolve to majority "
+            "(len(judges)//2 + 1) via effective_min_quorum. "
+            "Explicit integer >= 1 honored verbatim (upper bound: len(judges))."
+        ),
+    )
 
     @model_validator(mode="after")
-    def _default_quorum_majority(self) -> "JudgePool":
-        n = len(self.judges)
-        if n == 0:
-            raise ValueError("JudgePool.judges must contain ≥1 entry")
-        # 用 object.__setattr__ 绕过 future frozen 化的需要；本类目前 frozen=False，
-        # 普通赋值即可，写成 object.__setattr__ 仅作 future-proof 注释。
-        if self.min_quorum == 0:
-            # 哨兵 → 应用多数派默认（n=1 → 1, n=3 → 2, n=5 → 3）。
-            object.__setattr__(self, "min_quorum", (n // 2) + 1)
-        if not (1 <= self.min_quorum <= n):
+    def _validate_quorum_bounds(self) -> "JudgePool":
+        # judges min_length=1 由 Field 强制；此处仅校验显式 min_quorum 的上界。
+        if self.min_quorum is not None and self.min_quorum > len(self.judges):
             raise ValueError(
-                f"JudgePool.min_quorum must be in [1, {n}]; got {self.min_quorum}"
+                f"JudgePool.min_quorum={self.min_quorum} exceeds "
+                f"len(judges)={len(self.judges)}"
             )
         return self
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def effective_min_quorum(self) -> int:
+        """运行时 quorum 阈值：min_quorum 或多数派（n//2 + 1）。
+
+        n=1 → 1；n=3 → 2；n=5 → 3。单 judge 场景自动退化为「judge 不可用即中断」，
+        无须特殊分支。
+        """
+        if self.min_quorum is not None:
+            return self.min_quorum
+        return (len(self.judges) // 2) + 1
 ```
 
 **新决策 #81（追加于 §0.3）**：判官池默认 size 为 3（pool of 3 distinct provider/model），单 judge 模式仅在 dev / unit-test 启用，通过 `--judge-pool <single-model-name>`（长度 1 即合法奇数）触发。理由：Hermes 调研指出单 judge 易引入 model bias；3 已是"最小奇数 + 可中位"。可在 config 调到 5，但不允许 2 或 4（避免无中位）。
 
-**`min_quorum` 语义（YELLOW-9）**：默认 `(len(judges) // 2) + 1`（多数派；3→2, 5→3, 1→1），保留中位聚合的统计意义；任一 record 评分时若 `len(available_judges) < min_quorum` → 抛 `JudgeError`，附 `degraded_below_quorum=True` flag。单 judge 模式（`len(judges) == 1`）按决策 #81 仅 dev 用，此时 `min_quorum == 1` 退化为「judge 不可用即中断」。显式传 `min_quorum > len(judges)` 在构造期即抛 `ValueError`。
+**`effective_min_quorum` 语义（决策 #86）**：默认（`min_quorum=None`）→ `(len(judges) // 2) + 1`（多数派；3→2, 5→3, 1→1），保留中位聚合的统计意义；任一 record 评分时若 `len(available_judges) < effective_min_quorum` → 抛 `JudgeError`，附 `degraded_below_quorum=True` flag。单 judge 模式（`len(judges) == 1`）按决策 #81 仅 dev 用，此时 `effective_min_quorum == 1` 退化为「judge 不可用即中断」。显式传 `min_quorum > len(judges)` 在构造期即抛 `ValueError`（`_validate_quorum_bounds`），显式传 `min_quorum < 1` 由 `Field(ge=1)` 在 Pydantic 字段层即拒绝。
+
+**无 Pydantic forward ref（决策 #87）**：§3.x 全部数据模型的字段类型注解均在 module-load 期解析完成，**不**依赖 `model_rebuild()` / `from __future__ import annotations`。决策 #87 把 `RubricWeights` 迁到 `nanobot/evolve/schemas.py`（零-extra-deps）后，`nanobot.config.schema` 可直接 `from nanobot.evolve.schemas import RubricWeights`，旧的 `"RubricWeights"` 字符串前向引用 + `_import_rubric_weights()` lazy helper 一并删除。下游 evolve 类（`JudgeResult.score` 等）也均使用具名 import，不留 forward-ref 字符串。
 
 ### 3.4 Provenance frontmatter 写回 schema
 
@@ -936,7 +1005,7 @@ nanobot evolve apply DOES NOT touch git, branches, or remotes by design.
 |---|---|---|---|
 | `<run-id>` | positional | — | 必填；与 `evolve report` 同 prefix 解析规则 |
 | `--output-dir` | path | `<workspace>/evals/runs/<run-id>/pr.bundle/` | bundle 输出目录；不存在则创建。**注意**与 `evolve run --no-dry-run` 写入的 `<run-id>/pr/` 是**不同**目录：`pr/` 是 run 进程内写的就地 artifact，`pr.bundle/` 是 `apply` 子命令导出的独立打包目录（供下游 CI / 手工 PR 拉走）。两路径分离避免 `apply` 与 `run --no-dry-run` 之间的写冲突 |
-| `--force` | flag | False | 允许覆盖已存在的 output-dir（默认报错 exit 8，apply 前置失败 terminal） |
+| `--force` | flag | False | 允许覆盖已存在的 output-dir（默认报错 **exit 6**，`FileExistsError` 归 filesystem 可纠正前置；决策 #88） |
 
 > 注：M4 删除了 `--format json` 标志。`apply` 始终输出标准多文件目录；目录本身就是 machine-readable（CI 直接读 `pr_body.md` / `diff.patch` / `manifest.json`），无需再封一层 JSON。
 
@@ -946,13 +1015,13 @@ nanobot evolve apply DOES NOT touch git, branches, or remotes by design.
 |---|---|
 | run-id 前缀长度 / 唯一性（§4.3.1 算法） | exit 2（长度 < 4 或歧义）；exit 6（无匹配） |
 | `<run-id>/manifest.json` 可解析 | exit 6（fs/state） |
-| `manifest.final_status == "promoted_to_pr"` | **exit 8**（apply 前置 terminal；决策 #85） |
+| `manifest.final_status == "promoted_to_pr"` | **exit 8**（apply 业务终态，narrowed；决策 #88） |
 | `manifest` 通过 §3.7.1 「无 PII」不变量（`pr_writer` 二次扫描） | exit 4（`ManifestPrivacyViolation`） |
-| `--output-dir` 已存在且 `--force=False` | **exit 8**（`FileExistsError`；apply 前置 terminal） |
+| `--output-dir` 已存在且 `--force=False` | **exit 6**（`FileExistsError`；filesystem 可纠正前置；决策 #88，原 8 → 6） |
 
 #### 4.4.4 退出码
 
-成功返回 `0`；失败分类详见 §4.6 全表。本子命令**永不**触发 `BaselineMismatch`（exit 7）或 `JudgeError`（exit 5），那两类异常只可能在 `evolve run` 中出现。本子命令的 terminal 失败码集中在 exit 8（apply 前置）+ exit 4（隐私）+ exit 6（资源未找到）+ exit 2（参数错）。
+成功返回 `0`；失败分类详见 §4.6 全表。本子命令**永不**触发 `BaselineMismatch`（exit 7）或 `JudgeError`（exit 5），那两类异常只可能在 `evolve run` 中出现。本子命令的失败码（决策 #88）：exit 8（apply 业务终态：`final_status != promoted_to_pr`）+ exit 6（filesystem / 可纠正前置：`FileExistsError` + `FileNotFoundError`）+ exit 4（隐私）+ exit 2（参数错）。
 
 ### 4.5 Config 字段（`agents.defaults.evolve.*`）
 
@@ -963,6 +1032,13 @@ nanobot evolve apply DOES NOT touch git, branches, or remotes by design.
 # Base、ConfigDict、Field、field_validator、model_validator 由本文件 §schema preamble 已导入。
 from pydantic import ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
+# 决策 #87：直接 import RubricWeights（来自零-extra-deps 的 nanobot.evolve.schemas，
+# 仅依赖 pydantic + stdlib）；旧 lazy helper `_import_rubric_weights` 与
+# `nanobot/config/_evolve_types.py` shim 一并删除，断掉 config→evolve 反向耦合的
+# 隐式路径。schemas.py 不 import dspy/gepa/litellm/optuna，故此 import 对未装
+# `[evolve]` extra 的用户无副作用（探针测试见 §5.4.5 step 6）。
+from nanobot.evolve.schemas import RubricWeights
+
 # Base 来自本文件第 21 行；EvolvePrivacyConfig / EvolveDefaults 须继承 Base 而非 BaseModel，
 # 以继承 `model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)`，
 # 保证 JSON 配置中的驼峰别名（sessionDbEnabled / selfEvalEnabled / defaultJudgePool /
@@ -1014,15 +1090,13 @@ class EvolveDefaults(Base):
     """`evolve run --judge-pool` 默认值；长度必须为奇数（决策 #81）。
     选 3 家不同 provider 是为最大化模型 bias 解耦（同家族模型间相关性更高）。"""
 
-    rubric_weights: "RubricWeights" = Field(default_factory=lambda: _import_rubric_weights()())
+    rubric_weights: RubricWeights = Field(default_factory=RubricWeights)
     """`RubricScore.aggregate` 加权（决策 #84，类型由 dict 改为 RubricWeights）；
     三维度和必须 == 1.0（容差 1e-6），由 `RubricWeights._sum_to_one` model_validator
     一处校验，本类**不**重复校验（YELLOW-7 / RED-6 Option A）。
 
-    forward-ref 说明：`RubricWeights` 定义在 `nanobot.evolve.judges.rubric`，
-    config schema 不应直接 import evolve 包（避免运行时 lane → 离线 lane 反向依赖）。
-    实现期使用 lazy import helper `_import_rubric_weights()`（M4 plan 期落地，
-    `nanobot/config/_evolve_types.py`），延迟到 EvolveDefaults 首次构造时解析。
+    模块归属（决策 #87）：`RubricWeights` 居住 `nanobot/evolve/schemas.py`（零-extra-deps
+    共享 schema）；本字段直接 import 该类，**无** forward-ref / lazy shim。
     JSON 配置中的字段形态仍是 `{"process": 0.4, "output": 0.4, "token": 0.2}`，
     通过 Pydantic 自动 coerce 到 `RubricWeights`（alias_generator 已设 camelCase
     则 key 为 `rubricWeights`）。
@@ -1081,18 +1155,18 @@ CLI 标志 → config 优先级（从高到低）：CLI flag > `--config` 指定
 | `3` | `EvolveExtraNotInstalled` | 未装 `nanobot[evolve]`，`evolve run` 调用 | 否（需 `pip install`） |
 | `4` | 隐私 / 安全 gate 违例 | `ManifestPrivacyViolation`（manifest 含 §3.7.1 禁字段 / `record_self_eval` 缺 `.gitignore` precondition） | 否（需修代码） |
 | `5` | **`JudgeError` only**（瞬时 provider 失败） | `evolve run` 中 `JudgeError`（aux provider 调用 3 次重试后仍失败、`min_quorum` 跌穿、或 `require_consensus=True` 时 split） | **是**（指数退避，max 3 次） |
-| `6` | Filesystem / 资源未找到 | `init` 无法 mkdir / `.gitignore` 无法写入 / run-id 前缀无匹配（`FileNotFoundError`） / `<run-id>/manifest.json` 不可解析 | 否（资源真不存在） |
+| `6` | Filesystem / 资源未找到 / 可纠正前置 | `init` 无法 mkdir / `.gitignore` 无法写入 / run-id 前缀无匹配（`FileNotFoundError`） / `<run-id>/manifest.json` 不可解析 / **`apply --output-dir` 已存在且 `--force=False`（`FileExistsError`，决策 #88）** | 调用方纠正后可重试（如 `--force`、改 `--output-dir`、修 run-id） |
 | `7` | Harness invariant 违反 | `BaselineMismatch`（候选 `parent_baseline_hash` ≠ baseline `content_hash`，§3.2 invariant #1）。本码意味着 harness 自身契约破裂 | **绝不**（抓 trace 报 bug） |
-| `8` | **Apply 前置失败**（terminal） | `evolve apply` 时 `manifest.final_status != 'promoted_to_pr'` / `--output-dir` 已存在且 `--force=False`（`FileExistsError`） | 否（重跑结果同） |
+| `8` | **Apply 业务终态**（narrowed，决策 #88） | `evolve apply` 时 `manifest.final_status != 'promoted_to_pr'`（候选未被 promoted，run 无可发布 artifact） | 否（重跑无意义，run 本身已 terminal） |
 
 **异常 → 退出码的完整映射表见 §5.3**。
 
 **新决策 #82 + #84 已追加 §0.3**。CI 分流原则：
 
 - **exit 5 → 唯一可重试码**：仅 `JudgeError`，可指数退避（max 3 次，2s/4s/8s）。任何非 `JudgeError` 不会落到 exit 5（决策 #85）。
-- **exit 6 → terminal not-found**：run-id 不存在、manifest 不存在；不要重试，run 真的不在。
+- **exit 6 → filesystem / 可纠正前置（决策 #88）**：run-id 不存在 / manifest 不存在 / `--output-dir` 冲突。调用方可纠正后重试（修 run-id / `--force` / 换 `--output-dir`）；纯 `FileNotFoundError` 子类（如 run-id 不存在）仍然 terminal。
 - **exit 7 → harness invariant 破裂**：必须停止重试并向 maintainer 报 bug。
-- **exit 8 → apply 前置失败 terminal**：候选未被 promoted / `--output-dir` 冲突；重跑结果完全相同，不要重试。
+- **exit 8 → apply 业务终态（narrowed，决策 #88）**：仅 `manifest.final_status != 'promoted_to_pr'`，run 本身已终态；重跑相同 run-id 结果不变（需重新触发 `evolve run` 产新 run）。
 - **exit 2 → 调用方参数错**：需修改 invocation 再重跑。
 - **exit 1 → 未分类异常**：traceback 应入 CI 日志，按 bug 处理。
 
@@ -1180,7 +1254,9 @@ class OfflineHarness:
                 `RunManifest.judge_pool_health[<model>] = "unavailable:<reason>"`。
                 run 继续以缩减的 pool 评分；如此后任一 record 评分时
                   - `len(available_judges) < 1`，或
-                  - 可用 judges 数 < `JudgePool.min_quorum`
+                  - 可用 judges 数 < `JudgePool.effective_min_quorum`
+                    （决策 #86：runtime 必须读 computed property `effective_min_quorum`，
+                    禁止直接读 `min_quorum`——后者可能为 `None`）
                 即抛 `JudgeError`，附 per-judge 尝试日志。否则降级运行直到 run 完成，
                 `judge_pool_health` 保留退化轨迹供事后分析。
                 映射到 CLI exit 5（外部 provider 失败，可重试）。
@@ -1220,9 +1296,9 @@ class OfflineHarness:
         Raises:
             ConfigError: run-id 前缀长度 < 4 或前缀歧义（exit 2）
             FileNotFoundError: run-id 前缀无匹配（exit 6）
-            ValueError: manifest.final_status != 'promoted_to_pr'（**exit 8**，决策 #85）
+            ValueError: manifest.final_status != 'promoted_to_pr'（**exit 8**，apply 业务终态；决策 #88）
             ManifestPrivacyViolation: manifest 含 §3.7.1 禁字段（exit 4）
-            FileExistsError: output_dir 已存在且 force=False（**exit 8**，决策 #85）
+            FileExistsError: output_dir 已存在且 force=False（**exit 6**，filesystem 可纠正前置；决策 #88，原 8 → 6）
         """
 
 
@@ -1254,13 +1330,27 @@ def init_workspace(workspace: Path) -> None:
 
    ```python
    from nanobot.config.loader import load_config
+   from nanobot.evolve.schemas import RubricWeights
 
    cfg = load_config()
-   derived = cfg.agents.defaults.evolve.model_copy(
+   # 例 1：仅改 default_iterations。`model_copy(update=...)` 触发字段层
+   # re-validation（这里 `default_iterations` 的 `ge=1, le=50` 重跑），不会触发
+   # 任何 model_validator —— 因为本类 `EvolveDefaults` 上没有任何 model_validator
+   # （决策 #84 删除了 `_weights_sum_to_one`，仅余 `_odd_pool_size` 是
+   # `field_validator` 且只在 `default_judge_pool` 字段被更新时触发）。
+   derived_iter = cfg.agents.defaults.evolve.model_copy(
        update={"default_iterations": 10}
    )
-   # derived 是新 EvolveDefaults 实例，触发 _weights_sum_to_one / _odd_pool_size
-   # validator 重跑；原 cfg.agents.defaults.evolve 不变。
+   # 例 2：换 rubric_weights → 间接触发 RubricWeights._sum_to_one model_validator
+   # 重跑（在新 RubricWeights 构造期），保证派生 config 的求和不变量仍成立。
+   derived_weights = cfg.agents.defaults.evolve.model_copy(
+       update={"rubric_weights": RubricWeights(process=0.5, output=0.3, token=0.2)}
+   )
+   # 例 3：换 default_judge_pool → 触发 `_odd_pool_size` field_validator 重跑。
+   derived_pool = cfg.agents.defaults.evolve.model_copy(
+       update={"default_judge_pool": ["anthropic/claude-3-5-sonnet"]}  # 长度 1 = 合法奇数
+   )
+   # 三例均产生新 EvolveDefaults 实例；原 cfg.agents.defaults.evolve 不变。
    ```
 
    §4.5 配置优先级（CLI flag > --config > ~/.nanobot/config.json > 内置默认）由 `OfflineHarness.run()` 在入口处合并：harness 用 `model_copy(update=cli_overrides)` 派生一份本次 run 专用的 `EvolveDefaults`，原 config 对象保持 immutable。
@@ -1298,6 +1388,39 @@ def record_self_eval(
         知情时累积 task 现场 PII。要启用必须显式开 config flag。
         Warning 通过 `logging.getLogger("nanobot.evolve.self_eval")` 发出，
         **每进程最多一次**（模块级 `_warned: bool` 标志位防 spam）。
+
+    Entry sequence (strict order, YELLOW-Y6):
+        1. **Disabled fast-path**（**禁止任何 fs syscall**）：先读 config，若
+           `self_eval_enabled is False` 立即 `_log_once(...)` + `return None`。
+           这一步**不**触发 `.gitignore` 探针，保证决策 #80 锁定的「低开销静默
+           no-op」语义；测试断言见下方 Test contract。
+        2. **Gitignore precondition guard**（仅当上一步未短路时执行）：见下方
+           Precondition guard 章节；缺 `.gitignore` 或缺 `evals/self/` 行立即抛
+           `ManifestPrivacyViolation`。
+        3. **Directory creation + atomic write**（仅当 precondition 通过）。
+
+        测试契约（`tests/evolve/test_record_self_eval.py::test_disabled_no_fs_probe`）：
+
+        ```python
+        def test_disabled_no_fs_probe(tmp_path, monkeypatch):
+            # config.evolve.self_eval_enabled 默认 False
+            stat_calls: list = []
+            orig_stat = os.stat
+            monkeypatch.setattr(
+                os, "stat",
+                lambda p, *a, **kw: (stat_calls.append(p), orig_stat(p, *a, **kw))[1]
+            )
+            record_self_eval(
+                task_id="t1",
+                input={}, output={}, verdict={"passed": True},
+                workspace=tmp_path,
+            )
+            assert stat_calls == [], (
+                "disabled record_self_eval must not probe filesystem; "
+                "got syscalls: %r" % stat_calls
+            )
+        ```
+        类似断言可扩展到 `os.access` / `pathlib.Path.exists`（任何隐式 stat）。
 
     Atomicity & concurrency contract:
         - 三个文件（`input.json` / `output.json` / `verdict.json`）各自走
@@ -1410,20 +1533,71 @@ class ManifestPrivacyViolation(RuntimeError):
         self.offending_fields = offending_fields or []
 
 class ConfigError(ValueError):
-    """`EvolveDefaults` / `RubricWeights` / CLI 参数互斥违反等；CLI exit 2。
+    """`EvolveDefaults` / `RubricWeights` / `JudgePool` / CLI 参数互斥违反等；CLI exit 2。
 
     raise 触发点（M4 ships）：
-      - `EvolveDefaults._odd_pool_size` / `_weights_sum_to_one` validator
+      - `EvolveDefaults._odd_pool_size` field_validator
+      - `RubricWeights._sum_to_one` model_validator（canonical 求和校验位置；
+        决策 #84 删除了 `EvolveDefaults._weights_sum_to_one`）
+      - `JudgePool` 构造失败：
+          * malformed CLI `--judge-pool` payload（JSON 解析失败 / 缺字段）
+          * `min_quorum > len(judges)`（`_validate_quorum_bounds`）
+          * `min_quorum < 1`（Pydantic `Field(ge=1)` 字段层拒绝）
+          * 嵌套 `RubricWeights._sum_to_one` 失败（CLI `--judge-pool` 覆盖
+            weights 时）
       - `OfflineHarness._resolve_run_id` 前缀长度 < 4 / 前缀歧义
       - `OfflineHarness.run()` 入口处 `tiers` / `iterations` / `judge_pool` 检查
 
-    RubricWeights 自身 `_sum_to_one` 抛 `ValueError`（Pydantic 内置类型），
-    由 `OfflineHarness` 在调用点 catch 后 re-raise 为 `ConfigError` 以统一
-    CLI exit 2 语义。
+    **`pydantic.ValidationError` 包装规则**：CLI handler 在 config / CLI 参数
+    解析期捕获**任何** `pydantic.ValidationError`，re-raise 为
+    `ConfigError(message=str(ve), ...)` 以统一 CLI exit 2 语义。这覆盖
+    `RubricWeights._sum_to_one` / `JudgePool._validate_quorum_bounds` /
+    `JudgePool.min_quorum` 字段层拒绝等所有嵌套场景。
     """
 ```
 
 所有 `raise ManifestPrivacyViolation` 调用点（`pr_writer.py` 在 §3.7.1 manifest 扫描 / `record_self_eval` 在 §5.2 precondition）**必须**使用结构化构造函数，最少填 `violated_invariant`，按场景填 `offending_path` / `offending_fields`。CLI handler 捕获后将这些字段写入 stderr（机器可读 + 人读），便于 CI 分流。
+
+**M4 期程序化消费者（YELLOW-Y4）**：结构化字段的存在通过下列 M4-plan-期落地的测试用例机械化锁定，避免「字段存在但无人读」的 YAGNI 漂移：
+
+```python
+# tests/evolve/test_apply_contract.py::test_pr_writer_no_pii
+def test_pr_writer_no_pii(manifest_with_pii):
+    with pytest.raises(ManifestPrivacyViolation) as exc_info:
+        pr_writer(manifest_with_pii)
+    assert exc_info.value.violated_invariant == "§3.7.1 no PII"
+    assert "raw_prompt" in exc_info.value.offending_fields
+```
+
+```python
+# tests/evolve/test_record_self_eval.py::test_precondition_missing_gitignore
+def test_precondition_missing_gitignore(tmp_path):
+    # 故意不创建 .gitignore
+    config.evolve.self_eval_enabled = True
+    with pytest.raises(ManifestPrivacyViolation) as exc_info:
+        record_self_eval(
+            task_id="t1", input={}, output={}, verdict={"passed": True},
+            workspace=tmp_path,
+        )
+    assert exc_info.value.violated_invariant == "§5.2 .gitignore precondition"
+    assert exc_info.value.offending_path == tmp_path / ".gitignore"
+```
+
+```python
+# tests/evolve/test_record_self_eval.py::test_precondition_incomplete_gitignore
+def test_precondition_incomplete_gitignore(tmp_path):
+    (tmp_path / ".gitignore").write_text("# unrelated\nnode_modules/\n")
+    config.evolve.self_eval_enabled = True
+    with pytest.raises(ManifestPrivacyViolation) as exc_info:
+        record_self_eval(
+            task_id="t1", input={}, output={}, verdict={"passed": True},
+            workspace=tmp_path,
+        )
+    assert exc_info.value.violated_invariant == "§5.2 .gitignore precondition"
+    assert "evals/self/" in exc_info.value.offending_fields
+```
+
+**AST contract test**（`tests/evolve/test_decoupling.py` 的 step 7，扩展 §5.4.2 步骤集合）：「`nanobot/evolve/**/*.py` 中**每一处** `raise ManifestPrivacyViolation(...)` 都必须以 kwargs 形式传 `violated_invariant=...`」。实现：AST walk 找 `Raise(exc=Call(func=Name('ManifestPrivacyViolation')))`，断言 `kwargs` 集合包含 `'violated_invariant'`；positional-string-only 形态（`raise ManifestPrivacyViolation("msg")`）直接 fail。这把结构化字段从 convention 提升为机械化契约，三个 pytest pattern-match 用例 + 一个 AST 探针四点合围。
 
 异常 → CLI 退出码映射（与 §4.6 一一对应）：
 
@@ -1431,15 +1605,23 @@ class ConfigError(ValueError):
 |---|---|---|---|
 | `EvolveExtraNotInstalled` | 3 | `run` | 不重试，需 `pip install nanobot[evolve]` |
 | `ConfigError` | 2 | 任意 | 不重试，需修改 invocation / config |
+| `pydantic.ValidationError`（config / `JudgePool` / `RubricWeights` 构造期，被 CLI handler wrap 为 `ConfigError`） | 2 | 任意 | 不重试，需修改 invocation / config（YELLOW-Y8） |
 | `JudgeError` | **5（唯一）** | `run` | **可重试**（指数退避；详见 §5.1 retry contract） |
 | `FileNotFoundError`（run-id 前缀无匹配 / manifest.json 缺失） | 6 | `report` / `apply` | 不重试，run 真的不存在 |
+| `FileExistsError`（`apply` 时 `--output-dir` 已存在且 `--force=False`） | **6（决策 #88，原 8 → 6）** | `apply` | 不重试，传 `--force` 或换 `--output-dir` |
 | `ManifestPrivacyViolation` | 4 | `run` / `apply` / `record_self_eval` | 不重试，需修复 manifest 生成代码或 bootstrap .gitignore |
 | `BaselineMismatch` | 7 | `run` | **绝不重试**，harness invariant 破裂，报 bug |
-| `ValueError`（`apply` 时 `manifest.final_status != promoted_to_pr`） | **8** | `apply` | 不重试，候选未通过 gate（决策 #85） |
-| `FileExistsError`（`apply` 时 `--output-dir` 已存在且 `--force=False`） | **8** | `apply` | 不重试，传 `--force` 或换 `--output-dir`（决策 #85） |
+| `ValueError`（`apply` 时 `manifest.final_status != promoted_to_pr`） | **8（决策 #88：apply 业务终态，narrowed）** | `apply` | 不重试，候选未通过 gate |
 | `OSError` | 6 | `init` / 任意 | 视情况（磁盘满 / 权限）人工处理 |
 
 未在表中列出的 Python 异常 → 兜底 exit 1（CLI traceback 入日志）。
+
+**`pydantic.ValidationError` 包装详解（YELLOW-Y8）**：CLI handler（`nanobot/cli/commands.py` 内的 `evolve` 子命令 dispatch 层）在以下入口处用统一 `try/except pydantic.ValidationError as ve:` 包装：
+  1. `--judge-pool` payload 解析（构造 `JudgePool(...)` 时）
+  2. `--rubric-weights`（如果未来恢复）/ `--config` 文件 load → `EvolveDefaults(...)` 构造
+  3. 任何嵌套 `RubricWeights` 求和失败（CLI 覆盖 `judge-pool.weights` 时）
+
+`ValidationError` 一律被 wrap 为 `ConfigError(message=f"invalid {what}: {ve}", trigger=<source>)` 并 raise，使 CLI exit 码统一落到 2 而非泄漏出 traceback。Wrap 模式由 §10 不变量在 plan 期补充强制（M4 plan 期落地 unit test：`tests/evolve/test_config_error_wrap.py`）。
 
 ### 5.4 与 nanobot 现有 API 的关系（解耦边界）
 
@@ -1519,19 +1701,30 @@ facade 是离线 lane 触达 SessionDB 的**唯一**入口；其签名 + TypedDi
    - `from X import Y`（`ast.ImportFrom` 节点）
    - `from X.A import B`（同上，`module="X.A"`）
    - `import X as Z`（`ast.Import` 节点，`alias.asname` 不为 None）
-2. **遍历范围**（YELLOW-3 — 路径锚定）：
+2. **遍历范围**（YELLOW-3 — 路径锚定 + YELLOW-Y7 命名文件存在性校验）：
    ```python
    import pathlib
    EVOLVE_PKG_ROOT = (
        pathlib.Path(__file__).resolve().parent.parent.parent / "nanobot" / "evolve"
    )
-   assert EVOLVE_PKG_ROOT.is_dir(), f"evolve pkg not found at {EVOLVE_PKG_ROOT}"
+   assert EVOLVE_PKG_ROOT.is_dir(), (
+       f"EVOLVE_PKG_ROOT not a directory: {EVOLVE_PKG_ROOT}"
+   )
+   # 稳定不变量（YELLOW-Y7）：harness.py 是 evolve 包的脊柱（§2.1 / §5.1），
+   # 缺失即意味着「CWD drift（EVOLVE_PKG_ROOT 算错）」或「包尚未构建」。两种
+   # 情况都应 fail loudly；用命名文件存在性替代脆弱的文件计数阈值。
+   HARNESS_PY = EVOLVE_PKG_ROOT / "harness.py"
+   assert HARNESS_PY.is_file(), (
+       f"harness.py missing at {HARNESS_PY}; "
+       f"either CWD drift (EVOLVE_PKG_ROOT computed wrong) or package not yet built"
+   )
    py_files = list(EVOLVE_PKG_ROOT.rglob("*.py"))
-   assert len(py_files) >= 5, f"too few .py files scanned ({len(py_files)}); CWD drift?"
+   # **不**对 len(py_files) 做下限断言：增量开发中文件数可变，硬阈值会在
+   # 实现期产生误导性失败（提示 "CWD drift?" 但实际只是 gates/ 还没填）。
    ```
    **禁止**使用 `pathlib.Path('nanobot/evolve').rglob('*.py')`（CWD-relative，pytest
    工作目录漂移会让 rglob 返回零文件 → 测试"通过"但什么都没扫，silent false negative）。
-   `__file__`-anchored 解析 + 文件数下限 assert（≥5）是必须的双保险。
+   `__file__`-anchored 解析 + 命名文件（`harness.py`）存在性 assert 是必须的双保险。
 3. **传递闭包检查**：构建 import 图后做 transitive closure。若 `nanobot/evolve/foo.py` import `nanobot.evolve.bar`，而 `bar.py` 顶层 import 黑名单（如 `nanobot.agent.loop`），则 `foo.py` 与 `bar.py` **都**报 fail。
 4. **动态 import 检测**：通过 AST 字符串字面量分析检测 `importlib.import_module("nanobot.X")` 与 `__import__("nanobot.X")` 调用；这两种形式同样落入黑名单匹配。
 5. **R7 facade 单符号断言 + 白名单符号锁定（YELLOW-1）**：对 §5.4.1 表中**每一行**白名单模块，单独 assert 其唯一合法 import 形态。每条规则机械化，与表逐行对应：
@@ -1551,6 +1744,16 @@ facade 是离线 lane 触达 SessionDB 的**唯一**入口；其签名 + TypedDi
    # 或 `import nanobot.providers.factory`（裸 import 形态），均 fail。
    # 任何 `nanobot.session.<X>` 不等于 "nanobot.session.redactor" 即 fail（黑名单 §5.4.2）。
    ```
+
+   > **M5 维护契约（YELLOW-Y9）**：`ALLOWED_IMPORTS` 是 `nanobot/evolve/**` 合法
+   > 跨包 import 的**唯一**事实之源。M5 若需新增白名单 entry（预期可能添加
+   > `nanobot.session.goal_state` / 额外 provider import），**必须同步更新**
+   > 两处：(a) §5.4.1 白名单表（spec 文档），(b) `tests/evolve/test_decoupling.py`
+   > 的 `ALLOWED_IMPORTS` dict。漏改 (b) 会让新 import 在 CI 即 fail（机械化
+   > 提醒）；漏改 (a) 会让 spec 与实现漂移，由 §10 不变量 + spec ↔ implementation
+   > 双向校验 protocol 在 reviewer 期捕获。CI 要求：任何触及
+   > `nanobot/evolve/**` 或 `nanobot/session/**` 的 PR 都必须 run
+   > `test_decoupling.py`。
 
 6. **fixture / 文件锚点**：测试模块文件路径硬锁 `tests/evolve/test_decoupling.py`；M5 加 gate 时**不可**改路径。
 
@@ -1578,6 +1781,32 @@ M3 / M4 是两条独立 lane（§1.3）：
 3. `nanobot/evolve/gates/__init__.py` 同上 — 仅声明 `GATES: list[Gate]`，其元素的依赖通过子模块按需 import。
 4. `nanobot/evolve/deploy/__init__.py` 同上 — 仅做模块 export，业务逻辑在 `pr_writer.py` 内 lazy-import。
 5. M4 plan 期落地测试 `tests/evolve/test_no_extra_in_init.py`：用 AST 遍历每个 `__init__.py`，断言 module-level `ast.Import` / `ast.ImportFrom` 节点不出现 `{"dspy", "gepa", "litellm", "optuna"}` 任一名称（或其子模块）。
+6. **Probe cascade integration**（`tests/evolve/test_probe_no_extra.py`，YELLOW-Y2 / 决策 #87）：
+   - 起 subprocess，在**不**安装 `[evolve]` extra 的 venv 内运行：
+     ```python
+     python -c "
+     import nanobot.evolve
+     from nanobot.evolve import *
+     expected = {
+         'OfflineHarness', 'init_workspace', 'record_self_eval',
+         'RunManifest', 'Candidate', 'Baseline',
+         'RubricScore', 'RubricWeights',
+         'JudgeResult', 'JudgeConsensus', 'JudgePool',
+         'GateResult',
+         'EvolveExtraNotInstalled', 'BaselineMismatch',
+         'JudgeError', 'ManifestPrivacyViolation', 'ConfigError',
+     }
+     missing = expected - set(dir(nanobot.evolve))
+     assert not missing, f'missing exports: {missing}'
+     "
+     ```
+   - 子进程**必须**退出码 0；**不得**抛 `ImportError` 提及 `dspy` / `gepa` /
+     `litellm` / `optuna`（用 stderr 文本断言）。
+   - 测试框架建议用 `uv venv` + `uv pip install -e . --no-extras` 准备 throwaway
+     env；CI 上若 `uv` 缺失则 `@pytest.mark.requires_uv` skip。
+   - 此测试同时锁定决策 #87（`RubricWeights` 移 `nanobot/evolve/schemas.py` 后，
+     `from nanobot.evolve.schemas import RubricWeights` 在 `nanobot.config.schema`
+     顶层 import 链路上不触发 evolve extra 加载）。
 
 #### 5.4.6 `__all__` 公共表面
 
