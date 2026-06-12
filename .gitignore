@@ -18,6 +18,7 @@ desktop/resources/nanobot-engine/
 docs/superpowers/
 docs/plans/
 .freecode/
+.claude/
 
 # webui (monorepo frontend)
 webui/node_modules/
