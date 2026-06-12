@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import ConfigDict, Field, computed_field, field_validator, model_validator
 
 from nanobot.evolve._base import EvolveBase
-from nanobot.evolve.schemas import RubricScore, RubricWeights, _assert_odd_pool_size
+from nanobot.evolve.schemas import RubricScore, RubricWeights, assert_odd_pool_size
 
 
 class JudgeConfig(EvolveBase):
@@ -51,7 +51,7 @@ class JudgePool(EvolveBase):
     @field_validator("judges")
     @classmethod
     def _odd_pool_only(cls, v: list[JudgeConfig]) -> list[JudgeConfig]:
-        _assert_odd_pool_size(len(v), context="JudgePool.judges")
+        assert_odd_pool_size(len(v), context="JudgePool.judges")
         return v
 
     @computed_field  # type: ignore[misc]
