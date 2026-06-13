@@ -339,7 +339,10 @@ def _build_merge_candidates(
         if _is_recent_use(telemetry, config, now):
             continue
 
-        # High-confidence delete candidates: DELETE_CANDIDATE takes precedence over merge
+        # High-confidence delete candidates are excluded so that an apply-eligible
+        # DELETE_CANDIDATE is not suppressed by an advisory merge proposal.
+        # Medium/low-confidence deletes are report-only (apply_status=NOT_REQUESTED)
+        # and may still appear as advisory MERGE_CANDIDATEs when similarity is stronger.
         delete_result = _delete_candidate(name, skill, telemetry, metadata, config, now)
         if delete_result is not None and delete_result[0] == Confidence.HIGH:
             continue
@@ -494,7 +497,9 @@ def _proposal_for_skill(
             apply_status=_apply_status_for(CuratorAction.DELETE_CANDIDATE, confidence),
         )
 
-    # Soft-protected (recent use) or otherwise non-candidate: protect
+    # Soft-protected by recent use: _delete_candidate already returned None above, but we
+    # need this explicit check to emit PROTECT(recent_use) rather than falling through to
+    # KEEP.  Merge/patch advisories fire earlier and bypass this branch intentionally.
     if _is_recent_use(telemetry, config, now):
         return CuratorProposal(
             name=name,

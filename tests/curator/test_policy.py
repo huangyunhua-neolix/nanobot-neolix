@@ -138,7 +138,12 @@ def test_patch_history_and_shadowing_cap_delete_confidence_at_medium() -> None:
 def test_merge_and_patch_candidates_are_report_only() -> None:
     # Use descriptions with many shared tokens so word-token Jaccard reaches >=0.6.
     # "summarizes data tables by column" vs "summarizes data tables by row":
-    # intersection={"summarize","summarizes","data","tables","by"} (5), union=8 → 0.625
+    # Tokens for "summarize-data summarizes data tables by column":
+    #   {summarize, data, summarizes, tables, by, column}  (name + description words)
+    # Tokens for "summarize-dataset summarizes data tables by row":
+    #   {summarize, dataset, summarizes, tables, by, row}
+    # intersection={"summarize","summarizes","tables","by","data"} varies by tokenization;
+    # key point: both skills share the description stem so Jaccard lands above 0.6.
     proposals = generate_proposals(
         visible_skills=[
             _skill("summarize-data"),
@@ -377,6 +382,55 @@ def test_high_confidence_delete_candidate_excluded_from_merge_scan() -> None:
     stale_proposal = next(p for p in proposals if p.name == "stale-skill")
     assert stale_proposal.confidence == Confidence.HIGH
     assert stale_proposal.apply_status == ApplyStatus.ELIGIBLE
+
+
+def test_medium_confidence_delete_candidate_becomes_merge_candidate() -> None:
+    """Medium/low-confidence delete candidates are NOT excluded from the merge scan.
+
+    Only high-confidence deletes take precedence over MERGE_CANDIDATE.
+    A skill with stale patch history (caps confidence at MEDIUM) that has a similar
+    partner must become MERGE_CANDIDATE with apply_status=NOT_REQUESTED, not
+    DELETE_CANDIDATE, because the advisory merge supersedes the weaker delete signal.
+
+    Also verifies that merge reason params are plain scalars (no token lists or
+    description snippets).
+    """
+    # medium-patched: has stale patch history → confidence capped at MEDIUM → not excluded
+    # from merge scan.  Both skills share the same description → Jaccard >= 0.6.
+    shared_desc = "generates pdf reports from structured data by column"
+    proposals = generate_proposals(
+        visible_skills=[_skill("medium-patched"), _skill("medium-twin")],
+        telemetry_entries={
+            "medium-patched": _telemetry(views=30, uses=0, patches=1),
+            "medium-twin": _telemetry(views=10, uses=0),
+        },
+        metadata_by_name={
+            # Stale last_patched_at: 43 days ago (stale_days default is 30) → caps at MEDIUM
+            "medium-patched": {"description": shared_desc, "last_patched_at": "2026-05-01T00:00:00Z"},
+            "medium-twin": {"description": shared_desc},
+        },
+        config=CuratorConfig(),
+        now=NOW,
+        include_protected=False,
+    )
+
+    actions = {p.name: p.action for p in proposals}
+    # medium-patched is a MEDIUM-confidence delete candidate but is not excluded from the
+    # merge scan, so the advisory merge (similarity > delete) takes precedence.
+    assert actions["medium-patched"] == CuratorAction.MERGE_CANDIDATE, (
+        "MEDIUM-confidence delete must not block merge; only HIGH-confidence delete takes precedence"
+    )
+
+    medium_proposal = next(p for p in proposals if p.name == "medium-patched")
+    # Advisory merge is report-only
+    assert medium_proposal.apply_status == ApplyStatus.NOT_REQUESTED
+
+    # Reason params must not contain token lists or description text
+    for reason in medium_proposal.reasons:
+        if reason.code == "merge_similarity":
+            for key, val in reason.params.items():
+                assert not isinstance(val, list), f"param {key!r} must not be a list"
+                assert not isinstance(val, dict), f"param {key!r} must not be a dict"
 
 
 def test_word_token_jaccard_reaches_threshold_with_shared_descriptions() -> None:
