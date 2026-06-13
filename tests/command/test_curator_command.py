@@ -12,15 +12,10 @@ from nanobot.bus.events import InboundMessage
 from nanobot.command.builtin import BUILTIN_COMMAND_SPECS, cmd_curator, register_builtin_commands
 from nanobot.command.router import CommandContext, CommandRouter
 from nanobot.config.schema import CuratorConfig
-from nanobot.curator.models import CuratorReport, ReportMode
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_report(mode: ReportMode = ReportMode.DRY_RUN) -> CuratorReport:
-    return CuratorReport(mode=mode, skills_scanned=3, protected=1, proposals=[], warnings=[])
 
 
 class _FakeSkills:
@@ -83,9 +78,15 @@ async def test_curator_explicit_dry_run_flag() -> None:
 
 
 @pytest.mark.asyncio
-async def test_curator_apply_flag_returns_report() -> None:
-    """--apply produces a text report (apply or forced-dry-run mode)."""
+async def test_curator_apply_flag_forced_dry_run() -> None:
+    """--apply with default config (forced_dry_run_until='auto') is refused.
+
+    The default CuratorConfig has forced_dry_run_until='auto', which is always
+    active, so --apply must be blocked and the report must say so.
+    """
     out = await cmd_curator(_ctx("/curator --apply", args="--apply"))
+    assert "Apply refused" in out.content
+    assert "forced dry-run" in out.content.lower()
     assert "Curator report" in out.content
 
 
@@ -156,6 +157,7 @@ async def test_curator_apply_and_dry_run_conflict_reversed() -> None:
     """Order does not matter for the mutual-exclusion check."""
     out = await cmd_curator(_ctx("/curator --apply --dry-run", args="--apply --dry-run"))
     assert "--dry-run" in out.content and "--apply" in out.content
+    assert "mutually exclusive" in out.content.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +200,6 @@ def test_curator_in_command_palette() -> None:
     assert "/curator" in specs
     spec = specs["/curator"]
     assert spec.title == "Review skills"
-    assert "telemetry" in spec.description.lower()
+    assert spec.description == "Review skill telemetry and propose safe cleanup actions."
     assert spec.icon == "scissors"
-    assert "--dry-run" in spec.arg_hint or "dry-run" in spec.arg_hint
+    assert "--dry-run" in spec.arg_hint
