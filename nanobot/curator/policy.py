@@ -12,12 +12,11 @@ Hard protection (blocks ALL proposals including advisory merge/patch):
   - Protect patterns (fnmatch glob)
   - Always-on metadata marker
 
-Soft protection (blocks only DELETE candidates; advisory merge/patch may still fire):
-  - Recent use (uses > max_uses_for_delete OR last_use within stale_days)
-
-Merge and patch are report-only advisory proposals; they are not mutations.
-They bypass soft protection and fire for any non-hard-protected agent skill
-that satisfies the merge/patch criteria.
+Recent-use protection (soft): recently-used skills produce PROTECT/KEEP only;
+they are also excluded from the merge-candidate scan so no advisory proposal
+fires for them.  High-confidence delete candidates are excluded from the merge
+scan as well (DELETE_CANDIDATE takes precedence).  Patch advisory proposals
+fire independently of recent-use status.
 """
 
 from __future__ import annotations
