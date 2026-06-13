@@ -516,6 +516,37 @@ def test_apply_delete_raises_exception_maps_to_failed_and_continues() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Task 8: aux deliberation skip behavior
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_with_aux_deliberation_disabled_produces_no_aux_warnings() -> None:
+    """CuratorConfig(aux_deliberation=False) produces a report with no aux-related warnings."""
+    config = CuratorConfig(
+        forced_dry_run_until="2000-01-01T00:00:00Z",
+        aux_deliberation=False,
+    )
+    telemetry_entries = {"old-debug-helper": _stale_agent_telemetry_entry()}
+    service = CuratorService(
+        workspace="/workspace",
+        skills=_FakeSkills("old-debug-helper"),
+        telemetry=_FakeTelemetry(telemetry_entries),
+        config=config,
+        now_fn=_now_fn,
+    )
+    report = service.run(apply=False, include_protected=False)
+
+    # Must be a plain dry-run with no provider ever called
+    assert report.mode == ReportMode.DRY_RUN
+    assert report.warnings == [], f"Expected no warnings, got: {report.warnings}"
+    # Proposals exist but carry no aux verdict (feature disabled)
+    for proposal in report.proposals:
+        assert proposal.aux_verdict is None, (
+            f"aux_verdict must be None when aux_deliberation=False, got {proposal.aux_verdict!r}"
+        )
+
+
 @pytest.mark.parametrize(
     "proposal_kwargs,expected_status",
     [
