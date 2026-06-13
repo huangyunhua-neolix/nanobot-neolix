@@ -41,10 +41,10 @@ class CuratorService:
         config: :class:`CuratorConfig` from the active agent configuration.
         now_fn: Callable returning the current UTC datetime.  Defaults to
             ``datetime.now(timezone.utc)``.  Injected for determinism in tests.
-        delete_operation: Reserved; not used in dry-run mode.  Accepted for
-            interface stability so callers can pre-wire apply logic.
-        provenance_tag: Optional string tag attached to the service instance
-            (e.g. session id); unused internally but visible for diagnostics.
+        delete_operation: Callable used in apply mode to remove a skill.  Defaults
+            to the M2 ``do_delete`` implementation from ``skill_manage_ops``.
+        provenance_tag: String tag forwarded to the delete operation as an audit
+            trail identifier.  Defaults to ``"curator"``.
     """
 
     def __init__(
@@ -56,7 +56,7 @@ class CuratorService:
         config: CuratorConfig,
         now_fn: Callable[[], datetime] | None = None,
         delete_operation: Any = None,
-        provenance_tag: str | None = None,
+        provenance_tag: str = "curator",
     ) -> None:
         self._workspace = workspace
         self._skills = skills
@@ -66,7 +66,7 @@ class CuratorService:
             lambda: datetime.now(timezone.utc)
         )
         self._delete_operation: Callable[..., dict[str, Any]] = delete_operation or do_delete
-        self._provenance_tag = provenance_tag
+        self._provenance_tag: str = provenance_tag
 
     # ------------------------------------------------------------------
     # Forced dry-run helpers
@@ -166,7 +166,7 @@ class CuratorService:
                     )
         elif apply:
             mode = ReportMode.APPLY
-            apply_warnings = self._apply_proposals(proposals, telemetry_entries)
+            apply_warnings = self._apply_proposals(proposals)
             warnings.extend(apply_warnings)
         else:
             mode = ReportMode.DRY_RUN
@@ -202,13 +202,15 @@ class CuratorService:
     def _apply_proposals(
         self,
         proposals: list[CuratorProposal],
-        telemetry_entries: dict[str, Any],
     ) -> list[CuratorWarning]:
         """Attempt to apply each proposal in-place; return accumulated warnings.
 
-        Mutates ``proposals`` list entries via ``model_copy``.  Safe-delete
-        safety checks are enforced per proposal before calling the delete
-        operation.  Failures are recorded as warnings and processing continues.
+        Replaces list entries in-place by index using ``model_copy`` (Pydantic
+        models are immutable; the list itself is mutated, not the model objects).
+        Safe-delete safety checks are enforced per proposal before calling the
+        delete operation.  If the delete operation raises an exception, the
+        proposal is mapped to ``ApplyStatus.FAILED``, a warning is appended, and
+        processing continues with the remaining proposals.
         """
         warnings: list[CuratorWarning] = []
         for idx, proposal in enumerate(proposals):
@@ -221,6 +223,7 @@ class CuratorService:
                 elif proposal.origin == "unknown":
                     new_status = ApplyStatus.SKIPPED_UNKNOWN_ORIGIN
                 elif proposal.origin != "agent":
+                    # Covers non-agent origins including tier_locked TOCTOU rejection from M2 delete path.
                     new_status = ApplyStatus.SKIPPED_NON_AGENT
                 elif (
                     proposal.confidence != Confidence.HIGH
@@ -229,15 +232,27 @@ class CuratorService:
                     new_status = ApplyStatus.SKIPPED_LOW_CONFIDENCE
                 else:
                     # All safety checks passed — call delete operation
-                    result = self._delete_operation(
-                        workspace=self._workspace,
-                        telemetry=self._telemetry,
-                        provenance_tag=self._provenance_tag,
-                        name=proposal.name,
-                    )
-                    new_status, warning = self._map_delete_result(result, proposal.name)
-                    if warning is not None:
-                        warnings.append(warning)
+                    try:
+                        result = self._delete_operation(
+                            workspace=self._workspace,
+                            telemetry=self._telemetry,
+                            provenance_tag=self._provenance_tag,
+                            name=proposal.name,
+                        )
+                        new_status, warning = self._map_delete_result(result, proposal.name)
+                        if warning is not None:
+                            warnings.append(warning)
+                    except Exception as exc:  # noqa: BLE001
+                        new_status = ApplyStatus.FAILED
+                        warnings.append(
+                            CuratorWarning(
+                                code="delete_failed",
+                                message=(
+                                    f"delete raised for skill '{proposal.name}': "
+                                    f"{type(exc).__name__}"
+                                ),
+                            )
+                        )
             elif proposal.action in {CuratorAction.MERGE_CANDIDATE, CuratorAction.PATCH_CANDIDATE}:
                 new_status = ApplyStatus.SKIPPED_UNSUPPORTED_ACTION
             # CuratorAction.KEEP and CuratorAction.PROTECT: leave apply_status unchanged (NOT_APPLICABLE)
