@@ -64,12 +64,14 @@ def generate_proposals(
     Returns:
         List of proposals.  Order mirrors visible_skills.
     """
-    # Build merge candidates map: scans non-hard-protected agent skills.
+    # Build merge candidates map: scans non-hard-protected, non-recently-used,
+    # non-high-confidence-delete agent skills.
     _merge_map: dict[str, tuple[str, float]] = _build_merge_candidates(
         visible_skills=visible_skills,
         telemetry_entries=telemetry_entries,
         metadata_by_name=metadata_by_name,
         config=config,
+        now=now,
     )
 
     proposals: list[CuratorProposal] = []
@@ -287,20 +289,15 @@ def _delete_candidate(
     return confidence, reasons
 
 
-def _skill_text(name: str, metadata: dict[str, Any]) -> str:
-    """Return a normalized text string combining name and description for similarity comparison."""
-    description = metadata.get("description") or ""
-    combined = f"{name} {description}".strip()
-    return re.sub(r"[^a-z0-9 ]", " ", combined.lower())
+def _word_tokens(name: str, metadata: dict[str, Any]) -> set[str]:
+    """Return the set of lowercased word tokens from a skill name and description.
 
-
-def _char_bigrams(text: str) -> set[str]:
-    """Return the set of character bigrams from a normalized text string.
-
-    Character bigrams capture sub-word overlap (e.g., 'data' within 'dataset').
+    Splits on non-alphanumeric/non-underscore boundaries, matching the spec §6.1
+    requirement for word-token Jaccard similarity rather than character bigrams.
     """
-    normalized = " ".join(text.split())
-    return {normalized[i : i + 2] for i in range(len(normalized) - 1)}
+    description = metadata.get("description") or ""
+    combined = f"{name} {description}".strip().lower()
+    return set(re.split(r"[^a-z0-9_]+", combined)) - {""}
 
 
 def _jaccard(set_a: set[str], set_b: set[str]) -> float:
@@ -318,11 +315,14 @@ def _build_merge_candidates(
     telemetry_entries: dict[str, dict[str, Any]],
     metadata_by_name: dict[str, dict[str, Any]],
     config: CuratorConfig,
+    now: datetime,
 ) -> dict[str, tuple[str, float]]:
     """Return a mapping name -> (partner_name, similarity) for skills that are merge candidates.
 
-    Scans all non-hard-protected agent skills (soft protection is NOT applied here;
-    advisory merge proposals can fire even for recently-used skills).
+    Per spec §6.2: recently-used skills (soft-protected) are excluded from the merge scan
+    because they are in active use — merging them could disrupt ongoing workflows.
+    High-confidence delete candidates are also excluded: if a skill satisfies high-confidence
+    delete conditions, deletion would not be safer than merge; DELETE_CANDIDATE takes precedence.
     Only the best partner per skill is recorded; pairs are recorded in both directions.
     """
     candidate_names: list[str] = []
@@ -335,11 +335,21 @@ def _build_merge_candidates(
         hard_reasons = _hard_protection_reasons(name, skill, telemetry, metadata, config)
         if hard_reasons:
             continue
+
+        # Recently-used skills are soft-protected — exclude from merge scan (spec §6.2)
+        if _is_recent_use(telemetry, config, now):
+            continue
+
+        # High-confidence delete candidates: DELETE_CANDIDATE takes precedence over merge
+        delete_result = _delete_candidate(name, skill, telemetry, metadata, config, now)
+        if delete_result is not None and delete_result[0] == Confidence.HIGH:
+            continue
+
         candidate_names.append(name)
 
-    # Compute character bigram sets for similarity comparison
-    bigram_sets: dict[str, set[str]] = {
-        name: _char_bigrams(_skill_text(name, metadata_by_name.get(name) or {}))
+    # Compute word-token sets for similarity comparison (spec §6.1: word-token Jaccard)
+    token_sets: dict[str, set[str]] = {
+        name: _word_tokens(name, metadata_by_name.get(name) or {})
         for name in candidate_names
     }
 
@@ -349,9 +359,9 @@ def _build_merge_candidates(
     for i, name_a in enumerate(candidate_names):
         best_sim = 0.0
         best_partner: str | None = None
-        bigrams_a = bigram_sets[name_a]
+        tokens_a = token_sets[name_a]
         for name_b in candidate_names[i + 1 :]:
-            sim = _jaccard(bigrams_a, bigram_sets[name_b])
+            sim = _jaccard(tokens_a, token_sets[name_b])
             if sim >= merge_threshold and sim > best_sim:
                 best_sim = sim
                 best_partner = name_b
@@ -381,7 +391,7 @@ def _patch_candidate(
     # Low subsequent use ratio check
     if views > 0:
         ratio = uses / views
-        if ratio <= config.low_use_ratio:
+        if ratio < config.low_use_ratio:
             return [
                 ProposalReason(
                     code="patch_churn_low_use",
