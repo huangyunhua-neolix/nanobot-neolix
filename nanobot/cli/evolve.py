@@ -29,6 +29,8 @@ wrap. The wrap preserves ``__cause__`` via ``raise ... from exc``.
 from __future__ import annotations
 
 import argparse
+import os
+import tempfile
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -57,18 +59,125 @@ EXIT_APPLY_TERMINAL = 8  # ApplyTerminalError
 
 
 # ---------------------------------------------------------------------------
+# run_init helpers
+# ---------------------------------------------------------------------------
+
+_REQUIRED_GITIGNORE_LINES = ("evals/runs/", "evals/self/", "evals/sessions/")
+
+_EVALS_README = """\
+# nanobot evolve evals
+
+This directory holds evaluation artefacts for offline skill evolution (M4).
+
+## Tiers
+
+| Tier | Description |
+|------|-------------|
+| A    | Synthetic prompts with deterministic expected outputs. |
+| C    | Golden traces recorded from real sessions (privacy-scrubbed). |
+
+## Record format
+
+Each record is a newline-delimited JSON file (`*.ndjson`) with fields:
+`id`, `tier`, `prompt`, `expected`, `metadata`.
+
+## Privacy
+
+Tier-C records **must** be scrubbed of PII before commit. The harness gate
+rejects manifests that fail `ManifestPrivacyViolation` checks.
+
+## M4/M5 boundary
+
+M4 scope: `synthetic/` and `golden/` eval authoring, `runs/` output capture,
+GEPA scoring pipeline, judge-pool dispatch.
+
+M5 scope: automated apply, PR deployment, and continuous self-evolution loop.
+"""
+
+
+def _default_workspace() -> Path:
+    return Path("~/.nanobot/evolve/default").expanduser()
+
+
+def _workspace_from_arg(value: str | None) -> Path:
+    if value is None:
+        return _default_workspace()
+    return Path(value).expanduser()
+
+
+def _touch_if_missing(path: Path) -> None:
+    if not path.exists():
+        path.touch()
+
+
+def _write_if_missing(path: Path, content: str) -> None:
+    if not path.exists():
+        path.write_text(content, encoding="utf-8")
+
+
+def _ensure_gitignore_patterns(path: Path) -> None:
+    """Append any missing patterns from _REQUIRED_GITIGNORE_LINES.
+
+    Uses exact-line semantics: a stripped, non-comment line must exactly
+    match the pattern. Does not rewrite the file if all patterns are present.
+    """
+    existing_lines: list[str] = []
+    if path.exists():
+        existing_lines = path.read_text(encoding="utf-8").splitlines()
+
+    existing_non_comment = {
+        line.strip()
+        for line in existing_lines
+        if line.strip() and not line.strip().startswith("#")
+    }
+
+    missing = [p for p in _REQUIRED_GITIGNORE_LINES if p not in existing_non_comment]
+    if not missing:
+        return
+
+    # Append missing patterns atomically via a temp file in the same directory.
+    current_content = "\n".join(existing_lines)
+    if existing_lines and not current_content.endswith("\n"):
+        current_content += "\n"
+    addition = "\n".join(missing) + "\n"
+    new_content = current_content + addition
+
+    dir_ = path.parent
+    dir_.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=dir_, prefix=".gitignore.tmp.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(new_content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+# ---------------------------------------------------------------------------
 # Handler stubs
 # ---------------------------------------------------------------------------
 
 
 def run_init(args: argparse.Namespace) -> int:
-    """Initialize a workspace skeleton on disk.
+    """Initialize an M4 evolve workspace skeleton on disk."""
+    workspace = _workspace_from_arg(args.workspace)
+    if workspace.exists() and not workspace.is_dir():
+        raise FileExistsError(f"workspace path exists and is not a directory: {workspace}")
 
-    M4 t-16 ships the CLI surface only; the on-disk skeleton initializer
-    is owned by a follow-up task. Raising ``NotImplementedError`` keeps the
-    contract honest until that lands.
-    """
-    raise NotImplementedError("evolve init is not wired yet (M4 follow-up)")
+    (workspace / "evals" / "synthetic").mkdir(parents=True, exist_ok=True)
+    _touch_if_missing(workspace / "evals" / "synthetic" / ".gitkeep")
+    (workspace / "evals" / "golden").mkdir(parents=True, exist_ok=True)
+    _touch_if_missing(workspace / "evals" / "golden" / ".gitkeep")
+    (workspace / "evals" / "runs").mkdir(parents=True, exist_ok=True)
+    _ensure_gitignore_patterns(workspace / ".gitignore")
+    _write_if_missing(workspace / "evals" / "README.md", _EVALS_README)
+    return EXIT_OK
 
 
 def run_run(args: argparse.Namespace) -> int:

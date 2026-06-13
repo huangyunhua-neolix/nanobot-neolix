@@ -358,12 +358,113 @@ def test_run_run_valid_workspace_returns_zero(tmp_path):
     assert rc == 0
 
 
-def test_run_init_not_implemented_raises_runtime_exit():
+def test_run_init_default_workspace_can_be_parsed():
+    """evolve init with no --workspace must parse and resolve a default path."""
     parser = _build_parser()
     args = parser.parse_args(["evolve", "init"])
-    # NotImplementedError subclasses RuntimeError → exit 1.
+    # workspace arg is None when omitted; _workspace_from_arg must still return a Path.
+    ws = evolve_cli._workspace_from_arg(args.workspace)
+    assert isinstance(ws, Path)
+    assert ws.name == "default"
+
+
+# ---------------------------------------------------------------------------
+# run_init — workspace skeleton
+# ---------------------------------------------------------------------------
+
+
+def _gitignore_lines(path: Path) -> list[str]:
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def test_run_init_creates_m4_workspace_skeleton(tmp_path: Path):
+    parser = _build_parser()
+    workspace = tmp_path / "evolve-ws"
+    args = parser.parse_args(["evolve", "init", "--workspace", str(workspace)])
+
     rc = evolve_cli.dispatch(args)
-    assert rc == 1
+
+    assert rc == evolve_cli.EXIT_OK
+    assert (workspace / "evals" / "synthetic" / ".gitkeep").is_file()
+    assert (workspace / "evals" / "golden" / ".gitkeep").is_file()
+    assert (workspace / "evals" / "runs").is_dir()
+    assert not (workspace / "datasets").exists()
+    assert not (workspace / "evolve-config.json").exists()
+    gi_lines = _gitignore_lines(workspace / ".gitignore")
+    assert "evals/runs/" in gi_lines
+    assert "evals/self/" in gi_lines
+    assert "evals/sessions/" in gi_lines
+    readme = (workspace / "evals" / "README.md").read_text(encoding="utf-8")
+    for heading in (
+        "# nanobot evolve evals",
+        "## Tiers",
+        "## Record format",
+        "## Privacy",
+        "## M4/M5 boundary",
+    ):
+        assert heading in readme
+
+
+def test_run_init_is_idempotent_and_does_not_overwrite_readme(tmp_path: Path):
+    parser = _build_parser()
+    workspace = tmp_path / "evolve-ws"
+    args = parser.parse_args(["evolve", "init", "--workspace", str(workspace)])
+
+    # First run.
+    rc1 = evolve_cli.dispatch(args)
+    assert rc1 == evolve_cli.EXIT_OK
+
+    readme_path = workspace / "evals" / "README.md"
+    # Overwrite README with a sentinel; second run must not touch it.
+    readme_path.write_text("sentinel content", encoding="utf-8")
+
+    gitignore_path = workspace / ".gitignore"
+    gi_content_before = gitignore_path.read_text(encoding="utf-8")
+
+    # Second run.
+    rc2 = evolve_cli.dispatch(args)
+    assert rc2 == evolve_cli.EXIT_OK
+
+    # README must be unchanged (not overwritten).
+    assert readme_path.read_text(encoding="utf-8") == "sentinel content"
+
+    # .gitignore must not have duplicate lines.
+    gi_lines = _gitignore_lines(gitignore_path)
+    for pattern in ("evals/runs/", "evals/self/", "evals/sessions/"):
+        assert gi_lines.count(pattern) == 1, f"duplicate pattern {pattern!r} in .gitignore"
+
+    # .gitignore content must be unchanged (all patterns already exist).
+    assert gitignore_path.read_text(encoding="utf-8") == gi_content_before
+
+
+def test_run_init_partial_skeleton_fills_missing_pieces(tmp_path: Path):
+    """If some pieces exist already, run_init fills only what's missing."""
+    parser = _build_parser()
+    workspace = tmp_path / "evolve-ws"
+    # Pre-create the synthetic dir but not golden.
+    (workspace / "evals" / "synthetic").mkdir(parents=True)
+
+    args = parser.parse_args(["evolve", "init", "--workspace", str(workspace)])
+    rc = evolve_cli.dispatch(args)
+
+    assert rc == evolve_cli.EXIT_OK
+    # Both gitkeeps should exist now.
+    assert (workspace / "evals" / "synthetic" / ".gitkeep").is_file()
+    assert (workspace / "evals" / "golden" / ".gitkeep").is_file()
+    assert (workspace / "evals" / "runs").is_dir()
+
+
+def test_run_init_workspace_regular_file_maps_to_fs_exit(tmp_path: Path):
+    """Workspace path that is a regular file must map to EXIT_FS via dispatch."""
+    parser = _build_parser()
+    # Create a regular file at the workspace path.
+    workspace = tmp_path / "not-a-dir"
+    workspace.write_text("I am a file", encoding="utf-8")
+
+    args = parser.parse_args(["evolve", "init", "--workspace", str(workspace)])
+    rc = evolve_cli.dispatch(args)
+
+    assert rc == evolve_cli.EXIT_FS
 
 
 def test_run_report_not_implemented_raises_runtime_exit():
