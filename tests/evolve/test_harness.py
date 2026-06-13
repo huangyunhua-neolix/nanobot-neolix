@@ -397,6 +397,10 @@ def test_compute_final_status_promoted_precedes_fail_trace(tmp_path: Path) -> No
 
 
 def _make_run_manifest(**overrides: object) -> RunManifest:
+    # Defaults model a fully promotable manifest (promoted_candidate_hash set,
+    # final_status="promoted_to_pr") so manifest serialization tests get a
+    # well-formed, round-trip-safe fixture without boilerplate. Pass explicit
+    # overrides to test other status paths.
     fields: dict[str, object] = {
         "run_id": "run-abc",
         "started_at": datetime(2026, 6, 13, 12, 0, tzinfo=timezone.utc),
@@ -477,5 +481,15 @@ def test_load_manifest_validation_error_propagates(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     path.write_text('{"runId": "missing-fields"}', encoding="utf-8")
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="validation error"):
         load_manifest(path)
+
+
+def test_dump_manifest_creates_parent_directories(tmp_path: Path) -> None:
+    manifest = _make_run_manifest()
+    path = tmp_path / "nested" / "dir" / "manifest.json"
+
+    dump_manifest(path, manifest)
+
+    assert path.is_file()
+    assert load_manifest(path) == manifest
