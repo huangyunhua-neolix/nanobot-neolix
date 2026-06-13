@@ -21,7 +21,7 @@ def test_reason_has_closed_code_and_params() -> None:
 
 
 def test_reason_rejects_freeform_snippet_fields() -> None:
-    with pytest_raises_validation_error():
+    with _raises_validation_error():
         ProposalReason(
             code="zero_uses_after_views",
             params={"views": 30},
@@ -69,5 +69,5 @@ def test_report_model_uses_spec_enum_values() -> None:
     }
 
 
-def pytest_raises_validation_error():
+def _raises_validation_error():
     return pytest.raises(ValidationError)
