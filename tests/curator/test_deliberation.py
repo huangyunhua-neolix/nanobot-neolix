@@ -286,3 +286,81 @@ async def test_deliberate_proposal_factory_exception_produces_safe_warning() -> 
     # Raw exception message must NOT be in the warning
     assert "disk full" not in (warning or "")
     assert "/etc/passwd" not in (warning or "")
+
+
+# ---------------------------------------------------------------------------
+# deliberate_proposal — LLMResponse-like object with .content attribute
+# ---------------------------------------------------------------------------
+
+
+async def test_deliberate_proposal_with_content_object_returns_result() -> None:
+    """A factory returning an object with .content str (like LLMResponse) is parsed correctly."""
+
+    class _FakeResponse:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+    class _ObjectProvider:
+        async def chat(self, *, messages, tools, max_tokens, temperature):
+            return _FakeResponse(
+                json.dumps({"verdict": "support", "rationale": "looks fine", "confidence_delta": "same"})
+            )
+
+    result, warning = await deliberate_proposal(
+        skill_name="test-skill",
+        action="delete_candidate",
+        confidence="high",
+        reasons=["zero_uses_after_views"],
+        provider_factory=_ObjectProvider(),
+    )
+    assert result is not None, f"Expected a parsed result, got None (warning={warning!r})"
+    assert result.verdict == "support"
+    assert result.confidence_delta == "same"
+    assert warning is None
+
+
+async def test_deliberate_proposal_with_real_llm_response_object_returns_result() -> None:
+    """Using the actual LLMResponse dataclass from nanobot.providers.base succeeds."""
+    from nanobot.providers.base import LLMResponse
+
+    valid_json = json.dumps(
+        {"verdict": "reject", "rationale": "active dependency found", "confidence_delta": "decrease"}
+    )
+
+    class _RealResponseProvider:
+        async def chat(self, *, messages, tools, max_tokens, temperature):
+            return LLMResponse(content=valid_json)
+
+    result, warning = await deliberate_proposal(
+        skill_name="dep-skill",
+        action="delete_candidate",
+        confidence="high",
+        reasons=["stale_since_last_use"],
+        provider_factory=_RealResponseProvider(),
+    )
+    assert result is not None, f"Expected a parsed result, got None (warning={warning!r})"
+    assert result.verdict == "reject"
+    assert result.confidence_delta == "decrease"
+    assert warning is None
+
+
+async def test_deliberate_proposal_with_content_object_none_content_produces_warning() -> None:
+    """A factory returning an object whose .content is None is treated as invalid (not crashy)."""
+
+    class _NoneContentResponse:
+        content = None
+
+    class _NoneContentProvider:
+        async def chat(self, *, messages, tools, max_tokens, temperature):
+            return _NoneContentResponse()
+
+    result, warning = await deliberate_proposal(
+        skill_name="test-skill",
+        action="delete_candidate",
+        confidence="high",
+        reasons=["zero_uses_after_views"],
+        provider_factory=_NoneContentProvider(),
+    )
+    assert result is None
+    assert warning is not None
+    assert isinstance(warning, str)

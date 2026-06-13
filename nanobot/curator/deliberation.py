@@ -11,6 +11,7 @@ Provides:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Literal
@@ -122,6 +123,29 @@ def parse_aux_result(text: str) -> AuxDeliberationResult | None:
 _AUX_TIMEOUT_S = 15
 
 
+def _extract_response_text(raw: object) -> str | None:
+    """Extract the text content from an LLM provider response.
+
+    Handles three cases in order:
+    1. Already a ``str`` — returned as-is.
+    2. Has a ``content`` attribute that is a ``str`` — use ``raw.content``.
+    3. Anything else — fall back to ``str(raw)`` as last resort.
+
+    Returns ``None`` if the object has a ``content`` attribute whose value is
+    not a ``str`` (e.g. ``None`` or a list of blocks), so the caller can treat
+    the response as invalid without leaking raw repr into warnings.
+    """
+    if isinstance(raw, str):
+        return raw
+    if hasattr(raw, "content"):
+        content = raw.content  # type: ignore[union-attr]
+        if isinstance(content, str):
+            return content
+        # content attr present but not a str (None, list of blocks, …) — treat as invalid
+        return None
+    return str(raw)
+
+
 async def deliberate_proposal(
     *,
     skill_name: str,
@@ -156,8 +180,6 @@ async def deliberate_proposal(
     if provider_factory is None or not hasattr(provider_factory, "chat"):
         return None, None
 
-    import asyncio
-
     prompt_lines = [
         "You are a skill-hygiene auditor.  Respond with ONLY valid JSON.",
         "Review this curator proposal and return a deliberation verdict.",
@@ -187,7 +209,8 @@ async def deliberate_proposal(
     except Exception:  # noqa: BLE001
         return None, "aux deliberation failed"
 
-    result = parse_aux_result(str(raw) if not isinstance(raw, str) else raw)
+    text = _extract_response_text(raw)
+    result = parse_aux_result(text) if text is not None else None
     if result is None:
         return None, "aux deliberation returned an invalid response"
     return result, None
