@@ -8,6 +8,7 @@ will layer judges, GEPA selection, and PR application on top.
 
 from __future__ import annotations
 
+import json
 import time
 import traceback
 from datetime import datetime, timezone
@@ -86,6 +87,24 @@ class RunManifest(FrozenEvolveBase):
     tiers_used: list[Literal["A", "B", "C", "D"]]
     record_count_per_tier: dict[str, int]
     judge_pool_health: dict[str, str]
+
+
+def load_manifest(path: Path) -> RunManifest:
+    """Load and validate a RunManifest from JSON."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid manifest JSON at {path}: {exc}") from exc
+    return RunManifest.model_validate(raw)
+
+
+def dump_manifest(path: Path, manifest: RunManifest) -> None:
+    """Write a RunManifest JSON file using the model's alias contract."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        manifest.model_dump_json(by_alias=True, indent=2),
+        encoding="utf-8",
+    )
 
 
 # ---------------------------------------------------------------------------

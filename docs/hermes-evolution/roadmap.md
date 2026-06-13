@@ -2,7 +2,7 @@
 
 > **文档性质**：5-milestone 路线图 / 决策记录。本身**不是单个 spec**，而是把"全都要"这一个超大需求拆成可独立 spec→plan→implementation 的多周期总览。每个 milestone 自己有 spec、plan、progress 文档，本文负责导航和锁顺序。
 >
-> **状态**：路线图已锁定（2026-06-11）。**M1 已完成（2026-06-11，PR #1 + #2）**。**M2 已完成（2026-06-12，PR #4）**。M3 / M4 可启动（M4 与 M3 仍可并行）。
+> **状态**：路线图已锁定（2026-06-11）。**M1 已完成（2026-06-11，PR #1 + #2）**。**M2 已完成（2026-06-12，PR #4）**。**M4 离线骨架已完成并合入 main（2026-06-12，PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/6）**。M3 待启动，M5 待 M4 骨架之上继续实现真正离线进化。
 >
 > **目录约定**：本系列所有文档入库于 `docs/hermes-evolution/`，与 `docs/superpowers/`（本地、gitignore）区分。
 >
@@ -28,6 +28,8 @@
 | 2026-06-11 | 锁定 5-milestone 拆解（M1→M5），M2 与 M4 在 M1 完成后可并行 | 用户选项 A |
 | 2026-06-11 | **M1 完成并合入 main**（PR #1 33-task plan + 4 follow-ups + 2 YELLOW 修复；PR #2 `.agent/memory/` 记忆固化） | 见 `retros/m1-foundations.md` |
 | 2026-06-12 | **M2 完成并合入 main**（PR #4 15-task plan + 4 轮 reviewer fix + 1 处 spec erratum；37 commits / 36 files / +7110 −37） | 见 `retros/m2-skill-manage.md` |
+| 2026-06-12 | **M4 离线骨架完成并合入 main**（PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/6，HEAD `f8a496bf`；`nanobot/evolve/` skeleton + `nanobot evolve` CLI surface） | 真正 GEPA/Darwinian Evolver 延后到 M5；apply/report CLI 接口在 finish pass 中补齐（见下行） |
+| 2026-06-13 | **M4 finish pass 完成**（branch `feature/finish-m4-offline`）：`evolve init`、`evolve report --manifest`、reduced-surface `evolve apply --manifest` 已全部落地并通过测试 | §4.4 full bundle export / atomic swap / `--force`、真正 GEPA/Darwinian Evolver 仍留 M5；finish pass 不改变 M4 CLI 公开接口，不绕过 §9 redaction 边界 |
 
 ## 3. Milestone 总览
 
@@ -42,7 +44,7 @@ M1 Foundations  ──┬──> M2 skill_manage ──> M3 Curator
 | **M1** | provenance 字段 + skill 目录分层 + telemetry 计数 + auxiliary provider 配置形态 | — | ✅ 已完成 (2026-06-11, PR #1+#2) | [`specs/m1-foundations.md`](specs/m1-foundations.md) | [`plans/m1-foundations.md`](plans/m1-foundations.md) | [`retros/m1-foundations.md`](retros/m1-foundations.md) |
 | **M2** | `skill_manage` 工具(create/patch/edit/delete) + 触发规则 + Dream 整合点 | M1 | ✅ 已完成 (2026-06-12, PR #4) | [`specs/m2-skill-manage.md`](specs/m2-skill-manage.md) | [`plans/m2-skill-manage.md`](plans/m2-skill-manage.md) | [`retros/m2-skill-manage.md`](retros/m2-skill-manage.md) |
 | **M3** | Curator Phase 1(确定性状态机) + Phase 2(aux-model 审议) + dry-run + `/curator` 命令 + protect-list | M2 | 待启动 | `specs/m3-curator.md` | `plans/m3-curator.md` | — |
-| **M4** | DSPy + GEPA 接入 + 评测数据 4 级分层 + LLM-as-judge rubric + 5 道闸门的前 3 道（测试/大小/cache 兼容） | M1 | 🚧 进行中 (2026-06-12, PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/6, @ f8a496bf) | `specs/m4-offline-skeleton.md` | `plans/m4-offline-skeleton.md` | — |
+| **M4** | 离线进化骨架：`nanobot/evolve/` skeleton（shared Pydantic base、评测数据模型、rubric/judge pool 类型、3 道 deterministic gate、OfflineHarness、redaction pipeline、PR-only deploy helpers）+ `nanobot evolve` CLI surface（init/report/apply） | M1 | ✅ 已完成 (2026-06-12, PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/6, HEAD f8a496bf) | [`specs/m4-offline-skeleton.md`](specs/m4-offline-skeleton.md) | [`plans/m4-offline-skeleton.md`](plans/m4-offline-skeleton.md) | [`retros/m4-offline-skeleton.md`](retros/m4-offline-skeleton.md) |
 | **M5** | 接入外部 Darwinian Evolver CLI + AGPL 许可隔离 + PR-only 部署 + 完整 5 道闸门 | M4 | 待启动 | `specs/m5-darwinian-evolver.md` | `plans/m5-darwinian-evolver.md` | — |
 
 依赖与并行：
@@ -68,7 +70,7 @@ M1 Foundations  ──┬──> M2 skill_manage ──> M3 Curator
 - M1: ✅ 已完成 — 详见 [`retros/m1-foundations.md`](retros/m1-foundations.md)
 - M2: ✅ 已完成 — 详见 [`retros/m2-skill-manage.md`](retros/m2-skill-manage.md)
 - M3: *待启动*
-- M4: 🚧 进行中 — retro 待 M5 启动前补齐
+- M4: ✅ 骨架已完成，finish pass 补齐 `evolve init` / `report` / reduced `apply`（完整 §4.4 bundle export / atomic swap / `--force` 留 M5） — 详见 [`retros/m4-offline-skeleton.md`](retros/m4-offline-skeleton.md)
 - M5: *待启动*
 
 ## 6. 跨 Milestone 的硬性约束
@@ -88,5 +90,6 @@ M1 Foundations  ──┬──> M2 skill_manage ──> M3 Curator
 - [x] 2. M1 brainstorming
 - [x] 3. M1 spec → plan → 实施（2026-06-11 合入 main）
 - [x] 4. M2 spec → plan → 实施（2026-06-12 合入 main，PR #4）
-- [ ] 5. **M3 / M4 并行启动（下一步：M3 需 M2 sample；M4 离线骨架可独立启动）**
-- [ ] 6. M5
+- [x] 5. **M4 离线骨架完成并合入 main（2026-06-12，PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/6）**
+- [ ] 6. **M3 启动（需要 M2 telemetry 样本积累；独立于 M4/M5）**
+- [ ] 7. **M5 Darwinian Evolver（M4 骨架之上接真实 GEPA + 完整闸门）**

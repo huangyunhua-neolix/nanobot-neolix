@@ -30,8 +30,12 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
+
+if TYPE_CHECKING:
+    from nanobot.evolve.harness import RunManifest
 
 from nanobot.evolve.exceptions import (
     ApplyTerminalError,
@@ -57,18 +61,163 @@ EXIT_APPLY_TERMINAL = 8  # ApplyTerminalError
 
 
 # ---------------------------------------------------------------------------
+# run_init helpers
+# ---------------------------------------------------------------------------
+
+_REQUIRED_GITIGNORE_LINES = ("evals/runs/", "evals/self/", "evals/sessions/")
+
+_EVALS_README = """\
+# nanobot evolve evals
+
+This directory holds evaluation artefacts for offline skill evolution (M4).
+
+## Tiers
+
+| Tier | Description |
+|------|-------------|
+| A    | Synthetic prompts with deterministic expected outputs. |
+| C    | Golden traces recorded from real sessions (privacy-scrubbed). |
+
+## Record format
+
+Each record is a newline-delimited JSON file (`*.ndjson`) with fields:
+`id`, `tier`, `prompt`, `expected`, `metadata`.
+
+## Privacy
+
+Tier-C records **must** be scrubbed of PII before commit. The harness gate
+rejects manifests that fail `ManifestPrivacyViolation` checks.
+
+## M4/M5 boundary
+
+M4 scope: `synthetic/` and `golden/` eval authoring, `runs/` output capture,
+GEPA scoring pipeline, judge-pool dispatch.
+
+M5 scope: automated apply, PR deployment, and continuous self-evolution loop.
+"""
+
+
+def _default_workspace() -> Path:
+    return Path("~/.nanobot/evolve/default").expanduser()
+
+
+def _manifest_path_arg(args: argparse.Namespace) -> Path:
+    manifest = getattr(args, "manifest", None)
+    if not manifest:
+        raise ConfigError("--manifest is required for this M4 skeleton command")
+    return Path(manifest).expanduser()
+
+
+def _display_or_none(value: str | None) -> str:
+    return value if value else "<none>"
+
+
+def _format_manifest_report(manifest: RunManifest) -> str:
+    candidates = (
+        ",".join(manifest.candidate_hashes)
+        if manifest.candidate_hashes
+        else "<none>"
+    )
+    tiers = ",".join(
+        f"{tier}={manifest.record_count_per_tier[tier]}"
+        for tier in sorted(manifest.record_count_per_tier)
+    )
+    lines = [
+        f"Run: {manifest.run_id}",
+        f"Skill: {manifest.skill_name}",
+        f"Status: {manifest.final_status}",
+        f"Promoted candidate: {_display_or_none(manifest.promoted_candidate_hash)}",
+        f"Baseline: {manifest.baseline_hash}",
+        f"Candidates: {candidates}",
+        "Gates:",
+    ]
+    lines.extend(
+        f"- {gate.gate_name}: {gate.verdict}"
+        for gate in manifest.gate_verdicts
+    )
+    summary = manifest.judge_summary
+    lines.extend(
+        [
+            f"Tiers: {tiers}",
+            "Judge summary: "
+            f"records={summary.record_count}, "
+            f"aggregate={summary.median_aggregate}, "
+            f"process={summary.median_process}, "
+            f"output={summary.median_output}, "
+            f"token={summary.median_token}, "
+            f"splits={summary.consensus_split_count}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _workspace_from_arg(value: str | None) -> Path:
+    if value is None:
+        return _default_workspace()
+    return Path(value).expanduser()
+
+
+def _touch_if_missing(path: Path) -> None:
+    if path.exists() and not path.is_file():
+        raise FileExistsError(f"expected file path exists and is not a file: {path}")
+    if not path.exists():
+        path.write_text("", encoding="utf-8")
+
+
+def _write_if_missing(path: Path, content: str) -> None:
+    if not path.exists():
+        path.write_text(content, encoding="utf-8")
+
+
+def _ensure_gitignore_patterns(path: Path) -> None:
+    """Append any missing patterns from _REQUIRED_GITIGNORE_LINES.
+
+    Uses exact-line semantics: a stripped, non-comment line must exactly
+    match the pattern. Does not rewrite the file if all patterns are present.
+    """
+    existing_lines: list[str] = []
+    if path.exists():
+        existing_lines = path.read_text(encoding="utf-8").splitlines()
+
+    existing_non_comment = {
+        line.strip()
+        for line in existing_lines
+        if line.strip() and not line.strip().startswith("#")
+    }
+
+    missing = [p for p in _REQUIRED_GITIGNORE_LINES if p not in existing_non_comment]
+    if not missing:
+        return
+
+    current_content = "\n".join(existing_lines)
+    if existing_lines and not current_content.endswith("\n"):
+        current_content += "\n"
+    addition = "\n".join(missing) + "\n"
+    new_content = current_content + addition
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(new_content, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # Handler stubs
 # ---------------------------------------------------------------------------
 
 
 def run_init(args: argparse.Namespace) -> int:
-    """Initialize a workspace skeleton on disk.
+    """Initialize an M4 evolve workspace skeleton on disk."""
+    workspace = _workspace_from_arg(args.workspace)
+    if workspace.exists() and not workspace.is_dir():
+        raise FileExistsError(f"workspace path exists and is not a directory: {workspace}")
 
-    M4 t-16 ships the CLI surface only; the on-disk skeleton initializer
-    is owned by a follow-up task. Raising ``NotImplementedError`` keeps the
-    contract honest until that lands.
-    """
-    raise NotImplementedError("evolve init is not wired yet (M4 follow-up)")
+    (workspace / "evals" / "synthetic").mkdir(parents=True, exist_ok=True)
+    _touch_if_missing(workspace / "evals" / "synthetic" / ".gitkeep")
+    (workspace / "evals" / "golden").mkdir(parents=True, exist_ok=True)
+    _touch_if_missing(workspace / "evals" / "golden" / ".gitkeep")
+    (workspace / "evals" / "runs").mkdir(parents=True, exist_ok=True)
+    _ensure_gitignore_patterns(workspace / ".gitignore")
+    _write_if_missing(workspace / "evals" / "README.md", _EVALS_README)
+    return EXIT_OK
 
 
 def run_run(args: argparse.Namespace) -> int:
@@ -96,13 +245,35 @@ def run_run(args: argparse.Namespace) -> int:
 
 
 def run_report(args: argparse.Namespace) -> int:
-    """Print a structured report for a completed run."""
-    raise NotImplementedError("evolve report is not wired yet (M4 follow-up)")
+    """Print a deterministic text summary for a completed run manifest."""
+    from nanobot.evolve.harness import load_manifest
+
+    manifest = load_manifest(_manifest_path_arg(args))
+    print(_format_manifest_report(manifest))
+    return EXIT_OK
 
 
 def run_apply(args: argparse.Namespace) -> int:
-    """Apply a promoted run via PR deployment."""
-    raise NotImplementedError("evolve apply is not wired yet (M4 follow-up)")
+    """Preview the PR-only apply artifacts for a promoted manifest."""
+    from nanobot.evolve.deploy import assemble_pr_body, build_branch_name
+    from nanobot.evolve.harness import load_manifest
+
+    manifest_path = _manifest_path_arg(args)
+    manifest = load_manifest(manifest_path)
+    if manifest.final_status != "promoted_to_pr" or not manifest.promoted_candidate_hash:
+        raise ApplyTerminalError(
+            f"manifest is not promotable: final_status={manifest.final_status}, "
+            f"promoted_candidate_hash={manifest.promoted_candidate_hash!r}",
+            final_status=manifest.final_status,
+            manifest_path=manifest_path,
+        )
+    candidate_short_sha = manifest.promoted_candidate_hash[:8]
+    branch = build_branch_name(manifest.run_id, manifest.skill_name, candidate_short_sha)
+    body = assemble_pr_body(manifest, manifest.gate_verdicts)
+    print(f"Branch: {branch}")
+    print("PR body:")
+    print(body)
+    return EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -158,12 +329,14 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     # report ---------------------------------------------------------------
     report_p = evolve_subs.add_parser("report", help="Print a structured report for a run.")
-    report_p.add_argument("run_id", help="Run identifier.")
+    report_p.add_argument("run_id", nargs="?", default=None, help="Run identifier (M5 prefix resolution).")
+    report_p.add_argument("--manifest", default=None, help="Run manifest JSON path.")
     report_p.set_defaults(func=run_report)
 
     # apply ----------------------------------------------------------------
     apply_p = evolve_subs.add_parser("apply", help="Apply a promoted run via PR deployment.")
-    apply_p.add_argument("run_id", help="Run identifier.")
+    apply_p.add_argument("run_id", nargs="?", default=None, help="Run identifier (M5 prefix resolution).")
+    apply_p.add_argument("--manifest", default=None, help="Run manifest JSON path.")
     apply_p.set_defaults(func=run_apply)
 
 

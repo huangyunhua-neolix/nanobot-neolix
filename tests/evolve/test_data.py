@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from nanobot.evolve.data import EvalRecord, load_tier
+from nanobot.evolve.exceptions import ConfigError
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -170,16 +171,20 @@ def test_load_tier_missing_expected_file_raises(tmp_path: Path) -> None:
         load_tier("A", "skill_x", tmp_path)
 
 
-def test_load_tier_b_raises_not_implemented(tmp_path: Path) -> None:
-    """Tier B has a dedicated session-jsonl layout (§3.1.3); generic loader refuses."""
-    with pytest.raises(NotImplementedError, match="Tier B"):
+def test_load_tier_b_raises_config_error(tmp_path: Path) -> None:
+    """Tier B SessionDB-anonymized loading is not wired in M4 (§3.1.3)."""
+    with pytest.raises(ConfigError, match="Tier B") as exc_info:
         load_tier("B", "any_skill", tmp_path)
+    assert "M5" in str(exc_info.value)
+    assert "A/C" in str(exc_info.value)
 
 
-def test_load_tier_d_raises_not_implemented(tmp_path: Path) -> None:
-    """Tier D has a per-task JSON-triple layout (§3.1.5); generic loader refuses."""
-    with pytest.raises(NotImplementedError, match="Tier D"):
+def test_load_tier_d_raises_config_error(tmp_path: Path) -> None:
+    """Tier D self-eval loading is not wired in M4 (§3.1.5)."""
+    with pytest.raises(ConfigError, match="Tier D") as exc_info:
         load_tier("D", "any_skill", tmp_path)
+    assert "M5" in str(exc_info.value)
+    assert "A/C" in str(exc_info.value)
 
 
 def test_load_tier_in_row_tier_mismatch_raises(tmp_path: Path) -> None:

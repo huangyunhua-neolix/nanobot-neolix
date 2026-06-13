@@ -12,6 +12,8 @@ Covers:
 from __future__ import annotations
 
 import argparse
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -26,6 +28,8 @@ from nanobot.evolve.exceptions import (
     JudgeError,
     ManifestPrivacyViolation,
 )
+from nanobot.evolve.gates import GateResult
+from nanobot.evolve.harness import JudgeSummary, RunManifest, dump_manifest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -99,10 +103,14 @@ def test_report_takes_positional_run_id():
     assert args.run_id == "run-abc"
 
 
-def test_apply_takes_positional_run_id():
+def test_apply_accepts_optional_run_id_and_manifest_flag():
     parser = _build_parser()
-    args = parser.parse_args(["evolve", "apply", "run-xyz"])
-    assert args.run_id == "run-xyz"
+    args = parser.parse_args(["evolve", "apply", "--manifest", "/tmp/m.json"])
+    assert args.run_id is None
+    assert args.manifest == "/tmp/m.json"
+    args2 = parser.parse_args(["evolve", "apply", "run-xyz"])
+    assert args2.run_id == "run-xyz"
+    assert args2.manifest is None
 
 
 # ---------------------------------------------------------------------------
@@ -358,28 +366,191 @@ def test_run_run_valid_workspace_returns_zero(tmp_path):
     assert rc == 0
 
 
-def test_run_init_not_implemented_raises_runtime_exit():
+def test_run_init_default_workspace_can_be_parsed():
+    """evolve init with no --workspace must parse and resolve a default path."""
     parser = _build_parser()
     args = parser.parse_args(["evolve", "init"])
-    # NotImplementedError subclasses RuntimeError → exit 1.
-    rc = evolve_cli.dispatch(args)
-    assert rc == 1
+    # workspace arg is None when omitted; _workspace_from_arg must still return a Path.
+    ws = evolve_cli._workspace_from_arg(args.workspace)
+    assert isinstance(ws, Path)
+    assert ws.name == "default"
 
 
-def test_run_report_not_implemented_raises_runtime_exit():
-    """Mirror of init coverage — report stub MUST land on EXIT_RUNTIME (T16-FIX-2)."""
+# ---------------------------------------------------------------------------
+# run_init — workspace skeleton
+# ---------------------------------------------------------------------------
+
+
+def _gitignore_lines(path: Path) -> list[str]:
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def test_run_init_creates_m4_workspace_skeleton(tmp_path: Path):
     parser = _build_parser()
-    args = parser.parse_args(["evolve", "report", "run-abc"])
+    workspace = tmp_path / "evolve-ws"
+    args = parser.parse_args(["evolve", "init", "--workspace", str(workspace)])
+
     rc = evolve_cli.dispatch(args)
-    assert rc == evolve_cli.EXIT_RUNTIME
+
+    assert rc == evolve_cli.EXIT_OK
+    assert (workspace / "evals" / "synthetic" / ".gitkeep").is_file()
+    assert (workspace / "evals" / "golden" / ".gitkeep").is_file()
+    assert (workspace / "evals" / "runs").is_dir()
+    assert not (workspace / "datasets").exists()
+    assert not (workspace / "evolve-config.json").exists()
+    gi_lines = _gitignore_lines(workspace / ".gitignore")
+    assert "evals/runs/" in gi_lines
+    assert "evals/self/" in gi_lines
+    assert "evals/sessions/" in gi_lines
+    readme = (workspace / "evals" / "README.md").read_text(encoding="utf-8")
+    for heading in (
+        "# nanobot evolve evals",
+        "## Tiers",
+        "## Record format",
+        "## Privacy",
+        "## M4/M5 boundary",
+    ):
+        assert heading in readme
 
 
-def test_run_apply_not_implemented_raises_runtime_exit():
-    """Mirror of init coverage — apply stub MUST land on EXIT_RUNTIME (T16-FIX-2)."""
+def test_run_init_is_idempotent_and_does_not_overwrite_readme(tmp_path: Path):
     parser = _build_parser()
-    args = parser.parse_args(["evolve", "apply", "run-xyz"])
+    workspace = tmp_path / "evolve-ws"
+    args = parser.parse_args(["evolve", "init", "--workspace", str(workspace)])
+
+    # First run.
+    rc1 = evolve_cli.dispatch(args)
+    assert rc1 == evolve_cli.EXIT_OK
+
+    readme_path = workspace / "evals" / "README.md"
+    # Overwrite README with a sentinel; second run must not touch it.
+    readme_path.write_text("sentinel content", encoding="utf-8")
+
+    gitignore_path = workspace / ".gitignore"
+    gi_content_before = gitignore_path.read_text(encoding="utf-8")
+    gi_mtime_before = gitignore_path.stat().st_mtime_ns
+
+    # Second run.
+    rc2 = evolve_cli.dispatch(args)
+    assert rc2 == evolve_cli.EXIT_OK
+
+    # README must be unchanged (not overwritten).
+    assert readme_path.read_text(encoding="utf-8") == "sentinel content"
+
+    # .gitignore must not have duplicate lines.
+    gi_lines = _gitignore_lines(gitignore_path)
+    for pattern in ("evals/runs/", "evals/self/", "evals/sessions/"):
+        assert gi_lines.count(pattern) == 1, f"duplicate pattern {pattern!r} in .gitignore"
+
+    # .gitignore content must be unchanged (all patterns already exist).
+    assert gitignore_path.read_text(encoding="utf-8") == gi_content_before
+
+    # .gitignore must not have been rewritten (mtime unchanged).
+    gi_mtime_after = gitignore_path.stat().st_mtime_ns
+    assert gi_mtime_after == gi_mtime_before, ".gitignore was rewritten on idempotent second run"
+
+
+def test_run_init_partial_skeleton_fills_missing_pieces(tmp_path: Path):
+    """If some pieces exist already, run_init fills only what's missing."""
+    parser = _build_parser()
+    workspace = tmp_path / "evolve-ws"
+    # Pre-create the synthetic dir but not golden.
+    (workspace / "evals" / "synthetic").mkdir(parents=True)
+
+    args = parser.parse_args(["evolve", "init", "--workspace", str(workspace)])
     rc = evolve_cli.dispatch(args)
-    assert rc == evolve_cli.EXIT_RUNTIME
+
+    assert rc == evolve_cli.EXIT_OK
+    # Both gitkeeps should exist now.
+    assert (workspace / "evals" / "synthetic" / ".gitkeep").is_file()
+    assert (workspace / "evals" / "golden" / ".gitkeep").is_file()
+    assert (workspace / "evals" / "runs").is_dir()
+
+
+def test_run_init_gitkeep_as_directory_maps_to_fs_exit(tmp_path: Path):
+    """If .gitkeep exists as a directory, run_init must return EXIT_FS."""
+    parser = _build_parser()
+    workspace = tmp_path / "evolve-ws"
+    # Pre-create .gitkeep as a directory — _touch_if_missing should raise FileExistsError.
+    (workspace / "evals" / "synthetic" / ".gitkeep").mkdir(parents=True)
+
+    args = parser.parse_args(["evolve", "init", "--workspace", str(workspace)])
+    rc = evolve_cli.dispatch(args)
+
+    assert rc == evolve_cli.EXIT_FS
+
+
+def test_run_init_workspace_regular_file_maps_to_fs_exit(tmp_path: Path):
+    """Workspace path that is a regular file must map to EXIT_FS via dispatch."""
+    parser = _build_parser()
+    # Create a regular file at the workspace path.
+    workspace = tmp_path / "not-a-dir"
+    workspace.write_text("I am a file", encoding="utf-8")
+
+    args = parser.parse_args(["evolve", "init", "--workspace", str(workspace)])
+    rc = evolve_cli.dispatch(args)
+
+    assert rc == evolve_cli.EXIT_FS
+
+
+def test_report_accepts_optional_run_id_and_manifest_flag():
+    """report subcommand must accept an optional run_id positional and --manifest flag."""
+    parser = _build_parser()
+    # With run_id and --manifest
+    args = parser.parse_args(["evolve", "report", "run-abc", "--manifest", "/tmp/m.json"])
+    assert args.run_id == "run-abc"
+    assert args.manifest == "/tmp/m.json"
+    # Without run_id (optional) — manifest only
+    args2 = parser.parse_args(["evolve", "report", "--manifest", "/tmp/m.json"])
+    assert args2.run_id is None
+    assert args2.manifest == "/tmp/m.json"
+
+
+def test_apply_accepts_manifest_without_dummy_run_id(tmp_path: Path, capsys):
+    parser = _build_parser()
+    manifest_path = tmp_path / "manifest.json"
+    dump_manifest(manifest_path, _manifest())
+    args = parser.parse_args(["evolve", "apply", "--manifest", str(manifest_path)])
+
+    rc = evolve_cli.dispatch(args)
+
+    assert rc == evolve_cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "Branch: evolve/run-abc-demo-skill-deadbeef" in out
+    assert "PR body:" in out
+    assert "1-test-pass" in out
+
+
+@pytest.mark.parametrize(
+    ("final_status", "promoted_hash"),
+    [
+        ("promoted_to_pr", None),
+        ("rejected_by_gate", "deadbeefcafebabe"),
+        ("no_improvement", None),
+        ("harness_error", None),
+    ],
+)
+def test_apply_refusal_matrix_maps_to_apply_terminal(
+    tmp_path: Path,
+    final_status: str,
+    promoted_hash: str | None,
+):
+    parser = _build_parser()
+    manifest_path = tmp_path / "manifest.json"
+    dump_manifest(
+        manifest_path,
+        _manifest(final_status=final_status, promoted_candidate_hash=promoted_hash),
+    )
+    args = parser.parse_args(["evolve", "apply", "--manifest", str(manifest_path)])
+
+    assert evolve_cli.dispatch(args) == evolve_cli.EXIT_APPLY_TERMINAL
+
+
+def test_apply_requires_manifest_path():
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "apply"])
+
+    assert evolve_cli.dispatch(args) == evolve_cli.EXIT_CONFIG
 
 
 # ---------------------------------------------------------------------------
@@ -445,3 +616,134 @@ def test_typer_shim_run_valid_workspace_returns_zero(tmp_path):
     runner = CliRunner()
     result = runner.invoke(app, ["evolve", "run", "--workspace", str(tmp_path)])
     assert result.exit_code == evolve_cli.EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# report manifest helpers
+# ---------------------------------------------------------------------------
+
+
+def _gate_result(name: str = "1-test-pass", verdict: str = "pass") -> GateResult:
+    return GateResult(
+        gate_name=name,
+        candidate_hash="deadbeefcafebabe",
+        baseline_hash="basehash00112233",
+        verdict=verdict,
+        metrics={"score": 1.0},
+        failure_reason=None if verdict == "pass" else "failed",
+        timestamp=datetime(2026, 6, 13, 12, 0, tzinfo=timezone.utc),
+        duration_ms=42,
+    )
+
+
+def _manifest(**overrides: object) -> RunManifest:
+    data: dict[str, object] = {
+        "run_id": "run-abc",
+        "started_at": datetime(2026, 6, 13, 12, 0, tzinfo=timezone.utc),
+        "finished_at": datetime(2026, 6, 13, 12, 5, tzinfo=timezone.utc),
+        "nanobot_version": "0.0.0",
+        "evolve_extra_version": {"dspy": "not-installed"},
+        "skill_name": "demo-skill",
+        "baseline_hash": "basehash00112233",
+        "candidate_hashes": ["deadbeefcafebabe"],
+        "promoted_candidate_hash": "deadbeefcafebabe",
+        "gate_verdicts": [_gate_result()],
+        "judge_summary": JudgeSummary(
+            record_count=2,
+            median_aggregate=0.9,
+            median_process=0.8,
+            median_output=0.85,
+            median_token=0.95,
+            consensus_split_count=0,
+        ),
+        "final_status": "promoted_to_pr",
+        "tiers_used": ["A", "C"],
+        "record_count_per_tier": {"C": 1, "A": 1},
+        "judge_pool_health": {"pool": "ok"},
+    }
+    data.update(overrides)
+    return RunManifest.model_validate(data)
+
+
+# ---------------------------------------------------------------------------
+# report — functional tests
+# ---------------------------------------------------------------------------
+
+
+def test_report_accepts_manifest_without_dummy_run_id(tmp_path: Path, capsys):
+    """report --manifest <path> must load the manifest and print the summary (exit 0)."""
+    manifest = _manifest()
+    manifest_path = tmp_path / "run.json"
+    dump_manifest(manifest_path, manifest)
+
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report", "--manifest", str(manifest_path)])
+    rc = evolve_cli.dispatch(args)
+
+    assert rc == evolve_cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "Run: run-abc" in out
+    assert "Skill: demo-skill" in out
+    assert "Status: promoted_to_pr" in out
+    assert "Promoted candidate: deadbeefcafebabe" in out
+    assert "Baseline: basehash00112233" in out
+    assert "Candidates: deadbeefcafebabe" in out
+    assert "Gates:" in out
+    assert "- 1-test-pass: pass" in out
+    assert "Tiers: A=1,C=1" in out
+    assert "Judge summary: records=2, aggregate=0.9, process=0.8, output=0.85, token=0.95, splits=0" in out
+
+
+def test_report_renders_none_literals(tmp_path: Path, capsys):
+    """Empty candidate_hashes and None promoted_candidate_hash render as <none>."""
+    manifest = _manifest(candidate_hashes=[], promoted_candidate_hash=None)
+    manifest_path = tmp_path / "run.json"
+    dump_manifest(manifest_path, manifest)
+
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report", "--manifest", str(manifest_path)])
+    rc = evolve_cli.dispatch(args)
+
+    assert rc == evolve_cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "Promoted candidate: <none>" in out
+    assert "Candidates: <none>" in out
+
+
+def test_report_requires_manifest_path():
+    """Omitting --manifest must produce EXIT_CONFIG (ConfigError)."""
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report"])
+    rc = evolve_cli.dispatch(args)
+    assert rc == evolve_cli.EXIT_CONFIG
+
+
+def test_report_missing_manifest_maps_to_fs_exit(tmp_path: Path):
+    """--manifest pointing to a non-existent file must produce EXIT_FS (6)."""
+    missing = tmp_path / "does-not-exist.json"
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report", "--manifest", str(missing)])
+    rc = evolve_cli.dispatch(args)
+    assert rc == evolve_cli.EXIT_FS
+
+
+def test_report_invalid_json_maps_to_config_exit(tmp_path: Path):
+    """A manifest file containing invalid JSON must produce EXIT_CONFIG (2)."""
+    bad_json = tmp_path / "bad.json"
+    bad_json.write_text("not-json{{", encoding="utf-8")
+
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report", "--manifest", str(bad_json)])
+    rc = evolve_cli.dispatch(args)
+    assert rc == evolve_cli.EXIT_CONFIG
+
+
+def test_report_validation_error_maps_to_config_exit(tmp_path: Path):
+    """A syntactically-valid JSON that fails Pydantic validation must produce EXIT_CONFIG (2)."""
+    bad_manifest = tmp_path / "bad_schema.json"
+    bad_manifest.write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
+
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report", "--manifest", str(bad_manifest)])
+    rc = evolve_cli.dispatch(args)
+    assert rc == evolve_cli.EXIT_CONFIG
