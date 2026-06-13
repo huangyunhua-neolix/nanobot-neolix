@@ -8,6 +8,7 @@ Covers spec §3.2 (data models), §3.7 (RunManifest frozen + extra=forbid),
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -26,6 +27,8 @@ from nanobot.evolve.harness import (
     OfflineHarness,
     RunManifest,
     SkillFrontmatter,
+    dump_manifest,
+    load_manifest,
 )
 
 # ---------------------------------------------------------------------------
@@ -393,26 +396,26 @@ def test_compute_final_status_promoted_precedes_fail_trace(tmp_path: Path) -> No
 # ---------------------------------------------------------------------------
 
 
-def _make_run_manifest(**overrides) -> RunManifest:
-    fields = dict(
-        run_id="run-1",
-        started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        finished_at=datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc),
-        nanobot_version="0.0.0",
-        evolve_extra_version={"dspy": "2.4.0"},
-        skill_name="demo-skill",
-        baseline_hash="base-hash",
-        candidate_hashes=["cand-1"],
-        promoted_candidate_hash=None,
-        gate_verdicts=[],
-        judge_summary=_make_judge_summary(),
-        final_status="no_improvement",
-        tiers_used=["A", "C"],
-        record_count_per_tier={"A": 5, "C": 3},
-        judge_pool_health={"pool-a": "ok"},
-    )
+def _make_run_manifest(**overrides: object) -> RunManifest:
+    fields: dict[str, object] = {
+        "run_id": "run-abc",
+        "started_at": datetime(2026, 6, 13, 12, 0, tzinfo=timezone.utc),
+        "finished_at": datetime(2026, 6, 13, 12, 5, tzinfo=timezone.utc),
+        "nanobot_version": "0.0.0",
+        "evolve_extra_version": {"dspy": "not-installed"},
+        "skill_name": "demo-skill",
+        "baseline_hash": "basehash00112233",
+        "candidate_hashes": ["deadbeefcafebabe"],
+        "promoted_candidate_hash": "deadbeefcafebabe",
+        "gate_verdicts": [],
+        "judge_summary": _make_judge_summary(),
+        "final_status": "promoted_to_pr",
+        "tiers_used": ["A", "C"],
+        "record_count_per_tier": {"A": 1, "C": 1},
+        "judge_pool_health": {"pool": "ok"},
+    }
     fields.update(overrides)
-    return RunManifest(**fields)
+    return RunManifest(**fields)  # type: ignore[arg-type]
 
 
 def test_run_manifest_is_frozen() -> None:
@@ -444,3 +447,35 @@ def test_candidate_pydantic_validation_required_fields() -> None:
             parent_baseline_hash="base-hash",
             gepa_iteration=1,
         )
+
+
+# ---------------------------------------------------------------------------
+# dump_manifest / load_manifest helpers
+# ---------------------------------------------------------------------------
+
+
+def test_dump_and_load_manifest_round_trip(tmp_path: Path) -> None:
+    manifest = _make_run_manifest()
+    path = tmp_path / "manifest.json"
+
+    dump_manifest(path, manifest)
+    loaded = load_manifest(path)
+
+    assert loaded == manifest
+    assert json.loads(path.read_text(encoding="utf-8"))["runId"] == "run-abc"
+
+
+def test_load_manifest_invalid_json_raises_value_error(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid manifest JSON"):
+        load_manifest(path)
+
+
+def test_load_manifest_validation_error_propagates(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text('{"runId": "missing-fields"}', encoding="utf-8")
+
+    with pytest.raises(ValidationError):
+        load_manifest(path)
