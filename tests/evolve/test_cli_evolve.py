@@ -103,10 +103,14 @@ def test_report_takes_positional_run_id():
     assert args.run_id == "run-abc"
 
 
-def test_apply_takes_positional_run_id():
+def test_apply_accepts_optional_run_id_and_manifest_flag():
     parser = _build_parser()
-    args = parser.parse_args(["evolve", "apply", "run-xyz"])
-    assert args.run_id == "run-xyz"
+    args = parser.parse_args(["evolve", "apply", "--manifest", "/tmp/m.json"])
+    assert args.run_id is None
+    assert args.manifest == "/tmp/m.json"
+    args2 = parser.parse_args(["evolve", "apply", "run-xyz"])
+    assert args2.run_id == "run-xyz"
+    assert args2.manifest is None
 
 
 # ---------------------------------------------------------------------------
@@ -502,12 +506,51 @@ def test_report_accepts_optional_run_id_and_manifest_flag():
     assert args2.manifest == "/tmp/m.json"
 
 
-def test_run_apply_not_implemented_raises_runtime_exit():
-    """Mirror of init coverage — apply stub MUST land on EXIT_RUNTIME (T16-FIX-2)."""
+def test_apply_accepts_manifest_without_dummy_run_id(tmp_path: Path, capsys):
     parser = _build_parser()
-    args = parser.parse_args(["evolve", "apply", "run-xyz"])
+    manifest_path = tmp_path / "manifest.json"
+    dump_manifest(manifest_path, _manifest())
+    args = parser.parse_args(["evolve", "apply", "--manifest", str(manifest_path)])
+
     rc = evolve_cli.dispatch(args)
-    assert rc == evolve_cli.EXIT_RUNTIME
+
+    assert rc == evolve_cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "Branch: evolve/run-abc-demo-skill-deadbeef" in out
+    assert "PR body:" in out
+    assert "1-test-pass" in out
+
+
+@pytest.mark.parametrize(
+    ("final_status", "promoted_hash"),
+    [
+        ("promoted_to_pr", None),
+        ("rejected_by_gate", "deadbeefcafebabe"),
+        ("no_improvement", None),
+        ("harness_error", None),
+    ],
+)
+def test_apply_refusal_matrix_maps_to_apply_terminal(
+    tmp_path: Path,
+    final_status: str,
+    promoted_hash: str | None,
+):
+    parser = _build_parser()
+    manifest_path = tmp_path / "manifest.json"
+    dump_manifest(
+        manifest_path,
+        _manifest(final_status=final_status, promoted_candidate_hash=promoted_hash),
+    )
+    args = parser.parse_args(["evolve", "apply", "--manifest", str(manifest_path)])
+
+    assert evolve_cli.dispatch(args) == evolve_cli.EXIT_APPLY_TERMINAL
+
+
+def test_apply_requires_manifest_path():
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "apply"])
+
+    assert evolve_cli.dispatch(args) == evolve_cli.EXIT_CONFIG
 
 
 # ---------------------------------------------------------------------------

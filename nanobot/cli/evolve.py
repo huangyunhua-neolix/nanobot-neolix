@@ -254,8 +254,26 @@ def run_report(args: argparse.Namespace) -> int:
 
 
 def run_apply(args: argparse.Namespace) -> int:
-    """Apply a promoted run via PR deployment."""
-    raise NotImplementedError("evolve apply is not wired yet (M4 follow-up)")
+    """Preview the PR-only apply artifacts for a promoted manifest."""
+    from nanobot.evolve.deploy import assemble_pr_body, build_branch_name
+    from nanobot.evolve.harness import load_manifest
+
+    manifest_path = _manifest_path_arg(args)
+    manifest = load_manifest(manifest_path)
+    if manifest.final_status != "promoted_to_pr" or not manifest.promoted_candidate_hash:
+        raise ApplyTerminalError(
+            f"manifest is not promotable: final_status={manifest.final_status}, "
+            f"promoted_candidate_hash={manifest.promoted_candidate_hash!r}",
+            final_status=manifest.final_status,
+            manifest_path=manifest_path,
+        )
+    candidate_short_sha = manifest.promoted_candidate_hash[:8]
+    branch = build_branch_name(manifest.run_id, manifest.skill_name, candidate_short_sha)
+    body = assemble_pr_body(manifest, manifest.gate_verdicts)
+    print(f"Branch: {branch}")
+    print("PR body:")
+    print(body)
+    return EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +335,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     # apply ----------------------------------------------------------------
     apply_p = evolve_subs.add_parser("apply", help="Apply a promoted run via PR deployment.")
-    apply_p.add_argument("run_id", help="Run identifier.")
+    apply_p.add_argument("run_id", nargs="?", default=None, help="Run identifier (M5 prefix resolution).")
+    apply_p.add_argument("--manifest", default=None, help="Run manifest JSON path.")
     apply_p.set_defaults(func=run_apply)
 
 
