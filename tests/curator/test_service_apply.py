@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from nanobot.agent.skills_telemetry import SCHEMA_VERSION, TelemetrySnapshot
+from nanobot.agent.skills import SkillsLoader
+from nanobot.agent.skills_telemetry import SCHEMA_VERSION, SkillTelemetry, TelemetrySnapshot
 from nanobot.config.schema import CuratorConfig
 from nanobot.curator.models import (
     ApplyStatus,
@@ -630,3 +631,88 @@ def test_safety_gates_skip_without_calling_delete(
     assert report.mode == ReportMode.APPLY
     assert delete_called == [], f"delete must NOT be called, got: {delete_called}"
     assert report.proposals[0].apply_status == expected_status
+
+
+# ---------------------------------------------------------------------------
+# Task 10: real M2 delete integration — tombstone verification
+# ---------------------------------------------------------------------------
+
+
+def test_apply_real_delete_path_removes_skill_and_sets_tombstone(tmp_path: Path) -> None:
+    """Real do_delete path: SKILL.md removed and telemetry tombstone set."""
+    # 1. Create agent-tier skill directory and SKILL.md
+    skill_name = "old-debug-helper"
+    skill_dir = tmp_path / "skills" / "agent" / skill_name
+    skill_dir.mkdir(parents=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text("# old-debug-helper\nA stale debug helper skill.\n")
+
+    # 2. Build real SkillTelemetry and reconcile so the entry exists
+    telem = SkillTelemetry(tmp_path)
+    skills_loader = SkillsLoader(tmp_path)
+    known = skills_loader.list_skills_with_shadows()
+    telem.reconcile(known)
+
+    # 3. Bump 30 views to produce a high-confidence stale candidate
+    for _ in range(30):
+        telem.bump(skill_name, "view")
+    telem.flush()
+
+    # 4. Build real SkillsLoader-backed SkillsProvider wrapper
+    class _RealSkillsProvider:
+        def list_skills_with_shadows(self) -> list[dict]:
+            return SkillsLoader(tmp_path).list_skills_with_shadows()
+
+        def get_skill_metadata(self, name: str) -> dict | None:
+            return {}
+
+    # 5. Create CuratorService with forced_dry_run_until in the past so apply is live.
+    #    Use a fixed NOW (2026-06-13) that is >60 days after entry_created_at (reconcile
+    #    sets it to now — we need to fast-forward by using a past entry_created_at).
+    #    Override entry_created_at in telemetry to a stale date so the policy engine
+    #    scores HIGH confidence.
+    with telem._lock:
+        entry = telem._entries.get(skill_name)
+        assert entry is not None, "reconcile should have created the entry"
+        entry["entry_created_at"] = "2026-04-01T00:00:00Z"
+        entry["last_view"] = "2026-04-10T00:00:00Z"
+        telem._dirty = True
+    telem.flush()
+
+    _fixed_now = datetime(2026, 6, 13, 0, 0, 0, tzinfo=timezone.utc)
+
+    config = CuratorConfig(
+        forced_dry_run_until="2026-06-01T00:00:00Z",  # past → forced dry-run inactive
+        apply_delete_mode="auto_high",  # type: ignore[arg-type]
+    )
+    service = CuratorService(
+        workspace=str(tmp_path),
+        skills=_RealSkillsProvider(),
+        telemetry=telem,
+        config=config,
+        now_fn=lambda: _fixed_now,
+        # No delete_operation injected → defaults to real do_delete
+    )
+
+    assert service.forced_dry_run_active() is False
+
+    # 6. Run apply
+    report = service.run(apply=True, include_protected=False)
+
+    # 7. First proposal must be DELETED
+    assert len(report.proposals) >= 1, f"Expected at least one proposal, got: {report.proposals}"
+    first = report.proposals[0]
+    assert first.apply_status == ApplyStatus.DELETED, (
+        f"Expected DELETED, got {first.apply_status!r}. Warnings: {report.warnings}"
+    )
+
+    # 8. SKILL.md must no longer exist on disk
+    assert not skill_md.exists(), f"SKILL.md should have been removed but still exists at {skill_md}"
+
+    # 9. Telemetry tombstone must be set
+    snap = telem.snapshot()
+    entry_snap = snap["entries"].get(skill_name)
+    assert entry_snap is not None, f"Telemetry entry for '{skill_name}' not found in snapshot"
+    assert entry_snap.get("tombstone") is True, (  # type: ignore[typeddict-item]
+        f"Expected tombstone=True in telemetry, got: {entry_snap}"
+    )
