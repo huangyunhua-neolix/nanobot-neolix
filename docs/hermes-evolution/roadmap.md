@@ -28,7 +28,8 @@
 | 2026-06-11 | 锁定 5-milestone 拆解（M1→M5），M2 与 M4 在 M1 完成后可并行 | 用户选项 A |
 | 2026-06-11 | **M1 完成并合入 main**（PR #1 33-task plan + 4 follow-ups + 2 YELLOW 修复；PR #2 `.agent/memory/` 记忆固化） | 见 `retros/m1-foundations.md` |
 | 2026-06-12 | **M2 完成并合入 main**（PR #4 15-task plan + 4 轮 reviewer fix + 1 处 spec erratum；37 commits / 36 files / +7110 −37） | 见 `retros/m2-skill-manage.md` |
-| 2026-06-12 | **M4 离线骨架完成并合入 main**（PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/6，HEAD `f8a496bf`；`nanobot/evolve/` skeleton + `nanobot evolve` CLI surface） | 真正 GEPA/Darwinian Evolver 与完整 apply/report wiring 延后到 M5 |
+| 2026-06-12 | **M4 离线骨架完成并合入 main**（PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/6，HEAD `f8a496bf`；`nanobot/evolve/` skeleton + `nanobot evolve` CLI surface） | 真正 GEPA/Darwinian Evolver 延后到 M5；apply/report CLI 接口在 finish pass 中补齐（见下行） |
+| 2026-06-13 | **M4 finish pass 完成**（branch `feature/finish-m4-offline`）：`evolve init`、`evolve report --manifest`、reduced-surface `evolve apply --manifest` 已全部落地并通过测试 | §4.4 full bundle export / atomic swap / `--force`、真正 GEPA/Darwinian Evolver 仍留 M5；finish pass 不改变 M4 CLI 公开接口，不绕过 §9 redaction 边界 |
 
 ## 3. Milestone 总览
 
@@ -69,7 +70,7 @@ M1 Foundations  ──┬──> M2 skill_manage ──> M3 Curator
 - M1: ✅ 已完成 — 详见 [`retros/m1-foundations.md`](retros/m1-foundations.md)
 - M2: ✅ 已完成 — 详见 [`retros/m2-skill-manage.md`](retros/m2-skill-manage.md)
 - M3: *待启动*
-- M4: ✅ 骨架已完成 — 详见 [`retros/m4-offline-skeleton.md`](retros/m4-offline-skeleton.md)
+- M4: ✅ 骨架已完成，finish pass 补齐 `evolve init` / `report` / reduced `apply`（完整 §4.4 bundle export / atomic swap / `--force` 留 M5） — 详见 [`retros/m4-offline-skeleton.md`](retros/m4-offline-skeleton.md)
 - M5: *待启动*
 
 ## 6. 跨 Milestone 的硬性约束
