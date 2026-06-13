@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re as _re
+from datetime import datetime as _datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -155,7 +156,9 @@ class CuratorConfig(Base):
     """
 
     enabled: bool = True
-    forced_dry_run_until: str = "auto"
+    forced_dry_run_until: str | Literal["auto"] = Field(
+        default="auto", description="'auto' or UTC timestamp YYYY-MM-DDTHH:MM:SSZ"
+    )
     protect_list: list[str] = Field(default_factory=list)
     protect_patterns: list[str] = Field(default_factory=list)
     min_views_for_delete: int = Field(default=30, ge=1)
@@ -168,18 +171,29 @@ class CuratorConfig(Base):
     @field_validator("forced_dry_run_until", mode="before")
     @classmethod
     def _validate_forced_dry_run_until(cls, v: object) -> object:
-        """Allow exactly "auto" or a normalized UTC timestamp YYYY-MM-DDTHH:MM:SSZ."""
+        """Allow exactly "auto" or a normalized UTC timestamp YYYY-MM-DDTHH:MM:SSZ.
+
+        Structural check (regex) is followed by a real calendar/time parse so
+        that values like month 13, day 32, or hour 25 are rejected at load time.
+        """
         if not isinstance(v, str):
             return v
         if v == "auto":
             return v
-        if _UTC_TIMESTAMP_RE.match(v):
-            return v
-        raise ValueError(
-            'forced_dry_run_until must be "auto" or a UTC timestamp in the '
-            "form YYYY-MM-DDTHH:MM:SSZ (e.g. \"2099-12-31T23:59:59Z\"); "
-            f"got {v!r}"
-        )
+        if not _UTC_TIMESTAMP_RE.match(v):
+            raise ValueError(
+                'forced_dry_run_until must be "auto" or a UTC timestamp in the '
+                "form YYYY-MM-DDTHH:MM:SSZ (e.g. \"2099-12-31T23:59:59Z\"); "
+                f"got {v!r}"
+            )
+        try:
+            _datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            raise ValueError(
+                f"forced_dry_run_until {v!r} has an invalid calendar or time value "
+                "(e.g. month 13, day 32, hour 25); must be a real UTC datetime"
+            )
+        return v
 
 
 class AgentDefaults(Base):

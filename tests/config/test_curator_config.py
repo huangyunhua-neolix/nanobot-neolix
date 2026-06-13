@@ -63,6 +63,23 @@ def test_reject_invalid_forced_dry_run_until(bad_value: str) -> None:
         CuratorConfig(forced_dry_run_until=bad_value)
 
 
+@pytest.mark.parametrize(
+    "bad_calendar_value",
+    [
+        "2025-13-01T00:00:00Z",  # month 13
+        "2025-01-32T00:00:00Z",  # day 32
+        "2025-01-01T25:00:00Z",  # hour 25
+        "2025-02-30T00:00:00Z",  # Feb 30 never exists
+        "2025-04-31T00:00:00Z",  # April has 30 days
+        "2025-01-01T00:60:00Z",  # minute 60
+        "2025-01-01T00:00:60Z",  # second 60
+    ],
+)
+def test_reject_invalid_calendar_forced_dry_run_until(bad_calendar_value: str) -> None:
+    with pytest.raises(ValidationError):
+        CuratorConfig(forced_dry_run_until=bad_calendar_value)
+
+
 def test_accept_valid_utc_forced_dry_run_until() -> None:
     cfg = CuratorConfig(forced_dry_run_until="2099-12-31T23:59:59Z")
     assert cfg.forced_dry_run_until == "2099-12-31T23:59:59Z"
