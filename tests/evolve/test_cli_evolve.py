@@ -420,6 +420,7 @@ def test_run_init_is_idempotent_and_does_not_overwrite_readme(tmp_path: Path):
 
     gitignore_path = workspace / ".gitignore"
     gi_content_before = gitignore_path.read_text(encoding="utf-8")
+    gi_mtime_before = gitignore_path.stat().st_mtime_ns
 
     # Second run.
     rc2 = evolve_cli.dispatch(args)
@@ -435,6 +436,10 @@ def test_run_init_is_idempotent_and_does_not_overwrite_readme(tmp_path: Path):
 
     # .gitignore content must be unchanged (all patterns already exist).
     assert gitignore_path.read_text(encoding="utf-8") == gi_content_before
+
+    # .gitignore must not have been rewritten (mtime unchanged).
+    gi_mtime_after = gitignore_path.stat().st_mtime_ns
+    assert gi_mtime_after == gi_mtime_before, ".gitignore was rewritten on idempotent second run"
 
 
 def test_run_init_partial_skeleton_fills_missing_pieces(tmp_path: Path):
@@ -452,6 +457,19 @@ def test_run_init_partial_skeleton_fills_missing_pieces(tmp_path: Path):
     assert (workspace / "evals" / "synthetic" / ".gitkeep").is_file()
     assert (workspace / "evals" / "golden" / ".gitkeep").is_file()
     assert (workspace / "evals" / "runs").is_dir()
+
+
+def test_run_init_gitkeep_as_directory_maps_to_fs_exit(tmp_path: Path):
+    """If .gitkeep exists as a directory, run_init must return EXIT_FS."""
+    parser = _build_parser()
+    workspace = tmp_path / "evolve-ws"
+    # Pre-create .gitkeep as a directory — _touch_if_missing should raise FileExistsError.
+    (workspace / "evals" / "synthetic" / ".gitkeep").mkdir(parents=True)
+
+    args = parser.parse_args(["evolve", "init", "--workspace", str(workspace)])
+    rc = evolve_cli.dispatch(args)
+
+    assert rc == evolve_cli.EXIT_FS
 
 
 def test_run_init_workspace_regular_file_maps_to_fs_exit(tmp_path: Path):

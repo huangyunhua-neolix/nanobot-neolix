@@ -29,8 +29,6 @@ wrap. The wrap preserves ``__cause__`` via ``raise ... from exc``.
 from __future__ import annotations
 
 import argparse
-import os
-import tempfile
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -106,8 +104,10 @@ def _workspace_from_arg(value: str | None) -> Path:
 
 
 def _touch_if_missing(path: Path) -> None:
+    if path.exists() and not path.is_file():
+        raise FileExistsError(f"expected file path exists and is not a file: {path}")
     if not path.exists():
-        path.touch()
+        path.write_text("", encoding="utf-8")
 
 
 def _write_if_missing(path: Path, content: str) -> None:
@@ -135,28 +135,14 @@ def _ensure_gitignore_patterns(path: Path) -> None:
     if not missing:
         return
 
-    # Append missing patterns atomically via a temp file in the same directory.
     current_content = "\n".join(existing_lines)
     if existing_lines and not current_content.endswith("\n"):
         current_content += "\n"
     addition = "\n".join(missing) + "\n"
     new_content = current_content + addition
 
-    dir_ = path.parent
-    dir_.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=dir_, prefix=".gitignore.tmp.")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(new_content)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(new_content, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
