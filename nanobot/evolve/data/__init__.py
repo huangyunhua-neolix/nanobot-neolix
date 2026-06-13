@@ -18,6 +18,7 @@ from typing import Literal, Optional
 from pydantic import Field
 
 from nanobot.evolve._base import EvolveBase
+from nanobot.evolve.exceptions import ConfigError
 
 Tier = Literal["A", "B", "C", "D"]
 
@@ -69,11 +70,15 @@ def load_tier(tier: Tier, skill_name: str, root: Path) -> list[EvalRecord]:
 
     Return order is the order of records in ``input.jsonl``.
     """
-    if tier in ("B", "D"):
-        raise NotImplementedError(
-            f"Tier {tier} requires a dedicated loader per spec §3.1.3/§3.1.5 "
-            f"(Tier B uses session-jsonl-by-date; Tier D uses per-task JSON triples); "
-            f"pending t-11 harness wiring."
+    if tier == "B":
+        raise ConfigError(
+            "Tier B SessionDB-anonymized loading is deferred to M5 private-data "
+            "wiring; M4 skeleton supports Tier A/C only."
+        )
+    if tier == "D":
+        raise ConfigError(
+            "Tier D self-eval loading is deferred to M5 private-data wiring; "
+            "M4 skeleton supports Tier A/C only."
         )
 
     tier_dir = Path(root) / skill_name / tier
