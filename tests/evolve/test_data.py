@@ -172,6 +172,7 @@ def test_load_tier_missing_expected_file_raises(tmp_path: Path) -> None:
 
 
 def test_load_tier_b_raises_config_error(tmp_path: Path) -> None:
+    """Tier B SessionDB-anonymized loading is not wired in M4 (§3.1.3)."""
     with pytest.raises(ConfigError, match="Tier B") as exc_info:
         load_tier("B", "any_skill", tmp_path)
     assert "M5" in str(exc_info.value)
@@ -179,6 +180,7 @@ def test_load_tier_b_raises_config_error(tmp_path: Path) -> None:
 
 
 def test_load_tier_d_raises_config_error(tmp_path: Path) -> None:
+    """Tier D self-eval loading is not wired in M4 (§3.1.5)."""
     with pytest.raises(ConfigError, match="Tier D") as exc_info:
         load_tier("D", "any_skill", tmp_path)
     assert "M5" in str(exc_info.value)

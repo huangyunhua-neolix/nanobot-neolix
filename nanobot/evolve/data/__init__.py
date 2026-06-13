@@ -73,12 +73,12 @@ def load_tier(tier: Tier, skill_name: str, root: Path) -> list[EvalRecord]:
     if tier == "B":
         raise ConfigError(
             "Tier B SessionDB-anonymized loading is deferred to M5 private-data "
-            "wiring; M4 skeleton supports Tier A/C only."
+            "wiring (§3.1.3); M4 skeleton supports Tier A/C only."
         )
     if tier == "D":
         raise ConfigError(
-            "Tier D self-eval loading is deferred to M5 private-data wiring; "
-            "M4 skeleton supports Tier A/C only."
+            "Tier D self-eval loading is deferred to M5 private-data wiring "
+            "(§3.1.5); M4 skeleton supports Tier A/C only."
         )
 
     tier_dir = Path(root) / skill_name / tier
