@@ -36,6 +36,7 @@ class TestIsDispatchableCommand:
         assert router.is_dispatchable_command("/goal migrate the database")
         assert router.is_dispatchable_command("/pairing list")
         assert router.is_dispatchable_command("/pairing approve CODE")
+        assert router.is_dispatchable_command("/curator --apply")
 
     def test_priority_commands_not_matched(self, router: CommandRouter) -> None:
         # Priority commands are NOT in the dispatchable tiers — they are

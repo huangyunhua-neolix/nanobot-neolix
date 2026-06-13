@@ -117,6 +117,13 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "shield",
         "[list|approve <code>|deny <code>|revoke <user_id>]",
     ),
+    BuiltinCommandSpec(
+        "/curator",
+        "Review skills",
+        "Review skill telemetry and propose safe cleanup actions.",
+        "scissors",
+        "[--dry-run|--apply] [--json] [--include-protected]",
+    ),
 )
 
 
@@ -674,6 +681,93 @@ async def cmd_skill(ctx: CommandContext) -> OutboundMessage:
         metadata=dict(ctx.msg.metadata or {}),
     )
 
+_CURATOR_USAGE = (
+    "Usage: `/curator [--dry-run|--apply] [--json] [--include-protected]`\n"
+    "  --dry-run           Analyse skills without making changes (default)\n"
+    "  --apply             Apply safe deletions (respects forced-dry-run window)\n"
+    "  --json              Output machine-readable JSON wrapped in a fenced block\n"
+    "  --include-protected Include PROTECT/KEEP proposals in output"
+)
+
+
+def _parse_curator_args(raw_args: str) -> tuple[bool, bool, bool, str | None]:
+    """Parse /curator flag string.
+
+    Returns:
+        (apply, include_protected, as_json, error_msg)
+        error_msg is None when parsing succeeds.
+    """
+    apply = False
+    dry_run_explicit = False
+    include_protected = False
+    as_json = False
+
+    for token in raw_args.split():
+        if token == "--apply":
+            apply = True
+        elif token == "--dry-run":
+            dry_run_explicit = True
+        elif token == "--include-protected":
+            include_protected = True
+        elif token == "--json":
+            as_json = True
+        else:
+            return False, False, False, f"unknown flag: {token}"
+
+    if apply and dry_run_explicit:
+        return False, False, False, "--dry-run and --apply are mutually exclusive"
+
+    return apply, include_protected, as_json, None
+
+
+async def cmd_curator(ctx: CommandContext) -> OutboundMessage:
+    """Review skill telemetry and propose safe cleanup actions."""
+    from nanobot.config.schema import CuratorConfig
+    from nanobot.curator.report import format_json_report, format_text_report
+    from nanobot.curator.service import CuratorService
+
+    loop = ctx.loop
+    args = ctx.args.strip()
+
+    apply, include_protected, as_json, error = _parse_curator_args(args)
+    if error is not None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=f"{error}\n\n{_CURATOR_USAGE}",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    # Resolve config: use loop.curator_config if present (set in tests / advanced wiring),
+    # otherwise fall back to a default CuratorConfig.
+    curator_config: CuratorConfig = getattr(loop, "curator_config", None) or CuratorConfig()
+
+    service = CuratorService(
+        workspace=str(loop.workspace),
+        skills=loop.context.skills,
+        telemetry=loop.telemetry,
+        config=curator_config,
+    )
+
+    report = service.run(apply=apply, include_protected=include_protected)
+
+    if as_json:
+        raw_json = format_json_report(report)
+        content = f"```json\n{raw_json}```"
+        metadata = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+    else:
+        forced_until = service.resolve_forced_dry_run_until()
+        content = format_text_report(report, forced_until=forced_until)
+        metadata = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata=metadata,
+    )
+
+
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
     return OutboundMessage(
@@ -717,3 +811,5 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/help", cmd_help)
     router.exact("/pairing", cmd_pairing)
     router.prefix("/pairing ", cmd_pairing)
+    router.exact("/curator", cmd_curator)
+    router.prefix("/curator ", cmd_curator)
