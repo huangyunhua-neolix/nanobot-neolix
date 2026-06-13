@@ -485,12 +485,17 @@ def test_run_init_workspace_regular_file_maps_to_fs_exit(tmp_path: Path):
     assert rc == evolve_cli.EXIT_FS
 
 
-def test_run_report_not_implemented_raises_runtime_exit():
-    """Mirror of init coverage — report stub MUST land on EXIT_RUNTIME (T16-FIX-2)."""
+def test_report_accepts_optional_run_id_and_manifest_flag():
+    """report subcommand must accept an optional run_id positional and --manifest flag."""
     parser = _build_parser()
-    args = parser.parse_args(["evolve", "report", "run-abc"])
-    rc = evolve_cli.dispatch(args)
-    assert rc == evolve_cli.EXIT_RUNTIME
+    # With run_id and --manifest
+    args = parser.parse_args(["evolve", "report", "run-abc", "--manifest", "/tmp/m.json"])
+    assert args.run_id == "run-abc"
+    assert args.manifest == "/tmp/m.json"
+    # Without run_id (optional) — manifest only
+    args2 = parser.parse_args(["evolve", "report", "--manifest", "/tmp/m.json"])
+    assert args2.run_id is None
+    assert args2.manifest == "/tmp/m.json"
 
 
 def test_run_apply_not_implemented_raises_runtime_exit():
@@ -564,3 +569,141 @@ def test_typer_shim_run_valid_workspace_returns_zero(tmp_path):
     runner = CliRunner()
     result = runner.invoke(app, ["evolve", "run", "--workspace", str(tmp_path)])
     assert result.exit_code == evolve_cli.EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# report manifest helpers
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timezone  # noqa: E402
+
+from nanobot.evolve.gates import GateResult  # noqa: E402
+from nanobot.evolve.harness import JudgeSummary, RunManifest, dump_manifest  # noqa: E402
+
+
+def _gate_result(name: str = "1-test-pass", verdict: str = "pass") -> GateResult:
+    return GateResult(
+        gate_name=name,
+        candidate_hash="deadbeefcafebabe",
+        baseline_hash="basehash00112233",
+        verdict=verdict,
+        metrics={"score": 1.0},
+        failure_reason=None if verdict == "pass" else "failed",
+        timestamp=datetime(2026, 6, 13, 12, 0, tzinfo=timezone.utc),
+        duration_ms=42,
+    )
+
+
+def _manifest(**overrides: object) -> RunManifest:
+    data: dict[str, object] = {
+        "run_id": "run-abc",
+        "started_at": datetime(2026, 6, 13, 12, 0, tzinfo=timezone.utc),
+        "finished_at": datetime(2026, 6, 13, 12, 5, tzinfo=timezone.utc),
+        "nanobot_version": "0.0.0",
+        "evolve_extra_version": {"dspy": "not-installed"},
+        "skill_name": "demo-skill",
+        "baseline_hash": "basehash00112233",
+        "candidate_hashes": ["deadbeefcafebabe"],
+        "promoted_candidate_hash": "deadbeefcafebabe",
+        "gate_verdicts": [_gate_result()],
+        "judge_summary": JudgeSummary(
+            record_count=2,
+            median_aggregate=0.9,
+            median_process=0.8,
+            median_output=0.85,
+            median_token=0.95,
+            consensus_split_count=0,
+        ),
+        "final_status": "promoted_to_pr",
+        "tiers_used": ["A", "C"],
+        "record_count_per_tier": {"C": 1, "A": 1},
+        "judge_pool_health": {"pool": "ok"},
+    }
+    data.update(overrides)
+    return RunManifest(**data)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# report — functional tests
+# ---------------------------------------------------------------------------
+
+
+def test_report_accepts_manifest_without_dummy_run_id(tmp_path: Path, capsys):
+    """report --manifest <path> must load the manifest and print the summary (exit 0)."""
+    manifest = _manifest()
+    manifest_path = tmp_path / "run.json"
+    dump_manifest(manifest_path, manifest)
+
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report", "--manifest", str(manifest_path)])
+    rc = evolve_cli.dispatch(args)
+
+    assert rc == evolve_cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "Run: run-abc" in out
+    assert "Skill: demo-skill" in out
+    assert "Status: promoted_to_pr" in out
+    assert "Promoted candidate: deadbeefcafebabe" in out
+    assert "Baseline: basehash00112233" in out
+    assert "Candidates: deadbeefcafebabe" in out
+    assert "Gates:" in out
+    assert "- 1-test-pass: pass" in out
+    assert "Tiers: A=1,C=1" in out
+    assert "Judge summary: records=2, aggregate=0.9, process=0.8, output=0.85, token=0.95, splits=0" in out
+
+
+def test_report_renders_none_literals(tmp_path: Path, capsys):
+    """Empty candidate_hashes and None promoted_candidate_hash render as <none>."""
+    manifest = _manifest(candidate_hashes=[], promoted_candidate_hash=None)
+    manifest_path = tmp_path / "run.json"
+    dump_manifest(manifest_path, manifest)
+
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report", "--manifest", str(manifest_path)])
+    rc = evolve_cli.dispatch(args)
+
+    assert rc == evolve_cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "Promoted candidate: <none>" in out
+    assert "Candidates: <none>" in out
+
+
+def test_report_requires_manifest_path():
+    """Omitting --manifest must produce EXIT_CONFIG (ConfigError)."""
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report"])
+    rc = evolve_cli.dispatch(args)
+    assert rc == evolve_cli.EXIT_CONFIG
+
+
+def test_report_missing_manifest_maps_to_fs_exit(tmp_path: Path):
+    """--manifest pointing to a non-existent file must produce EXIT_FS (6)."""
+    missing = tmp_path / "does-not-exist.json"
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report", "--manifest", str(missing)])
+    rc = evolve_cli.dispatch(args)
+    assert rc == evolve_cli.EXIT_FS
+
+
+def test_report_invalid_json_maps_to_config_exit(tmp_path: Path):
+    """A manifest file containing invalid JSON must produce EXIT_CONFIG (2)."""
+    bad_json = tmp_path / "bad.json"
+    bad_json.write_text("not-json{{", encoding="utf-8")
+
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report", "--manifest", str(bad_json)])
+    rc = evolve_cli.dispatch(args)
+    assert rc == evolve_cli.EXIT_CONFIG
+
+
+def test_report_validation_error_maps_to_config_exit(tmp_path: Path):
+    """A syntactically-valid JSON that fails Pydantic validation must produce EXIT_CONFIG (2)."""
+    import json
+
+    bad_manifest = tmp_path / "bad_schema.json"
+    bad_manifest.write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
+
+    parser = _build_parser()
+    args = parser.parse_args(["evolve", "report", "--manifest", str(bad_manifest)])
+    rc = evolve_cli.dispatch(args)
+    assert rc == evolve_cli.EXIT_CONFIG
