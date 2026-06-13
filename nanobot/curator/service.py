@@ -5,8 +5,17 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Protocol
 
+from nanobot.agent.tools.skill_manage_ops import do_delete
 from nanobot.config.schema import CuratorConfig
-from nanobot.curator.models import ApplyStatus, CuratorReport, CuratorWarning, ReportMode
+from nanobot.curator.models import (
+    ApplyStatus,
+    Confidence,
+    CuratorAction,
+    CuratorProposal,
+    CuratorReport,
+    CuratorWarning,
+    ReportMode,
+)
 from nanobot.curator.policy import generate_proposals
 from nanobot.curator.telemetry import SnapshotProvider, load_telemetry_snapshot
 
@@ -56,7 +65,7 @@ class CuratorService:
         self._now_fn: Callable[[], datetime] = now_fn or (
             lambda: datetime.now(timezone.utc)
         )
-        self._delete_operation = delete_operation
+        self._delete_operation: Callable[..., dict[str, Any]] = delete_operation or do_delete
         self._provenance_tag = provenance_tag
 
     # ------------------------------------------------------------------
@@ -157,6 +166,8 @@ class CuratorService:
                     )
         elif apply:
             mode = ReportMode.APPLY
+            apply_warnings = self._apply_proposals(proposals, telemetry_entries)
+            warnings.extend(apply_warnings)
         else:
             mode = ReportMode.DRY_RUN
 
@@ -183,6 +194,80 @@ class CuratorService:
             proposals=proposals,
             warnings=warnings,
         )
+
+    # ------------------------------------------------------------------
+    # Apply helpers
+    # ------------------------------------------------------------------
+
+    def _apply_proposals(
+        self,
+        proposals: list[CuratorProposal],
+        telemetry_entries: dict[str, Any],
+    ) -> list[CuratorWarning]:
+        """Attempt to apply each proposal in-place; return accumulated warnings.
+
+        Mutates ``proposals`` list entries via ``model_copy``.  Safe-delete
+        safety checks are enforced per proposal before calling the delete
+        operation.  Failures are recorded as warnings and processing continues.
+        """
+        warnings: list[CuratorWarning] = []
+        for idx, proposal in enumerate(proposals):
+            new_status: ApplyStatus | None = None
+
+            if proposal.action == CuratorAction.DELETE_CANDIDATE:
+                # Safety gate: protected origin
+                if proposal.protected:
+                    new_status = ApplyStatus.SKIPPED_PROTECTED
+                elif proposal.origin == "unknown":
+                    new_status = ApplyStatus.SKIPPED_UNKNOWN_ORIGIN
+                elif proposal.origin != "agent":
+                    new_status = ApplyStatus.SKIPPED_NON_AGENT
+                elif (
+                    proposal.confidence != Confidence.HIGH
+                    or self._config.apply_delete_mode != "auto_high"
+                ):
+                    new_status = ApplyStatus.SKIPPED_LOW_CONFIDENCE
+                else:
+                    # All safety checks passed — call delete operation
+                    result = self._delete_operation(
+                        workspace=self._workspace,
+                        telemetry=self._telemetry,
+                        provenance_tag=self._provenance_tag,
+                        name=proposal.name,
+                    )
+                    new_status, warning = self._map_delete_result(result, proposal.name)
+                    if warning is not None:
+                        warnings.append(warning)
+            elif proposal.action in {CuratorAction.MERGE_CANDIDATE, CuratorAction.PATCH_CANDIDATE}:
+                new_status = ApplyStatus.SKIPPED_UNSUPPORTED_ACTION
+            # CuratorAction.KEEP and CuratorAction.PROTECT: leave apply_status unchanged (NOT_APPLICABLE)
+
+            if new_status is not None and new_status != proposal.apply_status:
+                proposals[idx] = proposal.model_copy(update={"apply_status": new_status})
+
+        return warnings
+
+    def _map_delete_result(
+        self,
+        result: dict[str, Any],
+        name: str,
+    ) -> tuple[ApplyStatus, CuratorWarning | None]:
+        """Map a do_delete result dict to an ApplyStatus and optional warning."""
+        if result.get("ok") is True:
+            return ApplyStatus.DELETED, None
+
+        error_code = str(result.get("error_code", ""))
+        if error_code == "not_found":
+            return ApplyStatus.SKIPPED_MISSING, None
+        if error_code == "tier_locked":
+            return ApplyStatus.SKIPPED_NON_AGENT, None
+
+        # Any other error: FAILED + warning
+        warning = CuratorWarning(
+            code="delete_failed",
+            message=f"delete failed for skill '{name}': error_code={error_code}",
+        )
+        return ApplyStatus.FAILED, warning
 
 
 # ---------------------------------------------------------------------------

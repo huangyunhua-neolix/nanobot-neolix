@@ -203,14 +203,30 @@ def test_past_forced_dry_run_until_is_not_active() -> None:
 
 
 def test_apply_with_inactive_forced_dry_run_returns_apply_mode() -> None:
-    """When forced dry-run is inactive, apply=True yields APPLY mode."""
-    service = _make_service(forced_dry_run_until="2000-01-01T00:00:00Z")
+    """When forced dry-run is inactive, apply=True yields APPLY mode and calls delete."""
+    calls: list[str] = []
+
+    def _spy_delete(*, workspace: str, telemetry: object, provenance_tag: str | None, name: str) -> dict:
+        calls.append(name)
+        return {"ok": True, "verb": "delete", "name": name}
+
+    config = CuratorConfig(forced_dry_run_until="2000-01-01T00:00:00Z")
+    telemetry_entries = {"old-debug-helper": _stale_agent_telemetry_entry()}
+    service = CuratorService(
+        workspace="/workspace",
+        skills=_FakeSkills(),
+        telemetry=_FakeTelemetry(telemetry_entries),
+        config=config,
+        now_fn=_now_fn,
+        delete_operation=_spy_delete,
+    )
     assert service.forced_dry_run_active() is False
 
     report = service.run(apply=True, include_protected=False)
     assert report.mode == ReportMode.APPLY
-    # ELIGIBLE status is preserved (no actual delete is performed here)
-    assert report.proposals[0].apply_status == ApplyStatus.ELIGIBLE
+    # HIGH-confidence ELIGIBLE delete candidate is called and maps to DELETED
+    assert calls == ["old-debug-helper"]
+    assert report.proposals[0].apply_status == ApplyStatus.DELETED
 
 
 def test_forced_dry_run_only_mutates_eligible_proposals() -> None:
@@ -276,3 +292,173 @@ def test_forced_dry_run_only_mutates_eligible_proposals() -> None:
     # Non-ELIGIBLE statuses must be preserved exactly.
     assert by_name["medium-confidence"].apply_status == ApplyStatus.NOT_REQUESTED
     assert by_name["builtin-skill"].apply_status == ApplyStatus.NOT_APPLICABLE
+
+
+# ---------------------------------------------------------------------------
+# Task 7: safe delete apply path tests
+# ---------------------------------------------------------------------------
+
+
+def _make_apply_service(
+    *,
+    delete_operation,
+    skill_name: str = "old-debug-helper",
+    apply_delete_mode: str = "auto_high",
+) -> CuratorService:
+    """Build a CuratorService with forced dry-run disabled, wired to a custom delete_operation."""
+    config = CuratorConfig(
+        forced_dry_run_until="2000-01-01T00:00:00Z",
+        apply_delete_mode=apply_delete_mode,  # type: ignore[arg-type]
+    )
+    telemetry_entries = {skill_name: _stale_agent_telemetry_entry()}
+    return CuratorService(
+        workspace="/workspace",
+        skills=_FakeSkills(skill_name),
+        telemetry=_FakeTelemetry(telemetry_entries),
+        config=config,
+        now_fn=_now_fn,
+        delete_operation=delete_operation,
+    )
+
+
+def test_apply_high_confidence_delete_calls_delete_op_and_maps_deleted() -> None:
+    """HIGH confidence DELETE_CANDIDATE in apply mode calls injected delete op and maps to DELETED."""
+    calls: list[str] = []
+
+    def _spy_delete(*, workspace: str, telemetry: object, provenance_tag: str | None, name: str) -> dict:
+        calls.append(name)
+        return {"ok": True, "verb": "delete", "name": name}
+
+    service = _make_apply_service(delete_operation=_spy_delete)
+    report = service.run(apply=True, include_protected=False)
+
+    assert report.mode == ReportMode.APPLY
+    assert calls == ["old-debug-helper"], f"Expected delete call, got: {calls}"
+    assert len(report.proposals) == 1
+    assert report.proposals[0].apply_status == ApplyStatus.DELETED
+    assert report.warnings == []
+
+
+def test_apply_medium_confidence_delete_skips_without_calling_delete() -> None:
+    """Medium/low confidence DELETE_CANDIDATE does not call delete and maps to SKIPPED_LOW_CONFIDENCE."""
+    calls: list[str] = []
+
+    def _spy_delete(*, workspace: str, telemetry: object, provenance_tag: str | None, name: str) -> dict:
+        calls.append(name)
+        return {"ok": True, "verb": "delete", "name": name}
+
+    # patch_history_caps_confidence reduces confidence to MEDIUM on the proposal
+    medium_telemetry = {
+        "origin": "agent",
+        "shadowed": [],
+        "views": 30,
+        "uses": 0,
+        "patches": 0,
+        "entry_created_at": _STALE_CREATED,
+        "last_view": "2026-04-10T00:00:00Z",
+        "last_use": None,
+    }
+    config = CuratorConfig(forced_dry_run_until="2000-01-01T00:00:00Z")
+    service = CuratorService(
+        workspace="/workspace",
+        skills=_FakeSkills("medium-skill"),
+        telemetry=_FakeTelemetry({"medium-skill": medium_telemetry}),
+        config=config,
+        now_fn=_now_fn,
+        delete_operation=_spy_delete,
+    )
+
+    # Override metadata via monkeypatching generate_proposals to yield MEDIUM confidence proposal
+    medium_proposal = CuratorProposal(
+        name="medium-skill",
+        origin="agent",
+        action=CuratorAction.DELETE_CANDIDATE,
+        confidence=Confidence.MEDIUM,
+        apply_status=ApplyStatus.NOT_REQUESTED,
+    )
+    with patch("nanobot.curator.service.generate_proposals", return_value=[medium_proposal]):
+        report = service.run(apply=True, include_protected=False)
+
+    assert report.mode == ReportMode.APPLY
+    assert calls == [], f"delete must NOT be called for medium confidence, got: {calls}"
+    assert report.proposals[0].apply_status == ApplyStatus.SKIPPED_LOW_CONFIDENCE
+
+
+def test_apply_delete_result_not_found_maps_to_skipped_missing() -> None:
+    """delete_operation returning not_found maps to SKIPPED_MISSING."""
+
+    def _not_found_delete(*, workspace: str, telemetry: object, provenance_tag: str | None, name: str) -> dict:
+        return {"ok": False, "verb": "delete", "name": name, "error_code": "not_found", "error_message": "gone"}
+
+    service = _make_apply_service(delete_operation=_not_found_delete)
+    report = service.run(apply=True, include_protected=False)
+
+    assert report.mode == ReportMode.APPLY
+    assert report.proposals[0].apply_status == ApplyStatus.SKIPPED_MISSING
+    assert report.warnings == []
+
+
+def test_apply_delete_result_lock_busy_maps_to_failed_and_appends_warning() -> None:
+    """Failed delete (lock_busy) maps to FAILED, appends CuratorWarning, and continues."""
+    calls: list[str] = []
+
+    def _lock_busy_delete(*, workspace: str, telemetry: object, provenance_tag: str | None, name: str) -> dict:
+        calls.append(name)
+        return {"ok": False, "verb": "delete", "name": name, "error_code": "lock_busy", "error_message": "locked"}
+
+    # Two skills: first fails, second should still be processed (DELETED).
+    first_telem = _stale_agent_telemetry_entry()
+    second_telem = _stale_agent_telemetry_entry()
+
+    class _TwoSkills:
+        def list_skills_with_shadows(self) -> list[dict]:
+            return [
+                {
+                    "name": "skill-a",
+                    "effective_origin": "agent",
+                    "shadowed_origins": [],
+                    "path": "/workspace/skills/agent/skill-a/SKILL.md",
+                },
+                {
+                    "name": "skill-b",
+                    "effective_origin": "agent",
+                    "shadowed_origins": [],
+                    "path": "/workspace/skills/agent/skill-b/SKILL.md",
+                },
+            ]
+
+        def get_skill_metadata(self, name: str) -> dict | None:
+            return {}
+
+    success_calls: list[str] = []
+
+    def _mixed_delete(*, workspace: str, telemetry: object, provenance_tag: str | None, name: str) -> dict:
+        if name == "skill-a":
+            return {"ok": False, "verb": "delete", "name": name, "error_code": "lock_busy", "error_message": "locked"}
+        success_calls.append(name)
+        return {"ok": True, "verb": "delete", "name": name}
+
+    config = CuratorConfig(forced_dry_run_until="2000-01-01T00:00:00Z")
+    service = CuratorService(
+        workspace="/workspace",
+        skills=_TwoSkills(),
+        telemetry=_FakeTelemetry({"skill-a": first_telem, "skill-b": second_telem}),
+        config=config,
+        now_fn=_now_fn,
+        delete_operation=_mixed_delete,
+    )
+    report = service.run(apply=True, include_protected=False)
+
+    assert report.mode == ReportMode.APPLY
+    by_name = {p.name: p for p in report.proposals}
+    assert by_name["skill-a"].apply_status == ApplyStatus.FAILED
+    assert by_name["skill-b"].apply_status == ApplyStatus.DELETED
+
+    # One warning for skill-a's failure; skill name and error_code in message, no skill body
+    assert len(report.warnings) == 1
+    w = report.warnings[0]
+    assert w.code == "delete_failed"
+    assert "skill-a" in w.message
+    assert "lock_busy" in w.message
+    # Ensure skill description/body is NOT leaked into the warning message
+    assert "description" not in w.message.lower()
