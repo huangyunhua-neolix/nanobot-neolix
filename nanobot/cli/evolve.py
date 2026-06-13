@@ -30,8 +30,12 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
+
+if TYPE_CHECKING:
+    from nanobot.evolve.harness import RunManifest
 
 from nanobot.evolve.exceptions import (
     ApplyTerminalError,
@@ -104,34 +108,34 @@ def _manifest_path_arg(args: argparse.Namespace) -> Path:
     return Path(manifest).expanduser()
 
 
-def _none_if_empty(value: str | None) -> str:
+def _display_or_none(value: str | None) -> str:
     return value if value else "<none>"
 
 
-def _format_manifest_report(manifest: object) -> str:
+def _format_manifest_report(manifest: RunManifest) -> str:
     candidates = (
-        ",".join(manifest.candidate_hashes)  # type: ignore[union-attr]
-        if manifest.candidate_hashes  # type: ignore[union-attr]
+        ",".join(manifest.candidate_hashes)
+        if manifest.candidate_hashes
         else "<none>"
     )
     tiers = ",".join(
-        f"{tier}={manifest.record_count_per_tier[tier]}"  # type: ignore[union-attr]
-        for tier in sorted(manifest.record_count_per_tier)  # type: ignore[union-attr]
+        f"{tier}={manifest.record_count_per_tier[tier]}"
+        for tier in sorted(manifest.record_count_per_tier)
     )
     lines = [
-        f"Run: {manifest.run_id}",  # type: ignore[union-attr]
-        f"Skill: {manifest.skill_name}",  # type: ignore[union-attr]
-        f"Status: {manifest.final_status}",  # type: ignore[union-attr]
-        f"Promoted candidate: {_none_if_empty(manifest.promoted_candidate_hash)}",  # type: ignore[union-attr]
-        f"Baseline: {manifest.baseline_hash}",  # type: ignore[union-attr]
+        f"Run: {manifest.run_id}",
+        f"Skill: {manifest.skill_name}",
+        f"Status: {manifest.final_status}",
+        f"Promoted candidate: {_display_or_none(manifest.promoted_candidate_hash)}",
+        f"Baseline: {manifest.baseline_hash}",
         f"Candidates: {candidates}",
         "Gates:",
     ]
     lines.extend(
         f"- {gate.gate_name}: {gate.verdict}"
-        for gate in manifest.gate_verdicts  # type: ignore[union-attr]
+        for gate in manifest.gate_verdicts
     )
-    summary = manifest.judge_summary  # type: ignore[union-attr]
+    summary = manifest.judge_summary
     lines.extend(
         [
             f"Tiers: {tiers}",

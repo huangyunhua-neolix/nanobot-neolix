@@ -12,6 +12,8 @@ Covers:
 from __future__ import annotations
 
 import argparse
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -26,6 +28,8 @@ from nanobot.evolve.exceptions import (
     JudgeError,
     ManifestPrivacyViolation,
 )
+from nanobot.evolve.gates import GateResult
+from nanobot.evolve.harness import JudgeSummary, RunManifest, dump_manifest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -575,11 +579,6 @@ def test_typer_shim_run_valid_workspace_returns_zero(tmp_path):
 # report manifest helpers
 # ---------------------------------------------------------------------------
 
-from datetime import datetime, timezone  # noqa: E402
-
-from nanobot.evolve.gates import GateResult  # noqa: E402
-from nanobot.evolve.harness import JudgeSummary, RunManifest, dump_manifest  # noqa: E402
-
 
 def _gate_result(name: str = "1-test-pass", verdict: str = "pass") -> GateResult:
     return GateResult(
@@ -620,7 +619,7 @@ def _manifest(**overrides: object) -> RunManifest:
         "judge_pool_health": {"pool": "ok"},
     }
     data.update(overrides)
-    return RunManifest(**data)  # type: ignore[arg-type]
+    return RunManifest.model_validate(data)
 
 
 # ---------------------------------------------------------------------------
@@ -698,8 +697,6 @@ def test_report_invalid_json_maps_to_config_exit(tmp_path: Path):
 
 def test_report_validation_error_maps_to_config_exit(tmp_path: Path):
     """A syntactically-valid JSON that fails Pydantic validation must produce EXIT_CONFIG (2)."""
-    import json
-
     bad_manifest = tmp_path / "bad_schema.json"
     bad_manifest.write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
 
