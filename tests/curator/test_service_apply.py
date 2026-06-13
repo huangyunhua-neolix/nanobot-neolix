@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from nanobot.agent.skills_telemetry import SCHEMA_VERSION, TelemetrySnapshot
 from nanobot.config.schema import CuratorConfig
-from nanobot.curator.models import ApplyStatus, ReportMode
+from nanobot.curator.models import (
+    ApplyStatus,
+    Confidence,
+    CuratorAction,
+    CuratorProposal,
+    ReportMode,
+)
 from nanobot.curator.service import CuratorService
 
 # ---------------------------------------------------------------------------
@@ -76,11 +83,10 @@ def _make_service(
     now_fn=_now_fn,
     skill_name: str = "old-debug-helper",
 ) -> CuratorService:
-    config = CuratorConfig(forced_dry_run_until=forced_dry_run_until or "auto")
-    # Disable forced dry-run by setting a past timestamp when not testing it
+    # Disable forced dry-run by default (empty string) via a past timestamp.
     if forced_dry_run_until == "":
         config = CuratorConfig(forced_dry_run_until="2000-01-01T00:00:00Z")
-    elif forced_dry_run_until != "auto":
+    else:
         config = CuratorConfig(forced_dry_run_until=forced_dry_run_until)
 
     telemetry_entries = {skill_name: _stale_agent_telemetry_entry()}
@@ -205,3 +211,68 @@ def test_apply_with_inactive_forced_dry_run_returns_apply_mode() -> None:
     assert report.mode == ReportMode.APPLY
     # ELIGIBLE status is preserved (no actual delete is performed here)
     assert report.proposals[0].apply_status == ApplyStatus.ELIGIBLE
+
+
+def test_forced_dry_run_only_mutates_eligible_proposals() -> None:
+    """Forced dry-run must flip ELIGIBLE → REFUSED_FORCED_DRY_RUN and leave all other statuses unchanged."""
+    future_until = "2099-12-31T23:59:59Z"
+
+    # Build a synthetic mixed-status proposal list with two ELIGIBLE proposals
+    # and one proposal for each representative non-ELIGIBLE status.
+    _mixed_proposals = [
+        CuratorProposal(
+            name="stale-alpha",
+            origin="agent",
+            action=CuratorAction.DELETE_CANDIDATE,
+            confidence=Confidence.HIGH,
+            apply_status=ApplyStatus.ELIGIBLE,
+        ),
+        CuratorProposal(
+            name="stale-beta",
+            origin="agent",
+            action=CuratorAction.DELETE_CANDIDATE,
+            confidence=Confidence.HIGH,
+            apply_status=ApplyStatus.ELIGIBLE,
+        ),
+        CuratorProposal(
+            name="medium-confidence",
+            origin="agent",
+            action=CuratorAction.DELETE_CANDIDATE,
+            confidence=Confidence.MEDIUM,
+            apply_status=ApplyStatus.NOT_REQUESTED,
+        ),
+        CuratorProposal(
+            name="builtin-skill",
+            origin="builtin",
+            action=CuratorAction.KEEP,
+            confidence=Confidence.LOW,
+            apply_status=ApplyStatus.NOT_APPLICABLE,
+            protected=True,
+        ),
+    ]
+
+    config = CuratorConfig(forced_dry_run_until=future_until)
+    service = CuratorService(
+        workspace="/workspace",
+        skills=_FakeSkills(),
+        telemetry=_FakeTelemetry({}),
+        config=config,
+        now_fn=_now_fn,
+    )
+
+    # Monkeypatch generate_proposals at the service-module level so run() sees
+    # our synthetic list without requiring a real policy-matching skill set.
+    with patch("nanobot.curator.service.generate_proposals", return_value=list(_mixed_proposals)):
+        report = service.run(apply=True, include_protected=True)
+
+    assert report.mode == ReportMode.FORCED_DRY_RUN
+
+    by_name = {p.name: p for p in report.proposals}
+
+    # Both ELIGIBLE proposals must be flipped.
+    assert by_name["stale-alpha"].apply_status == ApplyStatus.REFUSED_FORCED_DRY_RUN
+    assert by_name["stale-beta"].apply_status == ApplyStatus.REFUSED_FORCED_DRY_RUN
+
+    # Non-ELIGIBLE statuses must be preserved exactly.
+    assert by_name["medium-confidence"].apply_status == ApplyStatus.NOT_REQUESTED
+    assert by_name["builtin-skill"].apply_status == ApplyStatus.NOT_APPLICABLE

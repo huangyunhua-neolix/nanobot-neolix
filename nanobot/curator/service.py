@@ -79,13 +79,18 @@ class CuratorService:
             return until_dt.strftime(_UTC_FMT)
         return value
 
-    def forced_dry_run_active(self) -> bool:
+    def forced_dry_run_active(self, now: datetime | None = None) -> bool:
         """Return True when the forced dry-run window is currently active.
 
         The window is active when ``resolve_forced_dry_run_until()`` returns a
-        timestamp that is *in the future* relative to ``now_fn()``.  ``"auto"``
+        timestamp that is *in the future* relative to ``now``.  ``"auto"``
         always resolves to a future timestamp (now + 7 days) and is therefore
         always active.
+
+        Args:
+            now: The reference datetime to compare against.  Defaults to
+                ``self._now_fn()`` when not provided, keeping callers (tests,
+                external code) that omit the argument working correctly.
         """
         resolved = self.resolve_forced_dry_run_until()
         if resolved is None:
@@ -96,7 +101,8 @@ class CuratorService:
             until_dt = datetime.strptime(resolved, _UTC_FMT).replace(tzinfo=timezone.utc)
         except ValueError:
             return False
-        return self._now_fn() < until_dt
+        reference = now if now is not None else self._now_fn()
+        return reference < until_dt
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -141,12 +147,11 @@ class CuratorService:
         )
 
         # --- Determine mode and apply forced dry-run overrides ---
-        if apply and self.forced_dry_run_active():
+        if apply and self.forced_dry_run_active(now):
             mode = ReportMode.FORCED_DRY_RUN
-            for proposal in proposals:
+            for idx, proposal in enumerate(proposals):
                 if proposal.apply_status == ApplyStatus.ELIGIBLE:
                     # Pydantic models are normally immutable; use model_copy to override.
-                    idx = proposals.index(proposal)
                     proposals[idx] = proposal.model_copy(
                         update={"apply_status": ApplyStatus.REFUSED_FORCED_DRY_RUN}
                     )
