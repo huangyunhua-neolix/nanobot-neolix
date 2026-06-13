@@ -1,10 +1,11 @@
 """Configuration schema using Pydantic."""
 from __future__ import annotations
 
+import re as _re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -143,6 +144,44 @@ class SkillManageConfig(Base):
     max_description_len: int = 280  # Spec §3.7 — description string ceiling
 
 
+_UTC_TIMESTAMP_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
+class CuratorConfig(Base):
+    """Curator skill-hygiene configuration (M3 §2).
+
+    Conservative defaults keep the curator in dry-run / advisory mode until
+    the operator explicitly opts into destructive actions.
+    """
+
+    enabled: bool = True
+    forced_dry_run_until: str = "auto"
+    protect_list: list[str] = Field(default_factory=list)
+    protect_patterns: list[str] = Field(default_factory=list)
+    min_views_for_delete: int = Field(default=30, ge=1)
+    max_uses_for_delete: int = Field(default=0, ge=0)
+    stale_days: int = Field(default=30, ge=1)
+    low_use_ratio: float = Field(default=0.02, ge=0.0, le=1.0)
+    apply_delete_mode: Literal["auto_high", "manual_only"] = "auto_high"
+    aux_deliberation: bool = False
+
+    @field_validator("forced_dry_run_until", mode="before")
+    @classmethod
+    def _validate_forced_dry_run_until(cls, v: object) -> object:
+        """Allow exactly "auto" or a normalized UTC timestamp YYYY-MM-DDTHH:MM:SSZ."""
+        if not isinstance(v, str):
+            return v
+        if v == "auto":
+            return v
+        if _UTC_TIMESTAMP_RE.match(v):
+            return v
+        raise ValueError(
+            'forced_dry_run_until must be "auto" or a UTC timestamp in the '
+            "form YYYY-MM-DDTHH:MM:SSZ (e.g. \"2099-12-31T23:59:59Z\"); "
+            f"got {v!r}"
+        )
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -194,6 +233,7 @@ class AgentDefaults(Base):
     dream: DreamConfig = Field(default_factory=DreamConfig)
     auxiliary: AuxiliaryConfig = Field(default_factory=AuxiliaryConfig)
     skill_manage: SkillManageConfig = Field(default_factory=SkillManageConfig)
+    curator: CuratorConfig = Field(default_factory=CuratorConfig)
 
 
 class AgentsConfig(Base):
