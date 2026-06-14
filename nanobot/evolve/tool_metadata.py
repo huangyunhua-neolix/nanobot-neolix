@@ -1,15 +1,12 @@
 """Deterministic tool contract snapshots for M7 metadata-only tool evolution."""
 
 import hashlib
+import importlib
 import json
 import re
 from copy import deepcopy
 from typing import Any, Literal
 
-from nanobot.agent.tools.base import Schema
-from nanobot.agent.tools.context import ToolContext
-from nanobot.agent.tools.loader import ToolLoader
-from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.config import Config
 from nanobot.evolve.judges.calibration import CalibrationRecord
 from nanobot.evolve.privacy.redact import redact
@@ -285,8 +282,9 @@ def build_tool_metadata_judge_record(
 
 def _json_safe_tool_schema(value: object) -> object:
     """Convert loaded runtime schema fragments into JSON-safe structures."""
-    if isinstance(value, Schema):
-        return _json_safe_tool_schema(value.to_json_schema())
+    to_json_schema = getattr(value, "to_json_schema", None)
+    if callable(to_json_schema):
+        return _json_safe_tool_schema(to_json_schema())
     if isinstance(value, dict):
         return {str(key): _json_safe_tool_schema(child) for key, child in value.items()}
     if isinstance(value, list):
@@ -306,9 +304,12 @@ def sanitize_tool_schema_definition(schema_def: dict[str, Any]) -> dict[str, Any
 
 def capture_loaded_tool_contract_snapshot(*, workspace: str) -> list[ToolContractSnapshot]:
     """Capture a JSON-safe tool contract snapshot through the runtime loader path."""
-    registry = ToolRegistry()
-    context = ToolContext(config=Config().tools, workspace=workspace)
-    ToolLoader().load(context, registry)
+    tools_registry = importlib.import_module("nanobot.agent.tools.registry")
+    tools_context = importlib.import_module("nanobot.agent.tools.context")
+    tools_loader = importlib.import_module("nanobot.agent.tools.loader")
+    registry = tools_registry.ToolRegistry()
+    context = tools_context.ToolContext(config=Config().tools, workspace=workspace)
+    tools_loader.ToolLoader().load(context, registry)
     safe_definitions = [
         sanitize_tool_schema_definition(schema_def)
         for schema_def in registry.get_definitions()
@@ -512,7 +513,7 @@ def render_tool_metadata_review(
 
 
 def capture_tool_contract_snapshot(
-    registry: ToolRegistry | list[dict[str, Any]],
+    registry: Any,
 ) -> list[ToolContractSnapshot]:
     """Capture snapshot of tool contracts from registry definitions.
 
