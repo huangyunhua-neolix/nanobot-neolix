@@ -19,7 +19,7 @@ from nanobot.evolve.exceptions import GateInternalError
 from nanobot.evolve.gates import Gate, GateResult
 
 if TYPE_CHECKING:
-    from nanobot.evolve.harness import Baseline, Candidate
+    from nanobot.evolve.schemas import Baseline, Candidate
 
 
 class CacheCompatGate(Gate):
