@@ -20,6 +20,8 @@ import pytest
 class FakeCandidate:
     content_hash: str = "cand-hash"
     cache_key_hash: str = "cand-cache-key"
+    body_md: str = "Use concise answers. Include one concrete example."
+    skill_md_content: str = "Use concise answers. Include one concrete example."
     # ``float`` matches the eventual Pydantic ``dict[str, float]`` schema for
     # ``size_metrics`` (the per-file ``int``-typed fake in ``test_gate_test_pass``
     # is the divergent shape; this is the canonical one).
@@ -30,6 +32,8 @@ class FakeCandidate:
 class FakeBaseline:
     content_hash: str = "base-hash"
     cache_key_hash: str = "base-cache-key"
+    body_md: str = "Use concise answers."
+    skill_md_content: str = "Use concise answers."
     size_metrics: dict[str, float] = field(default_factory=dict)
 
 

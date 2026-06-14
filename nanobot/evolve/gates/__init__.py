@@ -78,9 +78,11 @@ GATES: list[Gate] = []
 # `from nanobot.evolve.gates import Gate, GateResult`, so this module must
 # finish defining those names before importing the concrete subclasses.
 from nanobot.evolve.gates.cache_compat import CacheCompatGate  # noqa: E402
+from nanobot.evolve.gates.semantic_fidelity import SemanticFidelityGate  # noqa: E402
 from nanobot.evolve.gates.skill_size import SkillSizeGate  # noqa: E402
 from nanobot.evolve.gates.test_pass import TestPassGate  # noqa: E402
 
 GATES.append(TestPassGate())
 GATES.append(SkillSizeGate())
 GATES.append(CacheCompatGate())
+GATES.append(SemanticFidelityGate())
