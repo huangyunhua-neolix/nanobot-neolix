@@ -60,6 +60,13 @@ class Gate(ABC):
     @abstractmethod
     def evaluate(self, candidate: "Candidate", baseline: "Baseline") -> GateResult: ...
 
+    def cleanup_after_timeout(self) -> None:
+        """Release subprocesses or other resources after a gate timeout.
+
+        Gates that spawn child processes must override this method and terminate
+        those children. The default is a no-op for pure in-process gates.
+        """
+
 
 # Ordered EXECUTION registry — concrete Gate INSTANCES only, appended at module
 # bottom after gate-implementations land in t-08/09/10. Harness iterates THIS list

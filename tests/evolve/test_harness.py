@@ -11,6 +11,7 @@ import asyncio
 import json
 import shutil
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar
@@ -162,6 +163,24 @@ class _RaiseGate(Gate):
         raise self._exc
 
 
+class _SlowCleanupGate(Gate):
+    NONDETERMINISTIC: ClassVar[bool] = False
+
+    def __init__(self) -> None:
+        self.cleaned = False
+
+    @property
+    def name(self) -> str:
+        return "1-slow"
+
+    def evaluate(self, candidate, baseline):  # type: ignore[override]
+        time.sleep(2)
+        return _ok_result(self.name, candidate, baseline)
+
+    def cleanup_after_timeout(self) -> None:
+        self.cleaned = True
+
+
 # ---------------------------------------------------------------------------
 # Constructor / workspace validation
 # ---------------------------------------------------------------------------
@@ -283,6 +302,18 @@ def test_run_gates_synthetic_fail_short_circuits(tmp_path: Path) -> None:
     assert trace[0].verdict == "fail"
     assert trace[0].failure_reason is not None
     assert "gate-internal-error" in trace[0].failure_reason
+
+
+def test_run_gates_timeout_returns_synthetic_failure_and_cleans_up(tmp_path: Path) -> None:
+    gate = _SlowCleanupGate()
+    harness = OfflineHarness(workspace=tmp_path, gates=[gate], gate_timeout_seconds=0.1)
+
+    trace = harness._run_gates(_make_candidate(), _make_baseline())
+
+    assert len(trace) == 1
+    assert trace[0].verdict == "fail"
+    assert trace[0].failure_reason == "gate-timeout:1-slow"
+    assert gate.cleaned is True
 
 
 def test_run_gates_error_file_path_uses_unknown_when_hash_empty(tmp_path: Path) -> None:
