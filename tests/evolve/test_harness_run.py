@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
+from nanobot.evolve.gates import Gate
 from nanobot.evolve.harness import OfflineHarness, _parse_frontmatter, _render_skill
 from nanobot.evolve.optimizer.schemas import OptimizerCandidate, OptimizerResult
 
@@ -54,6 +56,21 @@ def _optimizer_candidate(markdown: str, *, skill_name: str = "demo-skill") -> Op
         iteration=2,
         rationale="better",
     )
+
+
+class _ExplodingGate(Gate):
+    NONDETERMINISTIC: ClassVar[bool] = False
+
+    def __init__(self, gate_name: str, message: str) -> None:
+        self._name = gate_name
+        self._message = message
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def evaluate(self, candidate, baseline):  # type: ignore[override]
+        raise RuntimeError(self._message)
 
 
 def test_harness_run_promotes_candidate_and_writes_artifacts(tmp_path: Path) -> None:
@@ -120,9 +137,108 @@ Path(args.output).write_text(json.dumps({
         "pr_body": "pr_body.md",
         "report": "report.md",
     }
+    assert manifest.evolve_extra_version == {"optimizer": "transform-wrapper"}
     assert "Use concise answers." in (
         tmp_path / "skills" / "agent" / "demo-skill" / "SKILL.md"
     ).read_text(encoding="utf-8")
+
+
+def test_harness_run_omitted_timeout_writes_default_600_seconds(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "optimizer.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'timeout-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': {'code': 'no_improvement', 'message': 'No candidate improved.'},
+    'candidates': []
+}))
+""".lstrip(),
+    )
+    harness = OfflineHarness(workspace=tmp_path)
+
+    manifest = harness.run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    optimizer_input = json.loads(
+        (tmp_path / "evals" / "runs" / manifest.run_id / "optimizer" / "optimizer_input.json")
+        .read_text(encoding="utf-8")
+    )
+    assert optimizer_input["timeoutSeconds"] == 600
+
+
+def test_harness_run_gate_exception_reason_is_pr_body_safe(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "optimizer.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'gate-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Add a gate-safe example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'exercise rejected_by_gate path'
+    }]
+}))
+""".lstrip(),
+    )
+    harness = OfflineHarness(
+        workspace=tmp_path,
+        gates=[_ExplodingGate("1-explodes", "bad line\n```secret```\x01still same failure")],
+    )
+
+    manifest = harness.run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    assert manifest.final_status == "rejected_by_gate"
+    assert (run_dir / "manifest.json").exists()
+    assert (run_dir / "pr_body.md").exists()
+    assert (run_dir / "report.md").exists()
+    reason = manifest.gate_verdicts[0].failure_reason
+    assert reason is not None
+    assert "bad line" in reason
+    assert "still same failure" in reason
+    assert "\n" not in reason
+    assert "```" not in reason
+    assert "\x01" not in reason
+    pr_body = (run_dir / "pr_body.md").read_text(encoding="utf-8")
+    report = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "bad line" in pr_body
+    assert "bad line" in report
 
 
 def test_harness_run_all_invalid_candidates_is_rejected_by_validation(tmp_path: Path) -> None:
@@ -165,6 +281,59 @@ Path(args.output).write_text(json.dumps({
     assert manifest.validation_failures[0].reason_code == "skill-name-mismatch"
     assert manifest.candidate_hashes == []
     assert manifest.promoted_candidate_hash is None
+
+
+def test_harness_run_mixed_validation_promotes_valid_candidate(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "mixed_candidates.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'mixed-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [
+        {
+            'skillName': 'demo-skill',
+            'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nValid lower score candidate.\\n',
+            'score': 0.8,
+            'iteration': 1,
+            'rationale': 'valid candidate'
+        },
+        {
+            'skillName': 'other-skill',
+            'skillMdContent': '---\\nname: other-skill\\ndescription: Demo skill\\n---\\nInvalid higher score candidate.\\n',
+            'score': 0.9,
+            'iteration': 1,
+            'rationale': 'ranked first but invalid'
+        }
+    ]
+}))
+""".lstrip(),
+    )
+    harness = OfflineHarness(workspace=tmp_path)
+
+    manifest = harness.run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    assert manifest.final_status == "promoted_to_pr"
+    assert manifest.promoted_candidate_hash is not None
+    assert manifest.validation_failures[0].candidate_index == 0
+    assert manifest.validation_failures[0].reason_code == "skill-name-mismatch"
 
 
 def test_harness_run_no_improvement_status(tmp_path: Path) -> None:
@@ -240,7 +409,11 @@ Path(args.output).write_text(json.dumps({
     assert manifest.validation_failures[0].candidate_index == 0
     assert manifest.validation_failures[0].candidate_hash == "<invalid>"
     assert manifest.validation_failures[0].reason_code == "frontmatter-invalid"
-    assert manifest.validation_failures[0].reason == "frontmatter-invalid"
+    reason = manifest.validation_failures[0].reason
+    assert reason.startswith("frontmatter-invalid: ")
+    assert "created_at" in reason
+    assert "not-a-date" in reason
+    assert len(reason) <= 300
 
 
 def test_generate_run_id_scans_existing_suffixes(tmp_path: Path) -> None:

@@ -62,6 +62,10 @@ _PATH_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 _RUN_ID_SUFFIX_LIMIT = 10_000
+_SAFE_REASON_MAX_CHARS = 300
+_PR_BODY_FORBIDDEN_REASON_CHARS = frozenset(
+    {"\n", "\r", "\u2028", "\u2029", "\u0085", "\x00"}
+)
 
 
 def _sha256_text(text: str) -> str:
@@ -94,6 +98,25 @@ def _render_skill(frontmatter: SkillFrontmatter, body: str) -> str:
 
 def _normalize_lf(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _safe_single_line_reason(text: str, *, max_chars: int = _SAFE_REASON_MAX_CHARS) -> str:
+    """Return a redacted, bounded one-line reason safe for markdown fields."""
+    redacted = redact(text).text
+    sanitized = "".join(
+        " "
+        if ch in _PR_BODY_FORBIDDEN_REASON_CHARS or ord(ch) < 0x20 or ord(ch) == 0x7F
+        else ch
+        for ch in redacted
+    )
+    sanitized = re.sub(r"\s+", " ", sanitized).replace("```", "'''").strip()
+    if len(sanitized) <= max_chars:
+        return sanitized
+    return sanitized[: max_chars - 1].rstrip() + "…"
+
+
+def _validation_failure_reason(exc: ValidationError) -> str:
+    return _safe_single_line_reason(f"frontmatter-invalid: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -220,8 +243,10 @@ class OfflineHarness:
         skill_md_content = _render_skill(frontmatter, body)
         size_metrics = {
             "lines": len(skill_md_content.splitlines()),
-            # TODO(Task 8): replace placeholder pass counts when real offline eval
-            # scoring is wired into the harness; gate 1 currently requires them.
+            # TODO(Task 8): replace these synthetic pass counts with real offline
+            # eval scores. Until real scoring is wired, Gate 1 is non-informative:
+            # it only confirms the placeholder counts satisfy the current gate
+            # preconditions while keeping the M5 pipeline passing.
             "tier_c_pass": 5,
             "tier_c_total": 5,
             "tier_a_pass": 1,
@@ -309,7 +334,7 @@ class OfflineHarness:
         optimizer_command: list[str],
         tiers: list[str],
         max_candidates: int = 8,
-        optimizer_timeout_seconds: int = 300,
+        optimizer_timeout_seconds: int = 600,
     ) -> RunManifest:
         """Execute the external optimizer and write deterministic offline artifacts."""
         started_at = datetime.now(timezone.utc)
@@ -349,13 +374,13 @@ class OfflineHarness:
                     candidate = self._candidate_from_optimizer(
                         optimizer_candidate, baseline, run_id, optimizer_result
                     )
-                except ValidationError:
+                except ValidationError as exc:
                     validation_failures.append(
                         ValidationFailure(
                             candidate_index=index,
                             candidate_hash="<invalid>",
                             reason_code="frontmatter-invalid",
-                            reason="frontmatter-invalid",
+                            reason=_validation_failure_reason(exc),
                         )
                     )
                     continue
@@ -420,7 +445,7 @@ class OfflineHarness:
             started_at=started_at,
             finished_at=finished_at,
             nanobot_version=self._nanobot_version(),
-            evolve_extra_version={"optimizer": "external"},
+            evolve_extra_version={"optimizer": optimizer_result.optimizer_name},
             skill_name=skill_name,
             baseline_hash=baseline.content_hash,
             candidate_hashes=[candidate.content_hash for candidate in valid_candidates],
@@ -429,6 +454,9 @@ class OfflineHarness:
             judge_summary=self._empty_judge_summary(len(tiers)),
             final_status=final_status,
             tiers_used=tiers,  # type: ignore[arg-type]
+            # TODO(Task 8): this mirrors the current synthetic redacted eval
+            # bundle, which writes exactly one placeholder record per tier. Replace
+            # with real eval record counts when real records are wired.
             record_count_per_tier={tier: 1 for tier in tiers},
             judge_pool_health={},
             optimizer_name=optimizer_result.optimizer_name,
@@ -491,7 +519,9 @@ class OfflineHarness:
                     )
                 except Exception as exc:  # NOT BaseException — see docstring.
                     duration_ms = int((time.perf_counter() - t0) * 1000)
-                    reason = f"gate-internal-error: {type(exc).__name__}: {str(exc)[:200]}"
+                    reason = _safe_single_line_reason(
+                        f"gate-internal-error: {type(exc).__name__}: {exc}", max_chars=240
+                    )
                     self._write_gate_error(gate, candidate, exc)
                     result = GateResult(
                         gate_name=gate.name,
@@ -505,6 +535,10 @@ class OfflineHarness:
                     )
             finally:
                 executor.shutdown(wait=False, cancel_futures=True)
+            if result.failure_reason is not None:
+                result = result.model_copy(
+                    update={"failure_reason": _safe_single_line_reason(result.failure_reason)}
+                )
             trace.append(result)
             if result.verdict == "fail":
                 break  # §6.4.2 — first fail short-circuits the gate chain.

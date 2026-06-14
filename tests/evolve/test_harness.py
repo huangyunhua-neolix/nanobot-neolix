@@ -255,6 +255,28 @@ def test_run_gates_catches_gate_exception_as_verdict_fail(tmp_path: Path) -> Non
     assert "boom" in trace[0].failure_reason
 
 
+def test_run_gates_sanitizes_explicit_gate_failure_reason(tmp_path: Path) -> None:
+    class _UnsafeFailGate(Gate):
+        NONDETERMINISTIC: ClassVar[bool] = False
+
+        @property
+        def name(self) -> str:
+            return "1-unsafe-fail"
+
+        def evaluate(self, candidate, baseline):  # type: ignore[override]
+            result = _fail_result(self.name, candidate, baseline)
+            return result.model_copy(
+                update={"failure_reason": "first line\n```secret```\x01still failed"}
+            )
+
+    harness = OfflineHarness(workspace=tmp_path, gates=[_UnsafeFailGate()])
+
+    trace = harness._run_gates(_make_candidate(), _make_baseline())
+
+    assert len(trace) == 1
+    assert trace[0].failure_reason == "first line '''secret''' still failed"
+
+
 def test_run_gates_writes_error_traceback_file(tmp_path: Path) -> None:
     gates = [_RaiseGate("1-explodes", RuntimeError("kaboom"))]
     harness = OfflineHarness(workspace=tmp_path, gates=gates)
