@@ -363,7 +363,9 @@ def render_tool_metadata_review(
     change runtime tool source.
     """
     snapshots_by_name = {item.tool_name: item for item in snapshot}
-    validation_by_tool = {item.tool_name: item for item in validation_results}
+    validation_by_candidate = {
+        (item.tool_name, item.baseline_schema_hash): item for item in validation_results
+    }
     lines = [
         "# Tool Metadata Review",
         "",
@@ -387,7 +389,7 @@ def render_tool_metadata_review(
         return "\n".join(lines) + "\n"
 
     for candidate in sorted(candidates, key=lambda item: item.tool_name):
-        result = validation_by_tool.get(candidate.tool_name)
+        result = validation_by_candidate.get((candidate.tool_name, candidate.baseline_schema_hash))
         matching_snapshot = snapshots_by_name.get(candidate.tool_name)
         baseline_schema = _snapshot_schema(matching_snapshot) if matching_snapshot is not None else {}
         proposed_schema = canonical_tool_schema(candidate.model_dump()["proposed_schema"])

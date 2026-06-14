@@ -616,6 +616,33 @@ class TestRenderToolMetadataReview:
 
         assert "Verdict: `missing-validation`" in review
 
+    def test_render_ignores_validation_result_for_different_baseline_hash(self) -> None:
+        """Validation results for stale baseline hashes do not apply to candidates."""
+        tool = _fake_read_tool()
+        snapshot = _snapshot_for_tool(tool)
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["description"] = "Clarifies current candidate metadata."
+        candidate = _candidate_for_tool(
+            tool=tool,
+            proposed_schema=proposed_schema,
+            baseline_schema_hash="different-baseline-hash",
+        )
+        stale_validation_result = ToolMetadataValidationResult(
+            tool_name=tool.name,
+            baseline_schema_hash=snapshot.schema_hash,
+            verdict="reject",
+            reason_code="tool-schema-mutation",
+            reason="Stale validation result must not be rendered.",
+            changed_paths=["$.parameters.properties.path.type"],
+        )
+
+        review = render_tool_metadata_review([snapshot], [candidate], [stale_validation_result])
+
+        assert "Verdict: `missing-validation`" in review
+        assert "Verdict: `reject`" not in review
+        assert "Stale validation result must not be rendered." not in review
+        assert "`$.parameters.properties.path.type`" not in review
+
     def test_render_includes_parameter_note_diff(self) -> None:
         """Parameter description changes render baseline and candidate snippets."""
         tool = _fake_read_tool()
