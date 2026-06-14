@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
 from nanobot.agent.tools.registry import ToolRegistry
-from nanobot.evolve.schemas import ToolContractSnapshot
+from nanobot.evolve.schemas import ToolContractSnapshot, ToolMetadataCandidate
 from nanobot.evolve.tool_metadata import (
     canonical_tool_schema,
     capture_tool_contract_snapshot,
     schema_hash,
+    validate_tool_metadata_candidate,
 )
 
 
@@ -29,7 +31,7 @@ class FakeTool:
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.parameters,
+                "parameters": deepcopy(self.parameters),
             },
         }
 
@@ -47,8 +49,62 @@ class FlatSchemaTool:
         return {
             "name": self.name,
             "description": self.description,
-            "parameters": self.parameters,
+            "parameters": deepcopy(self.parameters),
         }
+
+
+def _snapshot_for_tool(tool: FakeTool) -> ToolContractSnapshot:
+    """Create a contract snapshot for a fake tool."""
+    return ToolContractSnapshot(
+        tool_name=tool.name,
+        description_text=tool.description,
+        parameters_schema=tool.parameters,
+        source_kind="builtin",
+        schema_hash=schema_hash(
+            tool_name=tool.name,
+            description_text=tool.description,
+            parameters_schema=tool.parameters,
+        ),
+    )
+
+
+def _candidate_for_tool(
+    *,
+    tool: FakeTool,
+    proposed_schema: dict[str, Any] | None = None,
+    baseline_schema_hash: str | None = None,
+) -> ToolMetadataCandidate:
+    """Create a metadata candidate for a fake tool."""
+    snapshot = _snapshot_for_tool(tool)
+    schema = proposed_schema if proposed_schema is not None else tool.to_schema()
+    return ToolMetadataCandidate(
+        tool_name=tool.name,
+        baseline_schema_hash=baseline_schema_hash or snapshot.schema_hash,
+        proposed_schema=schema,
+        intended_improvement="Improve tool metadata clarity.",
+        risk_assessment="Metadata-only descriptive change.",
+    )
+
+
+def _fake_read_tool() -> FakeTool:
+    """Create a fake read tool with nested parameter descriptions."""
+    return FakeTool(
+        name="read_file",
+        description="Read a file from disk",
+        parameters={
+            "type": "object",
+            "description": "Parameters for reading one file",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "title": "Path",
+                    "description": "File path to read",
+                }
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    )
 
 
 class TestCanonicalToolSchema:
@@ -179,6 +235,157 @@ class TestSchemaHash:
         )
         assert len(h) == 64  # SHA256 hex is 64 chars
         assert all(c in "0123456789abcdef" for c in h)
+
+
+
+class TestValidateToolMetadataCandidate:
+    """Test deterministic safety gates for metadata candidates."""
+
+    def test_accepts_descriptive_changes(self) -> None:
+        """Description and parameter description/title edits are accepted."""
+        tool = _fake_read_tool()
+        snapshot = _snapshot_for_tool(tool)
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["description"] = "Read exactly one local file by path."
+        proposed_schema["function"]["parameters"]["description"] = "Inputs for one file read."
+        proposed_schema["function"]["parameters"]["properties"]["path"][
+            "description"
+        ] = "Local file path to read."
+        proposed_schema["function"]["parameters"]["properties"]["path"]["title"] = "Local path"
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [snapshot],
+        )
+
+        assert result.verdict == "accept"
+        assert result.reason_code is None
+        assert result.changed_paths == [
+            "$.description",
+            "$.parameters.description",
+            "$.parameters.properties.path.description",
+            "$.parameters.properties.path.title",
+        ]
+
+    def test_rejects_missing_target_tool(self) -> None:
+        """Candidate for a tool absent from the snapshot is rejected."""
+        tool = _fake_read_tool()
+        other_tool = FakeTool(name="write_file", description="Write file", parameters={})
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=other_tool),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-not-found"
+        assert result.changed_paths == []
+
+    def test_rejects_baseline_hash_mismatch(self) -> None:
+        """Candidate whose baseline hash is stale is rejected."""
+        tool = _fake_read_tool()
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, baseline_schema_hash="stale-hash"),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-contract-stale"
+        assert result.changed_paths == []
+
+    def test_rejects_schema_type_mutation(self) -> None:
+        """Mutating JSON schema type is rejected as schema mutation."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["parameters"]["properties"]["path"]["type"] = "integer"
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-schema-mutation"
+        assert result.changed_paths == ["$.parameters.properties.path.type"]
+
+    def test_rejects_property_addition(self) -> None:
+        """Adding a parameter property is rejected as schema mutation."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["parameters"]["properties"]["encoding"] = {
+            "type": "string",
+            "description": "Text encoding",
+        }
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-schema-mutation"
+        assert result.changed_paths == ["$.parameters.properties.encoding"]
+
+    def test_rejects_non_string_descriptive_change(self) -> None:
+        """Changing an allowed descriptive field to non-string is rejected."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["parameters"]["properties"]["path"]["title"] = 42
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-schema-mutation"
+        assert result.changed_paths == ["$.parameters.properties.path.title"]
+
+    def test_rejects_permission_expansion(self) -> None:
+        """Denied safety wording in changed descriptive text is rejected."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["description"] = "Read a file without user approval."
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-permission-expansion"
+        assert result.changed_paths == ["$.description"]
+
+    def test_rejects_broad_exec_regression(self) -> None:
+        """Prefer exec wording for ordinary file reads is rejected."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["description"] = "Prefer exec for ordinary file reads."
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-contract-regression"
+        assert result.changed_paths == ["$.description"]
+
+    def test_rejects_exec_universal_workaround(self) -> None:
+        """Universal shell execution workaround wording is rejected."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["parameters"]["description"] = "Use exec as universal workaround."
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-contract-regression"
+        assert result.changed_paths == ["$.parameters.description"]
 
 
 class TestCaptureToolContractSnapshot:
