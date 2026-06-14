@@ -10,15 +10,17 @@ from dataclasses import dataclass, field
 import pytest
 
 from nanobot.evolve.judges.calibration import (
+    CALIBRATION_AXIS_FLOOR,
     CALIBRATION_KAPPA_THRESHOLD,
     CalibrationRecord,
     CalibrationReport,
     _bin_cutoffs,
     _bin_index,
     calibrate,
+    calibration_identity_key,
     compute_cohen_kappa,
 )
-from nanobot.evolve.schemas import RubricScore
+from nanobot.evolve.schemas import JudgeProviderIdentity, RubricScore
 
 # ---------------------------------------------------------------------------
 # compute_cohen_kappa — direct numeric tests
@@ -53,6 +55,10 @@ def test_threshold_constant_is_0_6() -> None:
     # Anchor the Landis & Koch decision (§7.4 / spec decision #126). A future
     # refactor that nudges this constant must update tests deliberately.
     assert CALIBRATION_KAPPA_THRESHOLD == 0.6
+
+
+def test_axis_floor_constant_is_0_4() -> None:
+    assert CALIBRATION_AXIS_FLOOR == 0.4
 
 
 def test_kappa_empty_input_raises() -> None:
@@ -121,12 +127,32 @@ def test_bin_edges_score_out_of_range_raises() -> None:
 def test_calibration_report_dataclass_shape() -> None:
     r = CalibrationReport(
         kappa_mean=0.7,
+        kappa_min=0.6,
         kappa_per_axis={"process": 0.8, "output": 0.6, "token": 0.7},
         passed=True,
     )
     assert r.kappa_mean == pytest.approx(0.7)
+    assert r.kappa_min == pytest.approx(0.6)
     assert r.kappa_per_axis["process"] == pytest.approx(0.8)
     assert r.passed is True
+
+
+def test_calibration_report_round_trips_by_alias() -> None:
+    report = CalibrationReport(
+        kappa_mean=0.7,
+        kappa_min=0.6,
+        kappa_per_axis={"process": 0.8, "output": 0.6, "token": 0.7},
+        passed=True,
+    )
+    dumped = report.model_dump(by_alias=True)
+
+    assert dumped == {
+        "kappaMean": 0.7,
+        "kappaMin": 0.6,
+        "kappaPerAxis": {"process": 0.8, "output": 0.6, "token": 0.7},
+        "passed": True,
+    }
+    assert CalibrationReport.model_validate(dumped) == report
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +186,55 @@ def _mk_score(p: float, o: float, t: float) -> RubricScore:
     )
 
 
+def _judge_identity(
+    *,
+    base_url: str | None = "https://api.example.invalid",
+    api_version: str | None = "2026-06-14",
+    corpus_model_id: str = "claude-sonnet-4-6",
+) -> JudgeProviderIdentity:
+    return JudgeProviderIdentity(
+        provider_name="anthropic",
+        base_url=base_url,
+        api_version=api_version,
+        model_id=corpus_model_id,
+        prompt_template_version="semantic-judge-v2",
+        rubric_version="rubric-v2",
+        score_schema_version="2",
+    )
+
+
+def test_calibration_identity_key_is_deterministic() -> None:
+    first = calibration_identity_key(_judge_identity(), corpus_version="m6-corpus-v1")
+    second = calibration_identity_key(_judge_identity(), corpus_version="m6-corpus-v1")
+
+    assert first == second
+
+
+def test_calibration_identity_key_changes_when_base_url_changes() -> None:
+    first = calibration_identity_key(
+        _judge_identity(base_url="https://api-a.example"), corpus_version="m6-corpus-v1"
+    )
+    second = calibration_identity_key(
+        _judge_identity(base_url="https://api-b.example"), corpus_version="m6-corpus-v1"
+    )
+
+    assert first != second
+
+
+def test_calibration_identity_key_changes_when_api_version_changes() -> None:
+    first = calibration_identity_key(_judge_identity(api_version="2026-06-14"), corpus_version="m6-corpus-v1")
+    second = calibration_identity_key(_judge_identity(api_version="2026-07-01"), corpus_version="m6-corpus-v1")
+
+    assert first != second
+
+
+def test_calibration_identity_key_changes_when_corpus_version_changes() -> None:
+    first = calibration_identity_key(_judge_identity(), corpus_version="m6-corpus-v1")
+    second = calibration_identity_key(_judge_identity(), corpus_version="m6-corpus-v2")
+
+    assert first != second
+
+
 def test_kappa_above_threshold_returns_true_verdict() -> None:
     # Six records, all three axes track human perfectly → per-axis κ=1.0 →
     # kappa_mean=1.0 ≥ 0.6 → passed.
@@ -184,6 +259,7 @@ def test_kappa_above_threshold_returns_true_verdict() -> None:
     report = calibrate(records, pool)
     assert report.passed is True
     assert report.kappa_mean == pytest.approx(1.0, abs=1e-9)
+    assert report.kappa_min == pytest.approx(1.0, abs=1e-9)
     assert set(report.kappa_per_axis) == {"process", "output", "token"}
 
 
@@ -238,6 +314,30 @@ def test_calibrate_validates_human_axes_before_scoring() -> None:
 
     with pytest.raises(ValueError, match="missing human score"):
         calibrate(records, _ExplodingScorer())
+
+
+def test_calibrate_fails_when_axis_below_floor_despite_high_mean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nanobot.evolve.judges import calibration as _cal
+
+    kappa_values = iter([0.8, 0.8, 0.3])
+
+    def _axis_kappa(
+        human: list[float], judge: list[float], *, bins: int = 3
+    ) -> float:
+        del human, judge, bins
+        return next(kappa_values)
+
+    monkeypatch.setattr(_cal, "compute_cohen_kappa", _axis_kappa)
+    records, pool = _trivial_records_and_pool()
+
+    report = calibrate(records, pool)
+
+    assert report.kappa_mean == pytest.approx((0.8 + 0.8 + 0.3) / 3.0, abs=1e-9)
+    assert report.kappa_min == pytest.approx(0.3, abs=1e-9)
+    assert set(report.kappa_per_axis.values()) == {0.8, 0.3}
+    assert report.passed is False
 
 
 # ---------------------------------------------------------------------------

@@ -37,6 +37,28 @@ def render_run_report(
         "## Review state",
         f"Human approval required: `{str(manifest.requires_human_approval).lower()}`",
     ]
+    if manifest.judge_run_summary is not None:
+        summary = manifest.judge_run_summary
+        evidence_path = manifest.judge_evidence_paths.get("semantic_fidelity", "<none>")
+        disagreement = (
+            summary.disagreement_max
+            if summary.disagreement_max is not None
+            else "<none>"
+        )
+        lines.extend(
+            [
+                "",
+                "## Semantic judge",
+                f"Mode: `{summary.judge_mode}`",
+                f"Calibrated: `{str(summary.calibrated).lower()}`",
+                f"Evidence count: `{summary.evidence_count}`",
+                f"Median aggregate: `{summary.median_aggregate:.6g}`",
+                f"Minimum axis score: `{summary.min_axis_score:.6g}`",
+                f"Disagreement max: `{disagreement}`",
+                f"Evidence: `{_redact_and_bound(evidence_path)}`",
+                "Judge metrics were not returned to the optimizer and were not used as optimizer fitness.",
+            ]
+        )
     if manifest.diff_stats is not None:
         lines.extend(
             [

@@ -17,6 +17,7 @@ from nanobot.evolve.deploy import (
 from nanobot.evolve.exceptions import ApplyTerminalError
 from nanobot.evolve.gates import GateResult
 from nanobot.evolve.harness import JudgeSummary, RunManifest
+from nanobot.evolve.schemas import JudgeRunSummary
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -194,6 +195,35 @@ def test_assemble_pr_body_uses_real_diff_stats_and_human_checklist() -> None:
     assert "Human review checklist" in body
     assert "[ ] Human reviewer approved this skill evolution" in body
     assert "No live skill file was changed by this run" in body
+
+
+def test_assemble_pr_body_includes_semantic_judge_review_checklist() -> None:
+    manifest = _make_run_manifest(
+        judge_run_summary=JudgeRunSummary(
+            judge_mode="local_fallback",
+            calibrated=False,
+            evidence_count=1,
+            median_aggregate=0.82,
+            min_axis_score=0.71,
+            disagreement_max=None,
+        ),
+        judge_evidence_paths={"semantic_fidelity": "judge_evidence.jsonl"},
+    )
+    body = assemble_pr_body(manifest, [])
+
+    assert "- [ ] Reviewer inspected semantic judge evidence" in body
+    assert "- [ ] Reviewer confirmed calibration state" in body
+    assert "- [ ] Reviewer confirmed no judge metric was used as optimizer fitness" in body
+    assert _section_headers_in_order(body) == list(PR_BODY_SECTIONS)
+
+
+def test_assemble_pr_body_omits_semantic_judge_checklist_without_summary() -> None:
+    body = assemble_pr_body(_make_run_manifest(), [])
+
+    assert "- [ ] Reviewer inspected semantic judge evidence" not in body
+    assert "- [ ] Reviewer confirmed calibration state" not in body
+    assert "- [ ] Reviewer confirmed no judge metric was used as optimizer fitness" not in body
+    assert _section_headers_in_order(body) == list(PR_BODY_SECTIONS)
 
 
 def test_assemble_pr_body_includes_manifest_run_id() -> None:

@@ -306,9 +306,21 @@ def assemble_pr_body(
         "- [ ] Human reviewer approved this skill evolution",
         "- [ ] Reviewer confirmed semantic-fidelity evidence",
         "- [ ] Reviewer confirmed no live skill file was changed by this run",
-        f"- Human approval required: `{str(manifest.requires_human_approval).lower()}`",
-        "- No live skill file was changed by this run",
     ]
+    if manifest.judge_run_summary is not None:
+        human_review_lines.extend(
+            [
+                "- [ ] Reviewer inspected semantic judge evidence",
+                "- [ ] Reviewer confirmed calibration state",
+                "- [ ] Reviewer confirmed no judge metric was used as optimizer fitness",
+            ]
+        )
+    human_review_lines.extend(
+        [
+            f"- Human approval required: `{str(manifest.requires_human_approval).lower()}`",
+            "- No live skill file was changed by this run",
+        ]
+    )
 
     # --- Rollback plan ----------------------------------------------------
     # §8.5 Precondition: PR is squash-merged → single-parent commit → bare

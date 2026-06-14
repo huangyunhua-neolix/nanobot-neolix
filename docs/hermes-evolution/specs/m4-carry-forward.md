@@ -202,6 +202,7 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Conflict**: None
 - **Defer reason**: §7.4 re-calibration trigger 列表（5 条）包含 `aux_provider.model` field diff 但不含 `aux_provider.base_url` / `aux_provider.api_version` diff。In-scope 但 not breaking —— user 典型行为是在 `aux_provider` 中声明完整 provider 配置（model + base_url + api_version 同步变），跨 host swap 而 model string 不变的场景在 M4 cooperative threat model 下不常见。下次 §7 housekeeping pass 时一并加入 trigger 列表
 - **Future close criterion**: §7.4 trigger 1 扩展为包含 `aux_provider.base_url` 与 `aux_provider.api_version` field diff（spec edit 一行）；**OR** M5 引入 provider-pinning lockfile（每条 calibration run 记录完整 `(provider_name, base_url, api_version, model_id)` quadruple，diff 任一字段触发 re-calibration）
+- **M6 closure note (2026-06-15)**: M6 adds provider identity keys including provider name, base URL, API version, model ID, prompt-template version, rubric version, and score schema version. Calibration invalidates when any identity field or corpus version changes.
 
 ### CF-C-rev19-3 — κ mean 掩盖 single-axis collapse（Corr Y-9）
 
@@ -210,6 +211,7 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Conflict**: None
 - **Defer reason**: §7.4 Agreement metric "逐 axis 计算 then mean across axes" 在原 4-axis 设计下存在"单 axis（safety）collapse 到 κ ≈ 0 但 mean 仍 ≥ 0.6"的隐藏风险。C-rev19 / RED-1 fix 后 rubric 收敛至 3-axis (process / output / token)，safety axis collapse pattern 不再适用；风险显著降低但未完全消除（任一 axis κ 单独 collapse 时 3-axis mean 仍可能 ≥ 0.6 if 其它两 axis κ ≈ 0.9）。per-axis floor 仍有 defense-in-depth 价值
 - **Future close criterion**: M5 gate-4 SemanticFidelityGate 引入第 4 axis（§11 deferred）→ axis 数增加再评估 collapse 风险；**OR** M4 首月生产 retro 显示任一 single-axis κ < 0.4 → §7.4 引入 κ_min ≥ 0.4 floor 作为 κ_mean ≥ 0.6 的并列约束（两者同时满足才视为 calibration PASS）
+- **M6 closure note (2026-06-15)**: M6 adds `CALIBRATION_AXIS_FLOOR = 0.4` and requires both `kappa_mean >= 0.6` and every per-axis κ to meet the floor, preventing a collapsed axis from being hidden by the mean.
 
 ### CF-C-rev19-4 — §8.4 gate re-verification CI 过早（Scope Y）
 
@@ -270,6 +272,7 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Conflict**: None；属测试覆盖度补强
 - **Defer reason**: M4 t-13 ship 的 κ 实现在 n=1 / pe==1 退化路径上数学上正确（返回 NaN-或-定值，视实现 branch），但缺一个 explicit pin test 把行为锁定。M5 calibration 真实 corpus 接入前是 low-active-risk
 - **Future close criterion**: M5 calibration corpus 接入或更早 housekeeping pass 中追加 `test_compute_cohen_kappa_degenerate_pe_one`，pin n=1 / pe==1 时的返回值（NaN raise 或固定 sentinel，视实际行为）
+- **M6 closure note (2026-06-15)**: M6 pins the degenerate `compute_cohen_kappa([0.5], [0.5])` behavior and keeps it returning `1.0` for identical single-score agreement.
 
 ### CF-t13-b — `CalibrationReport.model_dump → model_validate` round-trip test 未补（t-13 R2）
 
@@ -278,6 +281,7 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Conflict**: None；属 serialisation regression guard
 - **Defer reason**: M4 t-13 ship `CalibrationReport` 是 `EvolveBase` 子类，继承 camelCase alias contract；当前测试覆盖了字段语义但未 round-trip serialisation。M4 阶段 CalibrationReport 不进 RunManifest sidecar（calibration 是 pre-flight 独立 artefact），round-trip break 低风险
 - **Future close criterion**: M5 calibration artefact 进入持久化路径（写盘 / 上传）时追加 `test_calibration_report_serialisation_round_trip`，pin `CalibrationReport.model_dump(by_alias=True) → model_validate` 等价
+- **M6 closure note (2026-06-15)**: M6 adds `CalibrationReport.model_dump(by_alias=True) -> model_validate` round-trip coverage, including `kappaMean`, `kappaMin`, `kappaPerAxis`, and `passed`.
 
 ### CF-t13-c — `calibrate()` 对全部 record 调用 `pool.score` 在 axis 校验之前（t-13 R2）
 
@@ -294,6 +298,7 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
 - **Conflict**: None；属未来接线义务的 audit trail
 - **Defer reason**: `_JudgeScorer` Protocol 在 `calibration.py` 引用 `pool.score(record)`，但 `JudgePool` (`judges/rubric.py`) 当前未实现 `score` 方法 —— 只有 stub-injected tests 走通。M4 round-4 skeleton 范围合规（calibration 是独立预-flight 模块，不依赖 judge runtime），但 audit trail 需显式 marker 防止未来 contributor 误以为 production path 已 wired。本 commit 同步在 `calibration.py` `_JudgeScorer.score` docstring 加 `TODO(m4-followup CF-cc-a)` inline marker
 - **Future close criterion**: t-14 / t-15 pipeline 落地 `JudgePool.score(record: CalibrationRecord) -> RubricScore` real 实现（调 aux_provider）；inline TODO marker 同步移除，本 CF 闭合
+- **M6 closure note (2026-06-15)**: M6 keeps `JudgePool.score()` as the public deterministic scoring entry point and adds `score_with_evidence()` for Gate 4, closing the production scoring seam while preserving calibration compatibility.
 
 ### CF-cc-b — `ManifestPrivacyViolation` 未声明 kwargs 与 `STRUCTURED_KWARGS` 一致性（cross-cutting holistic sweep）
 
