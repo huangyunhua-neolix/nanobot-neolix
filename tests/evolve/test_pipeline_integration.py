@@ -171,3 +171,35 @@ def test_pipeline_does_not_import_dspy_or_gepa(
         "lazy-import contract violated: gepa ended up in sys.modules "
         "after _run_gates — the gate pipeline must not import gepa"
     )
+
+
+def test_evolve_modules_stay_decoupled_from_runtime_lane() -> None:
+    import ast
+    from pathlib import Path
+
+    forbidden_prefixes = (
+        "nanobot.agent.loop",
+        "nanobot.agent.runner",
+        "nanobot.channels",
+        "nanobot.command",
+        "nanobot.api.server",
+        "nanobot.agent.tools",
+        "dspy",
+        "gepa",
+    )
+    root = Path("nanobot/evolve")
+    offenders: list[str] = []
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            module = None
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    module = alias.name
+                    if module.startswith(forbidden_prefixes):
+                        offenders.append(f"{path}:{module}")
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                module = node.module
+                if module.startswith(forbidden_prefixes):
+                    offenders.append(f"{path}:{module}")
+    assert offenders == []

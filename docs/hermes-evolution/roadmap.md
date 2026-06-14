@@ -46,7 +46,7 @@ M1 Foundations  ──┬──> M2 skill_manage ──> M3 Curator
 | **M2** | `skill_manage` 工具(create/patch/edit/delete) + 触发规则 + Dream 整合点 | M1 | ✅ 已完成 (2026-06-12, PR #4) | [`specs/m2-skill-manage.md`](specs/m2-skill-manage.md) | [`plans/m2-skill-manage.md`](plans/m2-skill-manage.md) | [`retros/m2-skill-manage.md`](retros/m2-skill-manage.md) |
 | **M3** | Curator Phase 1(确定性状态机) + Phase 2(aux-model 审议) + dry-run + `/curator` 命令 + protect-list | M2 | ✅ 已实现 (2026-06-14, branch `feature/m3-curator`) | [`specs/m3-curator.md`](specs/m3-curator.md) | `plans/m3-curator.md` | — |
 | **M4** | 离线进化骨架：`nanobot/evolve/` skeleton（shared Pydantic base、评测数据模型、rubric/judge pool 类型、3 道 deterministic gate、OfflineHarness、redaction pipeline、PR-only deploy helpers）+ `nanobot evolve` CLI surface（init/report/apply） | M1 | ✅ 已完成 (2026-06-12, PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/6, HEAD f8a496bf) | [`specs/m4-offline-skeleton.md`](specs/m4-offline-skeleton.md) | [`plans/m4-offline-skeleton.md`](plans/m4-offline-skeleton.md) | [`retros/m4-offline-skeleton.md`](retros/m4-offline-skeleton.md) |
-| **M5** | 接入外部 Darwinian Evolver CLI + AGPL 许可隔离 + PR-only 部署 + 完整 5 道闸门 | M4 | 待启动 | `specs/m5-darwinian-evolver.md` | `plans/m5-darwinian-evolver.md` | — |
+| **M5** | 接入外部 Darwinian Evolver CLI + AGPL 许可隔离 + PR-only 部署 + 完整 5 道闸门 | M4 | M5.1 已实现；完整 M5.x 待续 | `specs/m5-darwinian-evolver.md` | `plans/m5-darwinian-evolver.md` | — |
 
 依赖与并行：
 
@@ -72,7 +72,7 @@ M1 Foundations  ──┬──> M2 skill_manage ──> M3 Curator
 - M2: ✅ 已完成 — 详见 [`retros/m2-skill-manage.md`](retros/m2-skill-manage.md)
 - M3: ✅ 已实现 (2026-06-14, branch `feature/m3-curator`) — M3 Curator complete: runtime `/curator` command, default dry-run, forced dry-run guard, deterministic proposals, protect-list, aux guardrails, and safe M2 delete apply path.
 - M4: ✅ 骨架已完成，finish pass 补齐 `evolve init` / `report` / reduced `apply`（完整 §4.4 bundle export / atomic swap / `--force` 留 M5） — 详见 [`retros/m4-offline-skeleton.md`](retros/m4-offline-skeleton.md)
-- M5: *待启动*
+- M5: M5.1 implements the first real offline skill-evolution slice: subprocess-only optimizer adapter, candidate validation, M4 gates 1-3, and PR-only artifacts. Full semantic gate 4, PR-human gate 5, tool evolution, and prompt/template evolution remain deferred M5.x work until separate specs land.
 
 ## 6. 跨 Milestone 的硬性约束
 
@@ -93,4 +93,4 @@ M1 Foundations  ──┬──> M2 skill_manage ──> M3 Curator
 - [x] 4. M2 spec → plan → 实施（2026-06-12 合入 main，PR #4）
 - [x] 5. **M4 离线骨架完成并合入 main（2026-06-12，PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/6）**
 - [x] 6. **M3 Curator 实现（2026-06-14，branch `feature/m3-curator`，待 PR 合入 main）**
-- [ ] 7. **M5 Darwinian Evolver（M4 骨架之上接真实 GEPA + 完整闸门）**
+- [ ] 7. **M5 Darwinian Evolver（M5.1 已实现 first real offline skill-evolution slice；完整语义 gate 4 / PR-human gate 5 / tool + prompt-template evolution 仍待后续 M5.x specs）**

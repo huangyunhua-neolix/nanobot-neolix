@@ -661,6 +661,10 @@ M5+ 启动 retro 时 MUST review 本文件全部未关闭 entry；满足 close c
   in `nanobot/evolve/__init__.py` or `nanobot/evolve/harness.py` ships the
   subprocess-import contract test in the same commit.
 
+## M5.1 retro note — 2026-06-14
+
+M5.1 closes the M4 carry-forward items for subprocess optimizer isolation, nondeterministic metric policy, deterministic gate ordering observation, and gate timeout duty. It does not close the full semantic gate 4 or PR-human gate 5 items; those remain deferred to later M5.x specs.
+
 ### CF-Drift1-a — `GateInternalError` lacks a dedicated exit-code slot in spec §4.6
 **Source**: drift-check round 1 on M4 offline-skeleton (post-t-19)
 **Confidence**: ~50%
