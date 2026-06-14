@@ -92,6 +92,24 @@ def clean_lazy_module_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delitem(sys.modules, "gepa", raising=False)
 
 
+def test_pipeline_build_pipeline_is_deprecated_shim_without_gepa_imports(
+    clean_lazy_module_state: None,
+) -> None:
+    import nanobot.evolve.pipeline as pipeline
+    from nanobot.evolve.exceptions import EvolveExtraNotInstalled
+
+    assert not hasattr(pipeline, "_lazy_import_gepa")
+    with pytest.raises(EvolveExtraNotInstalled, match="subprocess optimizer adapter"):
+        pipeline.build_pipeline(
+            skill_name="demo-skill",
+            judge_pool=None,
+            baseline=None,
+            eval_records=[],
+        )
+    assert "dspy" not in sys.modules
+    assert "gepa" not in sys.modules
+
+
 def test_pipeline_all_three_gates_pass_with_aligned_candidate(
     tmp_path: Path, clean_lazy_module_state: None
 ) -> None:
