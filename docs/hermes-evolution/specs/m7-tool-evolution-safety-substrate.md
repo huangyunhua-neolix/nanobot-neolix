@@ -45,28 +45,45 @@ M7 adds a metadata-only artifact lane to the existing offline evolution flow.
 
 ### Tool contract snapshot
 
-A snapshot captures the current review baseline for registered tools:
+A snapshot captures the current review baseline for registered tools once at offline run start. All candidates in that run compare against this single snapshot; drift discovered in a later run becomes `tool-contract-stale`, not an in-run retry loop.
 
-- `tool_name`: exact registered tool name.
-- `schema`: canonical tool schema from the registry.
-- `schema_hash`: stable hash of the canonical schema.
-- `description_text`: extracted human-facing tool description.
-- `source_kind`: `builtin` or `plugin` when known.
-- `captured_at`: run timestamp stored in the enclosing run manifest, not inside the hash input.
+Snapshot extraction is deterministic:
 
-Snapshots must be byte-stable for the same registry contents. Builtin and plugin ordering must follow the registry's existing stable ordering. Snapshot generation is read-only. `schema_hash` is computed from canonical JSON that excludes timestamps and other run-specific fields.
+1. Read `ToolRegistry.get_definitions()` after normal tool loading.
+2. Normalize each schema to a flat canonical shape:
+   - OpenAI nested shape `{"type": "function", "function": {...}}` becomes the inner `function` object.
+   - Flat schemas are used as-is.
+3. `tool_name` is the canonical schema `name` field.
+4. `description_text` is `schema["description"]` when present, otherwise the empty string.
+5. `parameters_schema` is `schema["parameters"]` when present, otherwise `{}`.
+6. `source_kind` is `mcp` when `tool_name` starts with `mcp_`, `builtin` for all other tools loaded from `nanobot.agent.tools`, and `unknown` only when a future loader cannot classify the source.
+7. Sort snapshots by `(source_kind, tool_name)`.
+8. Compute `schema_hash` from canonical JSON containing only `tool_name`, `description_text`, and `parameters_schema`, serialized with sorted keys and compact separators.
+
+MCP tools are snapshotted per run like builtin tools. If an MCP server changes schema between runs, candidates produced against the older snapshot must fail `tool-contract-stale` on the later run. `captured_at` is stored in the enclosing run manifest, not inside hash input.
+
+Snapshots must be byte-stable for the same registry contents. Snapshot generation is read-only.
 
 ### Metadata candidate
 
-The optimizer may emit candidate metadata artifacts, not patches:
+The optimizer may emit candidate metadata artifacts, not patches. `proposed_schema` is the single source of truth for all candidate wording:
 
 - `tool_name`
 - `baseline_schema_hash`
-- `candidate_description`
-- `candidate_parameter_notes`
+- `proposed_schema`
 - `intended_improvement`
 - `risk_assessment`
-- `proposed_schema`, which must be identical to the baseline schema except for allowed descriptive text fields.
+
+`candidate_description` and `candidate_parameter_notes` are derived during rendering from the diff between baseline schema and `proposed_schema`; optimizer output must not provide independent copies of those fields.
+
+`proposed_schema` may differ from the baseline schema only at these JSON paths:
+
+- `$.description`
+- `$.parameters.description`
+- `$.parameters.properties.<propertyName>.description`
+- `$.parameters.properties.<propertyName>.title`
+
+All other paths must be byte-equal after canonicalization. Changing `type`, `required`, `enum`, `items`, `additionalProperties`, property names, default values, tool name, or adding/removing properties is `tool-schema-mutation`.
 
 Candidates are stored in `tool_metadata_candidates.jsonl`. A human-readable markdown diff is also produced for reviewers.
 
@@ -76,9 +93,24 @@ M7 uses deterministic validation before semantic judging:
 
 1. `tool-not-found`: target tool is absent from the snapshot.
 2. `tool-contract-stale`: candidate baseline hash does not match the current snapshot.
-3. `tool-schema-mutation`: candidate attempts to add, remove, rename, or change parameter schema structure.
-4. `tool-permission-expansion`: candidate wording implies new permission, hidden execution, sandbox bypass, credential access, or broader filesystem/network behavior than the existing tool contract.
-5. `tool-contract-regression`: candidate weakens mandatory narrow-tool guidance or suggests using a broad tool when a narrower one matches.
+3. `tool-schema-mutation`: candidate changes any path outside the descriptive allow-list, or changes a descriptive path to a non-string value.
+4. `tool-permission-expansion`: candidate text matches a denied wording pattern.
+5. `tool-contract-regression`: candidate weakens mandatory narrow-tool guidance by matching a denied broad-tool substitution pattern.
+
+`tool-permission-expansion` is deterministic. It scans every changed descriptive text field case-insensitively after whitespace normalization. A candidate fails if changed text contains any denied pattern below:
+
+- Sandbox/permission bypass: `bypass sandbox`, `ignore sandbox`, `without permission`, `without user approval`, `skip confirmation`, `avoid approval`, `disable safety`, `ignore safety`, `no need to ask`.
+- Hidden execution or concealment: `hide from user`, `silently execute`, `without telling`, `do not mention`, `conceal`, `stealth`.
+- Credential or secret access beyond the current contract: `read secrets`, `extract token`, `steal token`, `dump credentials`, `read .env`, `exfiltrate`.
+- Over-broad filesystem/network behavior: `scan entire filesystem`, `read all files`, `crawl home directory`, `access any website`, `send to external`, `upload to pastebin`.
+
+The deny-list is intentionally conservative. False positives are rejected into review rather than auto-accepted. Future expansions to the deny-list must add regression tests.
+
+`tool-contract-regression` is also deterministic. It rejects changed text that contradicts the mandatory narrow-tool guidance in `nanobot/templates/agent/tool_contract.md`:
+
+- Prefer `exec`/shell for ordinary file reads, file search, content search, or file edits.
+- Treat `exec` as a universal workaround for files, search, web, messages, or schedules.
+- Prefer broad process execution when a narrower structured tool exists.
 
 Only candidates that pass deterministic validation can receive M6 semantic judge evidence. Judge metrics remain gate evidence only and must not be returned to optimizer fitness.
 
@@ -100,8 +132,8 @@ Each accepted candidate run writes:
 4. Deterministic gates reject stale or unsafe candidates.
 5. M6 semantic judge evaluates approved candidates for intent preservation and permission non-expansion.
 6. Harness writes artifacts and manifest paths.
-7. Report and PR body surface metadata review checklist items.
-8. Human reviewer may manually copy approved wording in a later, separate implementation PR; M7 itself does not apply it.
+7. Report and PR body surface metadata review checklist items. The PR body must preserve the existing six top-level sections defined by `nanobot.evolve.deploy.PR_BODY_SECTIONS`; M7 checklist items are added inside `Human review checklist` only.
+8. M7 makes no guarantee about post-review application. A later M7.x must define an applied-vs-proposed audit trail before approved wording can be applied through a managed workflow.
 
 ## Error handling
 
@@ -110,7 +142,7 @@ Each accepted candidate run writes:
 - Hash mismatch records `tool-contract-stale`.
 - Schema mutation records `tool-schema-mutation`.
 - Dangerous wording records `tool-permission-expansion`.
-- Missing external judge falls back to deterministic local scoring unless the run explicitly requires external judging; required external judging fails closed.
+- Missing external judge falls back to deterministic local scoring unless `tool_metadata_require_external_judge=true` is set in the offline run configuration; required external judging fails closed.
 
 All reason strings rendered into reports must pass existing redaction and bounding helpers. These errors are terminal for the candidate but not necessarily for the whole run when another candidate can still pass validation.
 
@@ -144,4 +176,4 @@ All reason strings rendered into reports must pass existing redaction and boundi
 ## Follow-up milestones
 
 - M8 should reuse the same artifact-first pattern for prompt/template evolution, with stricter cache impact reporting.
-- A later M7.x may design a manual application workflow, but only after metadata artifacts and review quality are proven.
+- A later M7.x may design a manual application workflow, but only after metadata artifacts and review quality are proven. That workflow must record which proposed wording was applied, by whom, and in which PR.
