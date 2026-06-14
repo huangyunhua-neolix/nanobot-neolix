@@ -223,6 +223,23 @@ def test_calibrate_record_missing_axis_raises() -> None:
         calibrate([bad], pool)
 
 
+class _ExplodingScorer:
+    def score(self, record: CalibrationRecord) -> RubricScore:
+        raise AssertionError("score should not be called when human axes are missing")
+
+
+def test_calibrate_validates_human_axes_before_scoring() -> None:
+    records = [
+        CalibrationRecord(
+            record_id="bad-rec",
+            human_scores={"process": 1.0, "output": 1.0},
+        )
+    ]
+
+    with pytest.raises(ValueError, match="missing human score"):
+        calibrate(records, _ExplodingScorer())
+
+
 # ---------------------------------------------------------------------------
 # R1 — direct _bin_index boundary pins
 # ---------------------------------------------------------------------------

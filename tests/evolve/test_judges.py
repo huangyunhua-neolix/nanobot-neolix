@@ -6,6 +6,7 @@ from pydantic.alias_generators import to_camel
 
 from nanobot.evolve._base import EvolveBase
 from nanobot.evolve.judges import JudgeConfig, JudgeConsensus, JudgePool, JudgeResult
+from nanobot.evolve.judges.calibration import CalibrationRecord
 from nanobot.evolve.schemas import RubricScore
 
 
@@ -146,6 +147,42 @@ def test_judge_consensus_verdict_split_and_single() -> None:
 def test_judge_pool_explicit_min_quorum_equals_pool_size() -> None:
     pool = JudgePool(judges=_make_three(), min_quorum=3)
     assert pool.effective_min_quorum == 3
+
+
+def test_judge_pool_score_returns_deterministic_rubric_score() -> None:
+    pool = JudgePool(judges=[JudgeConfig(model="local/deterministic")])
+    record = CalibrationRecord(
+        record_id="rec-1",
+        human_scores={"process": 0.8, "output": 0.7, "token": 0.9},
+        input_payload={
+            "baselineBody": "Use concise answers.",
+            "candidateBody": "Use concise answers. Include one concrete example.",
+            "expectedRedacted": "The answer includes a concrete example.",
+        },
+    )
+
+    score = pool.score(record)
+
+    assert score.process == 1.0
+    assert score.output == 1.0
+    assert score.token == 0.9
+    assert score.aggregate == 0.98
+
+
+def test_judge_pool_score_penalizes_empty_candidate() -> None:
+    pool = JudgePool(judges=[JudgeConfig(model="local/deterministic")])
+    record = CalibrationRecord(
+        record_id="rec-2",
+        human_scores={"process": 0.0, "output": 0.0, "token": 0.0},
+        input_payload={"baselineBody": "Use concise answers.", "candidateBody": ""},
+    )
+
+    score = pool.score(record)
+
+    assert score.process == 0.0
+    assert score.output == 0.0
+    assert score.token == 0.0
+    assert score.aggregate == 0.0
 
 
 def test_judge_pool_config_inherits_evolve_base_keys() -> None:
