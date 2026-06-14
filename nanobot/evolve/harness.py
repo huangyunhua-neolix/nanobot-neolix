@@ -8,7 +8,9 @@ will layer judges, GEPA selection, and PR application on top.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
+import importlib.metadata
 import json
 import re
 import time
@@ -19,10 +21,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
+from pydantic import ValidationError
+
+from nanobot.evolve.deploy import assemble_pr_body
 from nanobot.evolve.exceptions import ConfigError
 from nanobot.evolve.gates import GATES, Gate, GateResult
-from nanobot.evolve.optimizer.schemas import OptimizerCandidate, OptimizerResult
+from nanobot.evolve.optimizer.adapter import OptimizerAdapter
+from nanobot.evolve.optimizer.schemas import OptimizerCandidate, OptimizerInput, OptimizerResult
 from nanobot.evolve.privacy.redact import redact
+from nanobot.evolve.report import render_run_report
 from nanobot.evolve.schemas import (
     Baseline,
     Candidate,
@@ -83,6 +90,10 @@ def _render_skill(frontmatter: SkillFrontmatter, body: str) -> str:
     lines.append("---")
     lines.append(body.rstrip() + "\n")
     return "\n".join(lines)
+
+
+def _normalize_lf(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -207,19 +218,22 @@ class OfflineHarness:
         }
         frontmatter = SkillFrontmatter.model_validate(merged_frontmatter)
         skill_md_content = _render_skill(frontmatter, body)
+        size_metrics = {
+            "lines": len(skill_md_content.splitlines()),
+            # TODO(Task 8): replace placeholder pass counts when real offline eval
+            # scoring is wired into the harness; gate 1 currently requires them.
+            "tier_c_pass": 5,
+            "tier_c_total": 5,
+            "tier_a_pass": 1,
+            "tier_a_total": 1,
+        }
         return Candidate(
             skill_name=optimizer_candidate.skill_name,
             skill_md_content=skill_md_content,
             frontmatter=frontmatter,
             body_md=body,
             cache_key_hash=_sha256_text(frontmatter.description),
-            size_metrics={
-                "lines": len(skill_md_content.splitlines()),
-                "tier_c_pass": 5,
-                "tier_c_total": 5,
-                "tier_a_pass": 1,
-                "tier_a_total": 1,
-            },
+            size_metrics=size_metrics,
             content_hash=_sha256_text(skill_md_content),
             parent_baseline_hash=baseline.content_hash,
             gepa_iteration=optimizer_candidate.iteration,
@@ -254,6 +268,189 @@ class OfflineHarness:
                 _sha256_text(candidate.skill_md_content),
             ),
         )
+
+    def _build_diff_patch(self, baseline: Baseline, promoted: Candidate | None) -> str:
+        """Return a deterministic unified diff for the promoted candidate."""
+        if promoted is None:
+            return ""
+        skill_path = f"skills/agent/{baseline.skill_name}/SKILL.md"
+        diff_lines = difflib.unified_diff(
+            _normalize_lf(baseline.skill_md_content).splitlines(),
+            _normalize_lf(promoted.skill_md_content).splitlines(),
+            fromfile=f"a/{skill_path}",
+            tofile=f"b/{skill_path}",
+            lineterm="",
+        )
+        patch = "\n".join(diff_lines)
+        return patch + ("\n" if patch else "")
+
+    def _empty_judge_summary(self, record_count: int) -> JudgeSummary:
+        """Return a zeroed deterministic judge summary for offline runs."""
+        return JudgeSummary(
+            record_count=record_count,
+            median_aggregate=0.0,
+            median_process=0.0,
+            median_output=0.0,
+            median_token=0.0,
+            consensus_split_count=0,
+        )
+
+    def _nanobot_version(self) -> str:
+        """Return the installed nanobot-ai version, or 0.0.0 in editable test runs."""
+        try:
+            return importlib.metadata.version("nanobot-ai")
+        except importlib.metadata.PackageNotFoundError:
+            return "0.0.0"
+
+    def run(
+        self,
+        *,
+        skill_name: str,
+        optimizer_command: list[str],
+        tiers: list[str],
+        max_candidates: int = 8,
+        optimizer_timeout_seconds: int = 300,
+    ) -> RunManifest:
+        """Execute the external optimizer and write deterministic offline artifacts."""
+        started_at = datetime.now(timezone.utc)
+        run_id = self._generate_run_id(skill_name)
+        run_dir = self._workspace / "evals" / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        optimizer_dir = run_dir / "optimizer"
+
+        baseline = self._load_baseline_skill(skill_name)
+        eval_bundle = self._load_eval_records(skill_name, tiers, run_id)
+        optimizer_input = OptimizerInput(
+            run_id=run_id,
+            skill_name=skill_name,
+            baseline_hash=baseline.content_hash,
+            baseline_skill_md_redacted=redact(baseline.skill_md_content).text,
+            eval_records_path=str(eval_bundle),
+            output_dir=str(optimizer_dir),
+            max_candidates=max_candidates,
+            timeout_seconds=optimizer_timeout_seconds,
+            seed=123456789,
+        )
+
+        subprocess_start = time.perf_counter()
+        optimizer_result = OptimizerAdapter(optimizer_command=optimizer_command).run(
+            optimizer_input
+        )
+        subprocess_runtime_ms = int((time.perf_counter() - subprocess_start) * 1000)
+
+        validation_failures: list[ValidationFailure] = []
+        valid_candidates: list[Candidate] = []
+        seen_hashes: set[str] = set()
+        if not (optimizer_result.error and optimizer_result.error.code == "no_improvement"):
+            for index, optimizer_candidate in enumerate(
+                self._rank_candidates(optimizer_result)[:max_candidates]
+            ):
+                try:
+                    candidate = self._candidate_from_optimizer(
+                        optimizer_candidate, baseline, run_id, optimizer_result
+                    )
+                except ValidationError:
+                    validation_failures.append(
+                        ValidationFailure(
+                            candidate_index=index,
+                            candidate_hash="<invalid>",
+                            reason_code="frontmatter-invalid",
+                            reason="frontmatter-invalid",
+                        )
+                    )
+                    continue
+
+                reason = self._validate_candidate(candidate, baseline, seen_hashes=seen_hashes)
+                if reason is not None:
+                    validation_failures.append(
+                        ValidationFailure(
+                            candidate_index=index,
+                            candidate_hash=candidate.content_hash,
+                            reason_code=reason,
+                            reason=reason,
+                        )
+                    )
+                    continue
+                seen_hashes.add(candidate.content_hash)
+                valid_candidates.append(candidate)
+
+        gate_traces: dict[str, list[GateResult]] = {}
+        promoted: Candidate | None = None
+        for candidate in valid_candidates:
+            trace = self._run_gates(candidate, baseline)
+            gate_traces[candidate.content_hash] = trace
+            if all(result.verdict == "pass" for result in trace):
+                promoted = candidate
+                break
+
+        if optimizer_result.error and optimizer_result.error.code == "no_improvement":
+            final_status = "no_improvement"
+        elif not valid_candidates and validation_failures:
+            final_status = "rejected_by_validation"
+        else:
+            final_status = self._compute_final_status(
+                promoted, valid_candidates, baseline, gate_traces=gate_traces
+            )
+
+        candidates_dir = run_dir / "candidates"
+        for candidate in valid_candidates:
+            candidates_dir.mkdir(parents=True, exist_ok=True)
+            (candidates_dir / f"{candidate.content_hash}.SKILL.md").write_text(
+                candidate.skill_md_content, encoding="utf-8"
+            )
+
+        artifact_paths = {
+            "diff": "diff.patch",
+            "eval_bundle": "optimizer/eval_bundle.ndjson",
+            "optimizer_input": "optimizer/optimizer_input.json",
+            "optimizer_output": "optimizer/optimizer_output.json",
+            "optimizer_stderr": "optimizer/stderr.txt",
+            "optimizer_stdout": "optimizer/stdout.txt",
+            "pr_body": "pr_body.md",
+            "report": "report.md",
+        }
+        gate_verdicts = [
+            result
+            for candidate in valid_candidates
+            for result in gate_traces.get(candidate.content_hash, [])
+        ]
+        finished_at = datetime.now(timezone.utc)
+        manifest = RunManifest(
+            run_id=run_id,
+            started_at=started_at,
+            finished_at=finished_at,
+            nanobot_version=self._nanobot_version(),
+            evolve_extra_version={"optimizer": "external"},
+            skill_name=skill_name,
+            baseline_hash=baseline.content_hash,
+            candidate_hashes=[candidate.content_hash for candidate in valid_candidates],
+            promoted_candidate_hash=promoted.content_hash if promoted is not None else None,
+            gate_verdicts=gate_verdicts,
+            judge_summary=self._empty_judge_summary(len(tiers)),
+            final_status=final_status,
+            tiers_used=tiers,  # type: ignore[arg-type]
+            record_count_per_tier={tier: 1 for tier in tiers},
+            judge_pool_health={},
+            optimizer_name=optimizer_result.optimizer_name,
+            optimizer_version=optimizer_result.optimizer_version,
+            optimizer_seed=optimizer_result.seed,
+            validation_failures=validation_failures,
+            subprocess_runtime_ms=subprocess_runtime_ms,
+            artifact_paths=artifact_paths,
+        )
+
+        (run_dir / "diff.patch").write_text(
+            self._build_diff_patch(baseline, promoted), encoding="utf-8"
+        )
+        (run_dir / "pr_body.md").write_text(
+            assemble_pr_body(manifest, gate_verdicts), encoding="utf-8"
+        )
+        (run_dir / "report.md").write_text(
+            render_run_report(manifest, gate_traces, optimizer_result, validation_failures),
+            encoding="utf-8",
+        )
+        dump_manifest(run_dir / "manifest.json", manifest)
+        return manifest
 
     # --- gate execution --------------------------------------------------
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,11 @@ def _write_skill(workspace: Path, name: str, body: str = "Use concise answers.")
     path = skill_dir / "SKILL.md"
     path.write_text(_skill_markdown(name, body), encoding="utf-8")
     return path
+
+
+def _write_optimizer_script(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+    path.chmod(0o755)
 
 
 def _skill_markdown(name: str, body: str = "Use concise answers.") -> str:
@@ -48,6 +54,193 @@ def _optimizer_candidate(markdown: str, *, skill_name: str = "demo-skill") -> Op
         iteration=2,
         rationale="better",
     )
+
+
+def test_harness_run_promotes_candidate_and_writes_artifacts(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "optimizer.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'transform-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'adds example instruction'
+    }]
+}))
+""".lstrip(),
+    )
+    harness = OfflineHarness(workspace=tmp_path)
+
+    manifest = harness.run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+        max_candidates=8,
+        optimizer_timeout_seconds=5,
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    assert manifest.final_status == "promoted_to_pr"
+    assert (run_dir / "manifest.json").exists()
+    assert (run_dir / "report.md").exists()
+    assert (run_dir / "diff.patch").exists()
+    assert (run_dir / "pr_body.md").exists()
+    assert (run_dir / "optimizer" / "optimizer_input.json").exists()
+    assert (run_dir / "optimizer" / "optimizer_output.json").exists()
+    assert (run_dir / "optimizer" / "stdout.txt").exists()
+    assert (run_dir / "optimizer" / "stderr.txt").exists()
+    assert (run_dir / "optimizer" / "eval_bundle.ndjson").exists()
+    patch = (run_dir / "diff.patch").read_text(encoding="utf-8")
+    assert "--- a/skills/agent/demo-skill/SKILL.md" in patch
+    assert "+++ b/skills/agent/demo-skill/SKILL.md" in patch
+    assert manifest.artifact_paths == {
+        "diff": "diff.patch",
+        "eval_bundle": "optimizer/eval_bundle.ndjson",
+        "optimizer_input": "optimizer/optimizer_input.json",
+        "optimizer_output": "optimizer/optimizer_output.json",
+        "optimizer_stderr": "optimizer/stderr.txt",
+        "optimizer_stdout": "optimizer/stdout.txt",
+        "pr_body": "pr_body.md",
+        "report": "report.md",
+    }
+    assert "Use concise answers." in (
+        tmp_path / "skills" / "agent" / "demo-skill" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_harness_run_all_invalid_candidates_is_rejected_by_validation(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "bad_candidate.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'bad-wrapper',
+    'error': None,
+    'candidates': [{
+        'skillName': 'other-skill',
+        'skillMdContent': '---\\nname: other-skill\\n---\\nBad.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'bad'
+    }]
+}))
+""".lstrip(),
+    )
+    harness = OfflineHarness(workspace=tmp_path)
+
+    manifest = harness.run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    assert manifest.final_status == "rejected_by_validation"
+    assert manifest.validation_failures[0].candidate_index == 0
+    assert manifest.validation_failures[0].reason_code == "skill-name-mismatch"
+    assert manifest.candidate_hashes == []
+    assert manifest.promoted_candidate_hash is None
+
+
+def test_harness_run_no_improvement_status(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "no_improvement.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'quiet-wrapper',
+    'error': {'code': 'no_improvement', 'message': 'No candidate improved.'},
+    'candidates': []
+}))
+""".lstrip(),
+    )
+    harness = OfflineHarness(workspace=tmp_path)
+
+    manifest = harness.run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    assert manifest.final_status == "no_improvement"
+    assert manifest.candidate_hashes == []
+    assert manifest.promoted_candidate_hash is None
+
+
+def test_harness_run_records_malformed_frontmatter_validation_failure(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "malformed_frontmatter.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'bad-frontmatter-wrapper',
+    'error': None,
+    'candidates': [{
+        'skillName': 'demo-skill',
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\ncreated_at: not-a-date\\n---\\nBad date.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'bad frontmatter'
+    }]
+}))
+""".lstrip(),
+    )
+    harness = OfflineHarness(workspace=tmp_path)
+
+    manifest = harness.run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    assert manifest.final_status == "rejected_by_validation"
+    assert manifest.validation_failures[0].candidate_index == 0
+    assert manifest.validation_failures[0].candidate_hash == "<invalid>"
+    assert manifest.validation_failures[0].reason_code == "frontmatter-invalid"
+    assert manifest.validation_failures[0].reason == "frontmatter-invalid"
 
 
 def test_generate_run_id_scans_existing_suffixes(tmp_path: Path) -> None:
