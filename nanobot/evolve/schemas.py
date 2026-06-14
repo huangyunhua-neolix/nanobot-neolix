@@ -82,6 +82,12 @@ class ValidationFailure(EvolveBase):
     reason: str
 
 
+class DiffStats(EvolveBase):
+    files_changed: int = Field(default=0, ge=0)
+    insertions: int = Field(default=0, ge=0)
+    deletions: int = Field(default=0, ge=0)
+
+
 class RunManifest(FrozenEvolveBase):
     run_id: str
     started_at: datetime
@@ -110,6 +116,8 @@ class RunManifest(FrozenEvolveBase):
     validation_failures: list[ValidationFailure] = Field(default_factory=list)
     subprocess_runtime_ms: int | None = None
     artifact_paths: dict[str, str] = Field(default_factory=dict)
+    diff_stats: DiffStats | None = None
+    requires_human_approval: bool = False
 
 
 def assert_odd_pool_size(n: int, *, context: str) -> None:

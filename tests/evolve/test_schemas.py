@@ -9,6 +9,7 @@ from nanobot.evolve.gates import GateResult
 from nanobot.evolve.harness import RunManifest as HarnessRunManifest
 from nanobot.evolve.harness import load_manifest as harness_load_manifest
 from nanobot.evolve.schemas import (
+    DiffStats,
     JudgeSummary,
     RubricScore,
     RubricWeights,
@@ -106,6 +107,65 @@ def _judge_summary_for_m5_schema_tests() -> JudgeSummary:
         median_token=0.0,
         consensus_split_count=0,
     )
+
+
+def _judge_summary() -> JudgeSummary:
+    return JudgeSummary(
+        record_count=2,
+        median_aggregate=0.0,
+        median_process=0.0,
+        median_output=0.0,
+        median_token=0.0,
+        consensus_split_count=0,
+    )
+
+
+def _manifest_payload() -> dict[str, object]:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return {
+        "run_id": "run-1",
+        "started_at": now,
+        "finished_at": now,
+        "nanobot_version": "0.0.0",
+        "evolve_extra_version": {"optimizer": "fake"},
+        "skill_name": "demo-skill",
+        "baseline_hash": "basehash",
+        "candidate_hashes": ["candhash"],
+        "promoted_candidate_hash": "candhash",
+        "gate_verdicts": [],
+        "judge_summary": _judge_summary(),
+        "final_status": "promoted_to_pr",
+        "tiers_used": ["A", "C"],
+        "record_count_per_tier": {"A": 1, "C": 5},
+        "judge_pool_health": {},
+    }
+
+
+def test_diff_stats_model_accepts_patch_counts() -> None:
+    stats = DiffStats(files_changed=1, insertions=3, deletions=2)
+
+    assert stats.files_changed == 1
+    assert stats.insertions == 3
+    assert stats.deletions == 2
+
+
+def test_manifest_defaults_m5_completion_fields_for_m5_1_compatibility() -> None:
+    manifest = RunManifest(**_manifest_payload())
+
+    assert manifest.diff_stats is None
+    assert manifest.requires_human_approval is False
+
+
+def test_manifest_accepts_diff_stats_and_human_review_flag() -> None:
+    manifest = RunManifest(
+        **_manifest_payload(),
+        diff_stats=DiffStats(files_changed=1, insertions=3, deletions=2),
+        requires_human_approval=True,
+    )
+
+    assert manifest.diff_stats is not None
+    assert manifest.diff_stats.insertions == 3
+    assert manifest.requires_human_approval is True
 
 
 def test_harness_reexports_run_manifest_for_m5_compatibility() -> None:
