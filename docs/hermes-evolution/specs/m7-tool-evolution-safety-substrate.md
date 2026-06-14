@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft approved for metadata-only M7 scope.
+Implemented, pending PR review and merge.
 
 ## Goal
 
