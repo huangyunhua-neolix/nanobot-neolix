@@ -46,6 +46,7 @@ from nanobot.evolve.exceptions import (
     GateInternalError,
     JudgeError,
     ManifestPrivacyViolation,
+    OptimizerRunError,
 )
 
 # Exit codes — normative per spec §4.6 (drift-R1 renumber).
@@ -221,14 +222,7 @@ def run_init(args: argparse.Namespace) -> int:
 
 
 def run_run(args: argparse.Namespace) -> int:
-    """Validate the workspace and dispatch a harness run.
-
-    Spec carve-out for t-16: the full GEPA/judge pipeline requires fixtures
-    (LLM keys, DSPy setup) that the CLI test layer cannot supply. We MUST
-    minimally invoke ``nanobot.evolve.harness`` so the workspace path is
-    validated through the same ``ConfigError`` channel the harness uses
-    everywhere else.
-    """
+    """Run the M5 external optimizer harness and print artifact locations."""
     # Local import keeps the CLI import path light and avoids dragging the
     # full harness import graph (DSPy, judges, gates) into ``--help``.
     from nanobot.evolve.harness import OfflineHarness
@@ -237,10 +231,20 @@ def run_run(args: argparse.Namespace) -> int:
     if not workspace.exists():
         raise ConfigError(f"workspace does not exist: {workspace}")
 
-    # OfflineHarness.__init__ itself raises ConfigError for non-directory
-    # workspaces; this gives us the validation hook the spec demands without
-    # requiring a real GEPA run.
-    OfflineHarness(workspace=workspace)
+    tiers = [tier.strip() for tier in args.tiers.split(",") if tier.strip()]
+    manifest = OfflineHarness(workspace=workspace).run(
+        skill_name=args.skill,
+        optimizer_command=args.optimizer_command,
+        tiers=tiers,
+        max_candidates=args.max_candidates,
+        optimizer_timeout_seconds=args.optimizer_timeout_seconds,
+    )
+    run_dir = workspace / "evals" / "runs" / manifest.run_id
+    print(f"Run: {manifest.run_id}")
+    print(f"Skill: {manifest.skill_name}")
+    print(f"Status: {manifest.final_status}")
+    print(f"Manifest: {run_dir / 'manifest.json'}")
+    print(f"Report: {run_dir / 'report.md'}")
     return EXIT_OK
 
 
@@ -316,14 +320,32 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Comma-separated eval tiers to run (default: A,C).",
     )
     run_p.add_argument(
-        "--judge-pool",
-        default=None,
-        help="Optional judge-pool identifier override.",
-    )
-    run_p.add_argument(
         "--workspace",
         required=True,
         help="Workspace directory (required).",
+    )
+    run_p.add_argument(
+        "--skill",
+        required=True,
+        help="Skill name to evolve (required).",
+    )
+    run_p.add_argument(
+        "--max-candidates",
+        type=int,
+        default=8,
+        help="Maximum optimizer candidates to evaluate (default: 8).",
+    )
+    run_p.add_argument(
+        "--optimizer-timeout-seconds",
+        type=int,
+        default=600,
+        help="Optimizer command timeout in seconds (default: 600).",
+    )
+    run_p.add_argument(
+        "--optimizer-command",
+        required=True,
+        nargs=argparse.REMAINDER,
+        help="Optimizer command and arguments (required; must appear last).",
     )
     run_p.set_defaults(func=run_run)
 
@@ -393,6 +415,9 @@ def dispatch(args: argparse.Namespace) -> int:
         # MUST precede ConfigError / ValueError (shared MRO via ValueError).
         _print_err("apply terminal", exc)
         return EXIT_APPLY_TERMINAL
+    except OptimizerRunError as exc:
+        _print_err("optimizer", exc)
+        return EXIT_RUNTIME
     except GateInternalError as exc:
         # Spec §4.6 has no dedicated slot for GateInternalError; map to
         # EXIT_CONFIG as a precondition-violation flavor pending spec

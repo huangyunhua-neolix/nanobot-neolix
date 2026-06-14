@@ -27,6 +27,7 @@ from nanobot.evolve.exceptions import (
     GateInternalError,
     JudgeError,
     ManifestPrivacyViolation,
+    OptimizerRunError,
 )
 from nanobot.evolve.gates import GateResult
 from nanobot.evolve.harness import JudgeSummary, RunManifest, dump_manifest
@@ -71,16 +72,65 @@ def test_run_help_shows_flags(capsys):
         parser.parse_args(["evolve", "run", "--help"])
     out = capsys.readouterr().out
     assert "--tiers" in out
-    assert "--judge-pool" in out
     assert "--workspace" in out
+    assert "--skill" in out
+    assert "--max-candidates" in out
+    assert "--optimizer-timeout-seconds" in out
+    assert "--optimizer-command" in out
 
 
 def test_run_tiers_default_is_a_c():
     parser = _build_parser()
-    args = parser.parse_args(["evolve", "run", "--workspace", "/tmp"])
+    args = parser.parse_args(
+        [
+            "evolve",
+            "run",
+            "--workspace",
+            "/tmp",
+            "--skill",
+            "demo-skill",
+            "--optimizer-command",
+            "python",
+        ]
+    )
     assert args.tiers == "A,C"
-    assert args.judge_pool is None
     assert args.workspace == "/tmp"
+
+
+def test_run_requires_skill_for_m5() -> None:
+    parser = _build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["evolve", "run", "--workspace", "/tmp/ws", "--optimizer-command", "python"]
+        )
+
+
+def test_run_requires_optimizer_command_for_m5() -> None:
+    parser = _build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["evolve", "run", "--workspace", "/tmp/ws", "--skill", "demo-skill"])
+
+
+def test_run_accepts_optimizer_command_remainder() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(
+        [
+            "evolve",
+            "run",
+            "--workspace",
+            "/tmp/ws",
+            "--skill",
+            "demo-skill",
+            "--optimizer-command",
+            "python",
+            "optimizer.py",
+        ]
+    )
+
+    assert args.skill == "demo-skill"
+    assert args.optimizer_command == ["python", "optimizer.py"]
+    assert args.max_candidates == 8
+    assert args.optimizer_timeout_seconds == 600
 
 
 def test_run_requires_workspace():
@@ -175,6 +225,13 @@ def test_dispatch_environment_error_maps_to_config():
 def test_dispatch_bare_runtime_error_maps_to_1():
     def boom(_a):
         raise RuntimeError("unexpected")
+
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == 1
+
+
+def test_dispatch_optimizer_run_error_maps_to_runtime() -> None:
+    def boom(_a):
+        raise OptimizerRunError("optimizer failed", run_dir="/tmp/run", exit_code=17)
 
     assert evolve_cli.dispatch(_ns_with_handler(boom)) == 1
 
@@ -354,16 +411,64 @@ def test_dispatch_missing_handler_raises_config_error_exit():
 def test_run_run_missing_workspace_raises_config_error(tmp_path):
     parser = _build_parser()
     missing = tmp_path / "does-not-exist"
-    args = parser.parse_args(["evolve", "run", "--workspace", str(missing)])
+    args = parser.parse_args(
+        [
+            "evolve",
+            "run",
+            "--workspace",
+            str(missing),
+            "--skill",
+            "demo-skill",
+            "--optimizer-command",
+            "python",
+        ]
+    )
     rc = evolve_cli.dispatch(args)
     assert rc == 2  # ConfigError exit code
 
 
-def test_run_run_valid_workspace_returns_zero(tmp_path):
-    parser = _build_parser()
-    args = parser.parse_args(["evolve", "run", "--workspace", str(tmp_path)])
-    rc = evolve_cli.dispatch(args)
-    assert rc == 0
+def test_run_run_prints_manifest_and_report(
+    tmp_path: Path,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    class StubManifest:
+        run_id = "run-1"
+        skill_name = "demo-skill"
+        final_status = "rejected_by_validation"
+        artifact_paths = {"report": "report.md"}
+
+    class StubHarness:
+        def __init__(self, *, workspace: Path) -> None:
+            self.workspace = workspace
+
+        def run(self, **kwargs):
+            assert kwargs["skill_name"] == "demo-skill"
+            assert kwargs["optimizer_command"] == ["python", "optimizer.py"]
+            assert kwargs["tiers"] == ["A", "C"]
+            assert kwargs["max_candidates"] == 8
+            assert kwargs["optimizer_timeout_seconds"] == 600
+            return StubManifest()
+
+    monkeypatch.setattr("nanobot.evolve.harness.OfflineHarness", StubHarness)
+    args = argparse.Namespace(
+        workspace=str(workspace),
+        skill="demo-skill",
+        optimizer_command=["python", "optimizer.py"],
+        tiers="A,C",
+        max_candidates=8,
+        optimizer_timeout_seconds=600,
+    )
+
+    assert evolve_cli.run_run(args) == 0
+    out = capsys.readouterr().out
+    assert "Run: run-1" in out
+    assert "Status: rejected_by_validation" in out
+    assert f"Manifest: {workspace / 'evals' / 'runs' / 'run-1' / 'manifest.json'}" in out
+    assert f"Report: {workspace / 'evals' / 'runs' / 'run-1' / 'report.md'}" in out
 
 
 def test_run_init_default_workspace_can_be_parsed():
@@ -603,19 +708,20 @@ def test_typer_shim_run_missing_workspace_returns_config_exit(tmp_path):
 
     missing = tmp_path / "nope"
     runner = CliRunner()
-    result = runner.invoke(app, ["evolve", "run", "--workspace", str(missing)])
+    result = runner.invoke(
+        app,
+        [
+            "evolve",
+            "run",
+            "--workspace",
+            str(missing),
+            "--skill",
+            "demo-skill",
+            "--optimizer-command",
+            "python",
+        ],
+    )
     assert result.exit_code == evolve_cli.EXIT_CONFIG
-
-
-def test_typer_shim_run_valid_workspace_returns_zero(tmp_path):
-    """End-to-end: valid workspace dir → run_run → exit 0."""
-    from typer.testing import CliRunner
-
-    from nanobot.cli.commands import app
-
-    runner = CliRunner()
-    result = runner.invoke(app, ["evolve", "run", "--workspace", str(tmp_path)])
-    assert result.exit_code == evolve_cli.EXIT_OK
 
 
 # ---------------------------------------------------------------------------
