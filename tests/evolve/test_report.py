@@ -88,6 +88,7 @@ def test_render_run_report_has_stable_sections() -> None:
     assert headers == [
         "## Summary",
         "## Optimizer",
+        "## Review state",
         "## Validation failures",
         "## Gates",
         "## Artifacts",

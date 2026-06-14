@@ -1,10 +1,13 @@
 from datetime import datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field, computed_field, field_validator, model_validator
 
 from nanobot.evolve._base import EvolveBase, FrozenEvolveBase
 from nanobot.evolve.schemas import RubricScore, RubricWeights, assert_odd_pool_size
+
+if TYPE_CHECKING:
+    from nanobot.evolve.judges.calibration import CalibrationRecord
 
 
 class JudgeConfig(EvolveBase):
@@ -54,3 +57,49 @@ class JudgePool(FrozenEvolveBase):
         if self.min_quorum is not None:
             return self.min_quorum
         return (len(self.judges) // 2) + 1
+
+    def score(self, record: "CalibrationRecord") -> RubricScore:
+        """Return a deterministic local rubric score for offline gate checks.
+
+        Provider-backed judges can replace this path in a later milestone. This
+        default scorer is intentionally simple and dependency-free so calibration
+        and gate 4 have a concrete public entry point now.
+        """
+        candidate_body = str(record.input_payload.get("candidateBody", "")).strip()
+        baseline_body = str(record.input_payload.get("baselineBody", "")).strip()
+        expected = str(record.input_payload.get("expectedRedacted", "")).strip()
+        if not candidate_body:
+            return RubricScore(process=0.0, output=0.0, token=0.0, aggregate=0.0)
+
+        process = 1.0 if "TODO" not in candidate_body and "TBD" not in candidate_body else 0.5
+        output = 1.0
+        expected_terms = {
+            token.strip(".,:;!?()[]{}").lower()
+            for token in expected.split()
+            if len(token.strip(".,:;!?()[]{}")) >= 5
+        }
+        candidate_terms = {
+            token.strip(".,:;!?()[]{}").lower()
+            for token in candidate_body.split()
+            if len(token.strip(".,:;!?()[]{}")) >= 5
+        }
+        if (
+            expected
+            and expected.lower() not in candidate_body.lower()
+            and expected_terms.isdisjoint(candidate_terms)
+        ):
+            output = 0.8
+        if baseline_body and candidate_body == baseline_body:
+            output = min(output, 0.7)
+        token = 0.9 if len(candidate_body) >= len(baseline_body) else 0.8
+        aggregate = (
+            process * self.weights.process
+            + output * self.weights.output
+            + token * self.weights.token
+        )
+        return RubricScore(
+            process=round(process, 6),
+            output=round(output, 6),
+            token=round(token, 6),
+            aggregate=round(aggregate, 6),
+        )

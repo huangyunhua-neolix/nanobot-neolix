@@ -34,8 +34,23 @@ def render_run_report(
         f"Version: `{optimizer_result.optimizer_version or '<none>'}`",
         f"Seed: `{optimizer_result.seed if optimizer_result.seed is not None else '<none>'}`",
         "",
-        "## Validation failures",
+        "## Review state",
+        f"Human approval required: `{str(manifest.requires_human_approval).lower()}`",
     ]
+    if manifest.diff_stats is not None:
+        lines.extend(
+            [
+                "",
+                "## Diff stats",
+                f"Files changed: `{manifest.diff_stats.files_changed}`",
+                f"Insertions: `{manifest.diff_stats.insertions}`",
+                f"Deletions: `{manifest.diff_stats.deletions}`",
+            ]
+        )
+    lines.extend([
+        "",
+        "## Validation failures",
+    ])
     if not validation_failures:
         lines.append("None")
     else:

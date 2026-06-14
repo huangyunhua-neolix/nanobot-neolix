@@ -684,3 +684,15 @@ M5.1 closes the M4 carry-forward items for subprocess optimizer isolation, nonde
   documents the `GateInternalError → EXIT_CONFIG` mapping inline in the
   table footnote, or adds a slot 9 (`EXIT_GATE_INTERNAL`) and the CLI arm
   is re-pointed in the same commit.
+
+## M5 completion closure note (2026-06-14)
+
+M5 completion closes the carry-forward items for:
+
+- real `JudgePool.score(record)` scoring entry point used by calibration and semantic gate 4;
+- semantic-fidelity gate 4 as a promotion-blocking gate;
+- human-review readiness gate 5 as a local PR-readiness gate;
+- real patch-derived diff stats in generated PR bodies;
+- real eval-bundle-derived record counts in manifests and reports.
+
+M5 completion intentionally does not close tool-description evolution or system-prompt/template evolution. Those surfaces are no longer treated as unfinished M5 work; they are future independent milestones because they require separate safety, cache, and review designs.

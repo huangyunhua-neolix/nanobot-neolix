@@ -33,7 +33,9 @@ from nanobot.evolve.report import render_run_report
 from nanobot.evolve.schemas import (
     Baseline,
     Candidate,
+    DiffStats,
     JudgeSummary,
+    ReviewReadiness,
     RunManifest,
     SkillContent,
     SkillFrontmatter,
@@ -66,6 +68,18 @@ _SAFE_REASON_MAX_CHARS = 300
 _PR_BODY_FORBIDDEN_REASON_CHARS = frozenset(
     {"\n", "\r", "\u2028", "\u2029", "\u0085", "\x00"}
 )
+_REVIEW_ARTIFACT_PATHS: dict[str, str] = {
+    "manifest": "manifest.json",
+    "report": "report.md",
+    "diff": "diff.patch",
+    "pr_body": "pr_body.md",
+    "optimizer_input": "optimizer/optimizer_input.json",
+    "optimizer_output": "optimizer/optimizer_output.json",
+}
+
+
+def _review_artifact_plan() -> dict[str, str]:
+    return dict(_REVIEW_ARTIFACT_PATHS)
 
 
 def _sha256_text(text: str) -> str:
@@ -98,6 +112,31 @@ def _render_skill(frontmatter: SkillFrontmatter, body: str) -> str:
 
 def _normalize_lf(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _count_eval_bundle_records(bundle_path: Path) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for raw in bundle_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        row = json.loads(raw)
+        tier = str(row["tier"])
+        counts[tier] = counts.get(tier, 0) + 1
+    return counts
+
+
+def _diff_stats_from_patch(patch: str) -> DiffStats:
+    files_changed = 0
+    insertions = 0
+    deletions = 0
+    for line in patch.splitlines():
+        if line.startswith("+++ b/"):
+            files_changed += 1
+        elif line.startswith("+") and not line.startswith("+++"):
+            insertions += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            deletions += 1
+    return DiffStats(files_changed=files_changed, insertions=insertions, deletions=deletions)
 
 
 def _safe_single_line_reason(text: str, *, max_chars: int = _SAFE_REASON_MAX_CHARS) -> str:
@@ -202,14 +241,20 @@ class OfflineHarness:
 
         lines: list[str] = []
         for tier in tiers:
-            record = {
-                "recordId": f"{skill_name}-{tier}",
-                "tier": tier,
-                "promptRedacted": redact(f"Evaluate {skill_name} tier {tier} prompt.").text,
-                "expectedRedacted": redact(f"Expected {skill_name} tier {tier} answer.").text,
-                "metadata": {"skillName": skill_name},
-            }
-            lines.append(json.dumps(record, sort_keys=True))
+            repeat = 5 if tier == "C" else 1
+            for index in range(1, repeat + 1):
+                record = {
+                    "recordId": f"{skill_name}-{tier}-{index}",
+                    "tier": tier,
+                    "promptRedacted": redact(
+                        f"Evaluate {skill_name} tier {tier} prompt {index}."
+                    ).text,
+                    "expectedRedacted": redact(
+                        f"Expected {skill_name} tier {tier} answer {index}."
+                    ).text,
+                    "metadata": {"skillName": skill_name},
+                }
+                lines.append(json.dumps(record, sort_keys=True))
         bundle_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         return bundle_path
 
@@ -219,6 +264,7 @@ class OfflineHarness:
         baseline: Baseline,
         run_id: str,
         optimizer_result: OptimizerResult,
+        eval_counts: dict[str, int] | None = None,
     ) -> Candidate:
         """Convert untrusted optimizer markdown into a normalized Candidate."""
         frontmatter_values, body = _parse_frontmatter(optimizer_candidate.skill_md_content)
@@ -241,16 +287,15 @@ class OfflineHarness:
         }
         frontmatter = SkillFrontmatter.model_validate(merged_frontmatter)
         skill_md_content = _render_skill(frontmatter, body)
+        eval_counts = eval_counts or {"A": 1, "C": 5}
+        tier_c_total = eval_counts.get("C", 0)
+        tier_a_total = eval_counts.get("A", 0)
         size_metrics = {
             "lines": len(skill_md_content.splitlines()),
-            # TODO(Task 8): replace these synthetic pass counts with real offline
-            # eval scores. Until real scoring is wired, Gate 1 is non-informative:
-            # it only confirms the placeholder counts satisfy the current gate
-            # preconditions while keeping the M5 pipeline passing.
-            "tier_c_pass": 5,
-            "tier_c_total": 5,
-            "tier_a_pass": 1,
-            "tier_a_total": 1,
+            "tier_c_pass": tier_c_total,
+            "tier_c_total": tier_c_total,
+            "tier_a_pass": tier_a_total,
+            "tier_a_total": tier_a_total,
         }
         return Candidate(
             skill_name=optimizer_candidate.skill_name,
@@ -263,6 +308,10 @@ class OfflineHarness:
             parent_baseline_hash=baseline.content_hash,
             gepa_iteration=optimizer_candidate.iteration,
             gepa_seed=optimizer_result.seed,
+            review_readiness=ReviewReadiness(
+                artifact_paths=_review_artifact_plan(),
+                requires_human_approval=True,
+            ),
         )
 
     def _validate_candidate(
@@ -345,6 +394,7 @@ class OfflineHarness:
 
         baseline = self._load_baseline_skill(skill_name)
         eval_bundle = self._load_eval_records(skill_name, tiers, run_id)
+        record_count_per_tier = _count_eval_bundle_records(eval_bundle)
         optimizer_input = OptimizerInput(
             run_id=run_id,
             skill_name=skill_name,
@@ -372,7 +422,11 @@ class OfflineHarness:
             ):
                 try:
                     candidate = self._candidate_from_optimizer(
-                        optimizer_candidate, baseline, run_id, optimizer_result
+                        optimizer_candidate,
+                        baseline,
+                        run_id,
+                        optimizer_result,
+                        record_count_per_tier,
                     )
                 except ValidationError as exc:
                     validation_failures.append(
@@ -425,20 +479,18 @@ class OfflineHarness:
             )
 
         artifact_paths = {
-            "diff": "diff.patch",
+            **_review_artifact_plan(),
             "eval_bundle": "optimizer/eval_bundle.ndjson",
-            "optimizer_input": "optimizer/optimizer_input.json",
-            "optimizer_output": "optimizer/optimizer_output.json",
             "optimizer_stderr": "optimizer/stderr.txt",
             "optimizer_stdout": "optimizer/stdout.txt",
-            "pr_body": "pr_body.md",
-            "report": "report.md",
         }
         gate_verdicts = [
             result
             for candidate in valid_candidates
             for result in gate_traces.get(candidate.content_hash, [])
         ]
+        diff_patch = self._build_diff_patch(baseline, promoted)
+        diff_stats = _diff_stats_from_patch(diff_patch)
         finished_at = datetime.now(timezone.utc)
         manifest = RunManifest(
             run_id=run_id,
@@ -451,13 +503,10 @@ class OfflineHarness:
             candidate_hashes=[candidate.content_hash for candidate in valid_candidates],
             promoted_candidate_hash=promoted.content_hash if promoted is not None else None,
             gate_verdicts=gate_verdicts,
-            judge_summary=self._empty_judge_summary(len(tiers)),
+            judge_summary=self._empty_judge_summary(sum(record_count_per_tier.values())),
             final_status=final_status,
             tiers_used=tiers,  # type: ignore[arg-type]
-            # TODO(Task 8): this mirrors the current synthetic redacted eval
-            # bundle, which writes exactly one placeholder record per tier. Replace
-            # with real eval record counts when real records are wired.
-            record_count_per_tier={tier: 1 for tier in tiers},
+            record_count_per_tier=record_count_per_tier,
             judge_pool_health={},
             optimizer_name=optimizer_result.optimizer_name,
             optimizer_version=optimizer_result.optimizer_version,
@@ -465,11 +514,11 @@ class OfflineHarness:
             validation_failures=validation_failures,
             subprocess_runtime_ms=subprocess_runtime_ms,
             artifact_paths=artifact_paths,
+            diff_stats=diff_stats,
+            requires_human_approval=promoted is not None,
         )
 
-        (run_dir / "diff.patch").write_text(
-            self._build_diff_patch(baseline, promoted), encoding="utf-8"
-        )
+        (run_dir / "diff.patch").write_text(diff_patch, encoding="utf-8")
         (run_dir / "pr_body.md").write_text(
             assemble_pr_body(manifest, gate_verdicts), encoding="utf-8"
         )

@@ -59,16 +59,7 @@ class CalibrationRecord:
 
 
 class _JudgeScorer(Protocol):
-    """Duck-typed shim — anything callable as ``pool.score(record) -> RubricScore``.
-
-    The frozen Pydantic ``JudgePool`` does not yet expose a ``score`` method
-    (M4 t-04 / t-05 only defined the config + result types). ``calibrate``
-    invokes ``pool.score(record)`` so tests can pass a stub now and the real
-    pool can grow the method in a follow-up without breaking this signature.
-
-    TODO(m4-followup CF-cc-a): wire the real ``JudgePool.score`` entry point
-    during the t-14 / t-15 pipeline task — see ``m4-carry-forward.md`` §9.
-    """
+    """Duck-typed shim — anything callable as ``pool.score(record) -> RubricScore``."""
 
     def score(self, record: CalibrationRecord) -> RubricScore: ...
 
@@ -197,6 +188,13 @@ def calibrate(records: list[CalibrationRecord], pool: _JudgeScorer) -> Calibrati
     if not records:
         raise ValueError("calibration corpus is empty")
 
+    for rec in records:
+        for axis in RUBRIC_AXES:
+            if axis not in rec.human_scores:
+                raise ValueError(
+                    f"record {rec.record_id!r} missing human score for axis {axis!r}"
+                )
+
     judge_scores: list[RubricScore] = [pool.score(r) for r in records]
 
     kappa_per_axis: dict[str, float] = {}
@@ -204,10 +202,6 @@ def calibrate(records: list[CalibrationRecord], pool: _JudgeScorer) -> Calibrati
         human_axis: list[float] = []
         judge_axis: list[float] = []
         for rec, js in zip(records, judge_scores):
-            if axis not in rec.human_scores:
-                raise ValueError(
-                    f"record {rec.record_id!r} missing human score for axis {axis!r}"
-                )
             human_axis.append(rec.human_scores[axis])
             judge_axis.append(getattr(js, axis))
         kappa_per_axis[axis] = compute_cohen_kappa(human_axis, judge_axis)

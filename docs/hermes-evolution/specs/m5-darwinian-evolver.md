@@ -4,6 +4,8 @@
 
 **Status**: Design approved for planning on 2026-06-14.
 
+**Completion note (2026-06-14)**: M5 was completed under the skills-only definition in `specs/m5-complete-design.md`. The completed scope adds semantic-fidelity gate 4, human-review readiness gate 5, real diff stats, real eval counts, and explicit PR-only human approval artifacts. Tool-description and system-prompt/template evolution are intentionally out of M5 completion scope and require future standalone specs.
+
 **Goal**: Turn the M4 offline skeleton into a real skill-evolution pipeline by invoking an external optimizer through a subprocess-only boundary, validating returned skill candidates, running existing gates, and producing PR-only review artifacts.
 
 **Non-goal**: This spec does not implement tool-description evolution, system-prompt evolution, full semantic-fidelity gate 4, full PR-human gate 5, automatic git push, automatic commit, HTTP API triggers, or runtime-lane changes.

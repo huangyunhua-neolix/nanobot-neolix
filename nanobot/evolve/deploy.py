@@ -7,7 +7,7 @@ to materialise the PR-only deploy contract:
   per §8.1 Branch naming.
 * :func:`assert_not_main` — hard refusal to push to a protected branch
   (`main` / `master`); raises :class:`ApplyTerminalError` per §8.1.
-* :func:`assemble_pr_body` — 5-section Markdown body per §8.2.
+* :func:`assemble_pr_body` — 6-section Markdown body per §8.2.
 
 The module is import-side-effect free; pipeline code wires it to git plumbing
 and the GitHub REST API at a higher layer.
@@ -35,7 +35,7 @@ PROTECTED_BRANCHES: frozenset[str] = frozenset({"main", "master"})
 # markdown renderers (GitHub, GitLab, CommonMark.js) also split on the Unicode
 # line-separators U+2028 / U+2029 and the NEL (U+0085) character — any of these
 # in an interpolated field could forge a fake ``## `` header and break the
-# 5-section invariant pinned by §8.2. NUL is added for defense in depth (git
+# 6-section invariant pinned by §8.2. NUL is added for defense in depth (git
 # refnames + most parsers reject it, but it's free).
 _FORBIDDEN_NEWLINE_CHARS: frozenset[str] = frozenset(
     {"\n", "\r", "\u2028", "\u2029", "\u0085", "\x00"}
@@ -170,13 +170,14 @@ def assert_not_main(branch: str, *, manifest_path: Path, final_status: str) -> N
         )
 
 
-# §8.2 — the 5 section headers, in spec-prescribed order. Exposed so tests
-# can pin the order without re-encoding the literal list.
+# §8.2 — the section headers, in spec-prescribed order. Exposed so tests can
+# pin the order without re-encoding the literal list.
 PR_BODY_SECTIONS: tuple[str, ...] = (
     "Summary",
     "Eval results",
     "Gates passed",
     "Diff stats",
+    "Human review checklist",
     "Rollback plan",
 )
 
@@ -186,7 +187,7 @@ def _validate_no_newlines(**fields: str) -> None:
 
     A single line-break character smuggled into ``skill_name`` /
     ``final_status`` / ``run_id`` / ``gate_name`` / ``failure_reason`` would
-    let the caller forge extra ``## `` headers and break the 5-section
+    let the caller forge extra ``## `` headers and break the 6-section
     invariant pinned by §8.2. The rejected charset is
     :data:`_FORBIDDEN_NEWLINE_CHARS` — ASCII LF/CR, Unicode line/paragraph
     separators (U+2028 / U+2029), NEL (U+0085), and NUL. The error message
@@ -198,12 +199,12 @@ def _validate_no_newlines(**fields: str) -> None:
             if ch in _FORBIDDEN_NEWLINE_CHARS:
                 raise ValueError(
                     f"assemble_pr_body: field {name!r} contains line-break "
-                    f"char U+{ord(ch):04X} — would break the 5-section "
+                    f"char U+{ord(ch):04X} — would break the 6-section "
                     f"markdown invariant"
                 )
         # Threat: triple-backtick opens a fenced code block in the RENDERED
         # PR view that swallows following ``## `` headers, corrupting the
-        # visible 5-section layout even though the raw-text invariant
+        # visible 6-section layout even though the raw-text invariant
         # (R3-5 ``re.findall``) still passes. Defense-in-depth — block at
         # leaf so no future GateResult plugin can leak it through.
         if "```" in value:
@@ -217,11 +218,12 @@ def _validate_no_newlines(**fields: str) -> None:
 def assemble_pr_body(
     manifest: "RunManifest", gate_results: list["GateResult"]
 ) -> str:
-    """Render the 5-section PR body Markdown per §8.2.
+    """Render the 6-section PR body Markdown per §8.2.
 
     Sections (in fixed order): Summary, Eval results, Gates passed, Diff stats,
-    Rollback plan. Section bodies are deterministic given the inputs so the PR
-    text is byte-stable across re-runs of the same run_id (testability + audit).
+    Human review checklist, Rollback plan. Section bodies are deterministic given
+    the inputs so the PR text is byte-stable across re-runs of the same run_id
+    (testability + audit).
 
     Per §8.2 / §8.5 the Rollback line is a single ``git revert <sha>`` placeholder
     — the real squash-merge SHA is amended in by a webhook / follow-up tool
@@ -231,7 +233,7 @@ def assemble_pr_body(
     ``manifest.final_status``, ``manifest.run_id``, and ``gate_name`` /
     ``failure_reason`` on each ``GateResult``) MUST NOT contain ``\\n`` or
     ``\\r``. Validation raises :class:`ValueError` naming the offending field
-    — this is a defense-in-depth leaf check; the 5-section invariant cannot
+    — this is a defense-in-depth leaf check; the 6-section invariant cannot
     rely on caller hygiene.
     """
     _validate_no_newlines(
@@ -288,16 +290,24 @@ def assemble_pr_body(
             gates_passed_lines.append(f"- ~~{r.gate_name}~~ (FAILED: {reason})")
 
     # --- Diff stats -------------------------------------------------------
-    # Skeleton: full +/- line counts require the diff plumbing in t-14 pipeline.
-    # We render a deterministic stub including the candidate short SHA; pipeline
-    # is expected to post-process this section once it has the patch in hand.
-    # TODO(M5): replace stub with real +/- counts from the candidate diff
-    # (see CF-t14-pipeline-wiring — pipeline.py needs to thread `Patch` into
-    # RunManifest first).
+    stats = manifest.diff_stats
     diff_lines = [
         "## Diff stats",
         f"candidate hash: `{short_sha}` (full: `{promoted}`)",
-        f"files changed: 1 (skill `{manifest.skill_name}` SKILL.md)",
+        f"files changed: {stats.files_changed if stats else 0}",
+        f"insertions: {stats.insertions if stats else 0}",
+        f"deletions: {stats.deletions if stats else 0}",
+        f"skill: `{manifest.skill_name}` SKILL.md",
+    ]
+
+    # --- Human review checklist ------------------------------------------
+    human_review_lines = [
+        "## Human review checklist",
+        "- [ ] Human reviewer approved this skill evolution",
+        "- [ ] Reviewer confirmed semantic-fidelity evidence",
+        "- [ ] Reviewer confirmed no live skill file was changed by this run",
+        f"- Human approval required: `{str(manifest.requires_human_approval).lower()}`",
+        "- No live skill file was changed by this run",
     ]
 
     # --- Rollback plan ----------------------------------------------------
@@ -313,11 +323,12 @@ def assemble_pr_body(
         "\n".join(eval_lines),
         "\n".join(gates_passed_lines),
         "\n".join(diff_lines),
+        "\n".join(human_review_lines),
         "\n".join(rollback_lines),
     ]
     body = "\n\n".join(blocks) + "\n"
 
-    # Self-check: spec §8.2 5-section invariant. Inputs are already newline-
+    # Self-check: spec §8.2 6-section invariant. Inputs are already newline-
     # validated upstream so user data cannot inject ``## `` headers; this
     # post-assembly assertion catches STRUCTURAL drift from future edits to
     # this function (e.g. accidentally dropping or renaming a section).

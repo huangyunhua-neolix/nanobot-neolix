@@ -128,19 +128,170 @@ Path(args.output).write_text(json.dumps({
     assert "--- a/skills/agent/demo-skill/SKILL.md" in patch
     assert "+++ b/skills/agent/demo-skill/SKILL.md" in patch
     assert manifest.artifact_paths == {
+        "manifest": "manifest.json",
+        "report": "report.md",
         "diff": "diff.patch",
-        "eval_bundle": "optimizer/eval_bundle.ndjson",
+        "pr_body": "pr_body.md",
         "optimizer_input": "optimizer/optimizer_input.json",
         "optimizer_output": "optimizer/optimizer_output.json",
+        "eval_bundle": "optimizer/eval_bundle.ndjson",
         "optimizer_stderr": "optimizer/stderr.txt",
         "optimizer_stdout": "optimizer/stdout.txt",
-        "pr_body": "pr_body.md",
-        "report": "report.md",
     }
     assert manifest.evolve_extra_version == {"optimizer": "transform-wrapper"}
-    assert "Use concise answers." in (
-        tmp_path / "skills" / "agent" / "demo-skill" / "SKILL.md"
-    ).read_text(encoding="utf-8")
+    assert manifest.requires_human_approval is True
+    assert manifest.diff_stats is not None
+    live_skill = (tmp_path / "skills" / "agent" / "demo-skill" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert live_skill == _skill_markdown("demo-skill")
+    assert "Include one concrete example." not in live_skill
+    assert "Include one concrete example." in patch
+
+
+def test_harness_run_records_real_eval_counts_and_diff_stats(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "optimizer.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'stats-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'adds example instruction'
+    }]
+}))
+""".lstrip(),
+    )
+
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    assert manifest.record_count_per_tier == {"A": 1, "C": 5}
+    assert manifest.judge_summary.record_count == 6
+    assert manifest.diff_stats is not None
+    assert manifest.diff_stats.files_changed == 1
+    assert manifest.diff_stats.insertions >= 1
+    assert manifest.requires_human_approval is True
+
+
+def test_harness_report_and_pr_body_show_human_review_state(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "optimizer.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'review-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'adds example instruction'
+    }]
+}))
+""".lstrip(),
+    )
+
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    report = (run_dir / "report.md").read_text(encoding="utf-8")
+    pr_body = (run_dir / "pr_body.md").read_text(encoding="utf-8")
+    assert "Human approval required: `true`" in report
+    assert "Diff stats" in report
+    assert "Human review checklist" in pr_body
+
+
+def test_harness_default_gates_include_semantic_and_human_review(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "optimizer.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'five-gate-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'adds example instruction'
+    }]
+}))
+""".lstrip(),
+    )
+
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    assert manifest.final_status == "promoted_to_pr"
+    assert [result.gate_name for result in manifest.gate_verdicts] == [
+        "1-test-pass",
+        "2-size-cap",
+        "3-cache-compat",
+        "4-semantic-fidelity",
+        "5-human-review",
+    ]
+    human_review = manifest.gate_verdicts[-1]
+    assert human_review.verdict == "pass"
+    assert human_review.metrics["review_checks_present"] == 7.0
+    assert human_review.metrics["review_checks_required"] == 7.0
+    assert human_review.evidence is not None
+    assert human_review.evidence["approval_status"] == (
+        "external-human-approval-required-not-granted"
+    )
 
 
 def test_harness_run_omitted_timeout_writes_default_600_seconds(tmp_path: Path) -> None:
@@ -462,10 +613,18 @@ def test_load_eval_records_writes_redacted_bundle(tmp_path: Path) -> None:
     assert bundle.exists()
     lines = bundle.read_text(encoding="utf-8").splitlines()
     assert lines == [
-        '{"expectedRedacted": "Expected demo-skill tier C answer.", "metadata": {"skillName": "demo-skill"}, "promptRedacted": "Evaluate demo-skill tier C prompt.", "recordId": "demo-skill-C", "tier": "C"}',
-        '{"expectedRedacted": "Expected demo-skill tier A answer.", "metadata": {"skillName": "demo-skill"}, "promptRedacted": "Evaluate demo-skill tier A prompt.", "recordId": "demo-skill-A", "tier": "A"}',
+        '{"expectedRedacted": "Expected demo-skill tier C answer 1.", "metadata": {"skillName": "demo-skill"}, "promptRedacted": "Evaluate demo-skill tier C prompt 1.", "recordId": "demo-skill-C-1", "tier": "C"}',
+        '{"expectedRedacted": "Expected demo-skill tier C answer 2.", "metadata": {"skillName": "demo-skill"}, "promptRedacted": "Evaluate demo-skill tier C prompt 2.", "recordId": "demo-skill-C-2", "tier": "C"}',
+        '{"expectedRedacted": "Expected demo-skill tier C answer 3.", "metadata": {"skillName": "demo-skill"}, "promptRedacted": "Evaluate demo-skill tier C prompt 3.", "recordId": "demo-skill-C-3", "tier": "C"}',
+        '{"expectedRedacted": "Expected demo-skill tier C answer 4.", "metadata": {"skillName": "demo-skill"}, "promptRedacted": "Evaluate demo-skill tier C prompt 4.", "recordId": "demo-skill-C-4", "tier": "C"}',
+        '{"expectedRedacted": "Expected demo-skill tier C answer 5.", "metadata": {"skillName": "demo-skill"}, "promptRedacted": "Evaluate demo-skill tier C prompt 5.", "recordId": "demo-skill-C-5", "tier": "C"}',
+        '{"expectedRedacted": "Expected demo-skill tier A answer 1.", "metadata": {"skillName": "demo-skill"}, "promptRedacted": "Evaluate demo-skill tier A prompt 1.", "recordId": "demo-skill-A-1", "tier": "A"}',
     ]
     assert [list(json.loads(line).keys()) for line in lines] == [
+        ["expectedRedacted", "metadata", "promptRedacted", "recordId", "tier"],
+        ["expectedRedacted", "metadata", "promptRedacted", "recordId", "tier"],
+        ["expectedRedacted", "metadata", "promptRedacted", "recordId", "tier"],
+        ["expectedRedacted", "metadata", "promptRedacted", "recordId", "tier"],
         ["expectedRedacted", "metadata", "promptRedacted", "recordId", "tier"],
         ["expectedRedacted", "metadata", "promptRedacted", "recordId", "tier"],
     ]
@@ -491,6 +650,17 @@ def test_candidate_from_optimizer_injects_provenance(tmp_path: Path) -> None:
     assert candidate.parent_baseline_hash == baseline.content_hash
     assert candidate.gepa_iteration == 2
     assert candidate.gepa_seed == 123
+    assert candidate.review_readiness is not None
+    assert candidate.review_readiness.artifact_paths == {
+        "manifest": "manifest.json",
+        "report": "report.md",
+        "diff": "diff.patch",
+        "pr_body": "pr_body.md",
+        "optimizer_input": "optimizer/optimizer_input.json",
+        "optimizer_output": "optimizer/optimizer_output.json",
+    }
+    assert candidate.review_readiness.requires_human_approval is True
+    assert not any(key.startswith("review_") for key in candidate.size_metrics)
 
 
 def test_candidate_from_optimizer_defaults_missing_frontmatter_name(tmp_path: Path) -> None:

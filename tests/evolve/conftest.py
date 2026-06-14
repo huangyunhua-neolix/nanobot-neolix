@@ -15,21 +15,28 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from nanobot.evolve.schemas import ReviewReadiness
+
 
 @dataclass
 class FakeCandidate:
     content_hash: str = "cand-hash"
     cache_key_hash: str = "cand-cache-key"
+    body_md: str = "Use concise answers. Include one concrete example."
+    skill_md_content: str = "Use concise answers. Include one concrete example."
     # ``float`` matches the eventual Pydantic ``dict[str, float]`` schema for
     # ``size_metrics`` (the per-file ``int``-typed fake in ``test_gate_test_pass``
     # is the divergent shape; this is the canonical one).
     size_metrics: dict[str, float] = field(default_factory=dict)
+    review_readiness: ReviewReadiness | None = None
 
 
 @dataclass
 class FakeBaseline:
     content_hash: str = "base-hash"
     cache_key_hash: str = "base-cache-key"
+    body_md: str = "Use concise answers."
+    skill_md_content: str = "Use concise answers."
     size_metrics: dict[str, float] = field(default_factory=dict)
 
 
@@ -54,6 +61,17 @@ def shared_passing_candidate() -> FakeCandidate:
             # Gate 2 (skill_size) — within both 400 hard cap and 150 delta cap.
             "lines": 300.0,
         },
+        review_readiness=ReviewReadiness(
+            artifact_paths={
+                "manifest": "manifest.json",
+                "report": "report.md",
+                "diff": "diff.patch",
+                "pr_body": "pr_body.md",
+                "optimizer_input": "optimizer/optimizer_input.json",
+                "optimizer_output": "optimizer/optimizer_output.json",
+            },
+            requires_human_approval=True,
+        ),
     )
 
 

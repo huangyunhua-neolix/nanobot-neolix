@@ -9,10 +9,14 @@ from nanobot.evolve.gates import GateResult
 from nanobot.evolve.harness import RunManifest as HarnessRunManifest
 from nanobot.evolve.harness import load_manifest as harness_load_manifest
 from nanobot.evolve.schemas import (
+    Candidate,
+    DiffStats,
     JudgeSummary,
+    ReviewReadiness,
     RubricScore,
     RubricWeights,
     RunManifest,
+    SkillFrontmatter,
     ValidationFailure,
     assert_odd_pool_size,
     dump_manifest,
@@ -106,6 +110,120 @@ def _judge_summary_for_m5_schema_tests() -> JudgeSummary:
         median_token=0.0,
         consensus_split_count=0,
     )
+
+
+def _judge_summary() -> JudgeSummary:
+    return JudgeSummary(
+        record_count=2,
+        median_aggregate=0.0,
+        median_process=0.0,
+        median_output=0.0,
+        median_token=0.0,
+        consensus_split_count=0,
+    )
+
+
+def _frontmatter() -> SkillFrontmatter:
+    return SkillFrontmatter(
+        name="demo-skill",
+        description="Demo skill",
+        origin="agent",
+        created_by="tests",
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+def _candidate_payload() -> dict[str, object]:
+    return {
+        "skill_name": "demo-skill",
+        "skill_md_content": "---\nname: demo-skill\n---\nUse concise answers.\n",
+        "frontmatter": _frontmatter(),
+        "body_md": "Use concise answers.\n",
+        "cache_key_hash": "cachehash",
+        "size_metrics": {"lines": 4},
+        "content_hash": "candhash",
+        "parent_baseline_hash": "basehash",
+        "gepa_iteration": 1,
+    }
+
+
+def _manifest_payload() -> dict[str, object]:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return {
+        "run_id": "run-1",
+        "started_at": now,
+        "finished_at": now,
+        "nanobot_version": "0.0.0",
+        "evolve_extra_version": {"optimizer": "fake"},
+        "skill_name": "demo-skill",
+        "baseline_hash": "basehash",
+        "candidate_hashes": ["candhash"],
+        "promoted_candidate_hash": "candhash",
+        "gate_verdicts": [],
+        "judge_summary": _judge_summary(),
+        "final_status": "promoted_to_pr",
+        "tiers_used": ["A", "C"],
+        "record_count_per_tier": {"A": 1, "C": 5},
+        "judge_pool_health": {},
+    }
+
+
+def test_diff_stats_model_accepts_patch_counts() -> None:
+    stats = DiffStats(files_changed=1, insertions=3, deletions=2)
+
+    assert stats.files_changed == 1
+    assert stats.insertions == 3
+    assert stats.deletions == 2
+
+
+def test_review_readiness_defaults_and_serialization() -> None:
+    readiness = ReviewReadiness()
+
+    assert readiness.artifact_paths == {}
+    assert readiness.requires_human_approval is True
+    assert readiness.model_dump(by_alias=True) == {
+        "artifactPaths": {},
+        "requiresHumanApproval": True,
+    }
+
+
+def test_candidate_review_readiness_defaults_to_none_for_manifest_compatibility() -> None:
+    candidate = Candidate(**_candidate_payload())
+
+    assert candidate.review_readiness is None
+    assert candidate.model_dump(by_alias=True)["reviewReadiness"] is None
+
+
+def test_candidate_accepts_review_readiness_model() -> None:
+    candidate = Candidate(
+        **_candidate_payload(),
+        review_readiness=ReviewReadiness(
+            artifact_paths={"manifest": "manifest.json"},
+            requires_human_approval=True,
+        ),
+    )
+
+    assert candidate.review_readiness is not None
+    assert candidate.review_readiness.artifact_paths["manifest"] == "manifest.json"
+
+
+def test_manifest_defaults_m5_completion_fields_for_m5_1_compatibility() -> None:
+    manifest = RunManifest(**_manifest_payload())
+
+    assert manifest.diff_stats is None
+    assert manifest.requires_human_approval is False
+
+
+def test_manifest_accepts_diff_stats_and_human_review_flag() -> None:
+    manifest = RunManifest(
+        **_manifest_payload(),
+        diff_stats=DiffStats(files_changed=1, insertions=3, deletions=2),
+        requires_human_approval=True,
+    )
+
+    assert manifest.diff_stats is not None
+    assert manifest.diff_stats.insertions == 3
+    assert manifest.requires_human_approval is True
 
 
 def test_harness_reexports_run_manifest_for_m5_compatibility() -> None:
