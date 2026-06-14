@@ -49,7 +49,7 @@ The gate is a local PR-readiness gate, not a replacement for GitHub review. It v
 - optimizer input/output audit files,
 - explicit human-review checklist and required-approval wording in the PR body/report.
 
-The gate passes only when the artifact bundle is ready for a human reviewer and the manifest records that human approval is still required. It must not call GitHub or inspect remote branch protection.
+The gate passes only when the candidate carries an explicit review-readiness model with all required artifact paths and records that human approval is still required. This is not an approval attestation: actual human approval remains external and must occur before merge. It must not call GitHub or inspect remote branch protection.
 
 ### Harness flow
 
@@ -65,12 +65,12 @@ The harness should stop using placeholder M5.1 values where real data is availab
 
 Extend `RunManifest` only where necessary:
 
-- artifact paths for gate 5 checks,
+- artifact paths for generated run artifacts,
 - diff stat fields or a small `DiffStats` model,
 - semantic-fidelity summary if not already represented by gate evidence,
 - `requires_human_approval: bool` for the PR-only human gate.
 
-Keep manifest compatibility with older M5.1 manifests. Loading older manifests should not fail solely because new optional fields are absent.
+Candidate-level `ReviewReadiness` carries the local gate-5 artifact plan and the external-approval requirement. Keep manifest compatibility with older M5.1 manifests. Loading older manifests should not fail solely because new optional fields are absent.
 
 ### Reports and PR body
 

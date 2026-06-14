@@ -128,14 +128,15 @@ Path(args.output).write_text(json.dumps({
     assert "--- a/skills/agent/demo-skill/SKILL.md" in patch
     assert "+++ b/skills/agent/demo-skill/SKILL.md" in patch
     assert manifest.artifact_paths == {
+        "manifest": "manifest.json",
+        "report": "report.md",
         "diff": "diff.patch",
-        "eval_bundle": "optimizer/eval_bundle.ndjson",
+        "pr_body": "pr_body.md",
         "optimizer_input": "optimizer/optimizer_input.json",
         "optimizer_output": "optimizer/optimizer_output.json",
+        "eval_bundle": "optimizer/eval_bundle.ndjson",
         "optimizer_stderr": "optimizer/stderr.txt",
         "optimizer_stdout": "optimizer/stdout.txt",
-        "pr_body": "pr_body.md",
-        "report": "report.md",
     }
     assert manifest.evolve_extra_version == {"optimizer": "transform-wrapper"}
     assert manifest.requires_human_approval is True
@@ -283,6 +284,14 @@ Path(args.output).write_text(json.dumps({
         "4-semantic-fidelity",
         "5-human-review",
     ]
+    human_review = manifest.gate_verdicts[-1]
+    assert human_review.verdict == "pass"
+    assert human_review.metrics["review_checks_present"] == 7.0
+    assert human_review.metrics["review_checks_required"] == 7.0
+    assert human_review.evidence is not None
+    assert human_review.evidence["approval_status"] == (
+        "external-human-approval-required-not-granted"
+    )
 
 
 def test_harness_run_omitted_timeout_writes_default_600_seconds(tmp_path: Path) -> None:
@@ -641,6 +650,17 @@ def test_candidate_from_optimizer_injects_provenance(tmp_path: Path) -> None:
     assert candidate.parent_baseline_hash == baseline.content_hash
     assert candidate.gepa_iteration == 2
     assert candidate.gepa_seed == 123
+    assert candidate.review_readiness is not None
+    assert candidate.review_readiness.artifact_paths == {
+        "manifest": "manifest.json",
+        "report": "report.md",
+        "diff": "diff.patch",
+        "pr_body": "pr_body.md",
+        "optimizer_input": "optimizer/optimizer_input.json",
+        "optimizer_output": "optimizer/optimizer_output.json",
+    }
+    assert candidate.review_readiness.requires_human_approval is True
+    assert not any(key.startswith("review_") for key in candidate.size_metrics)
 
 
 def test_candidate_from_optimizer_defaults_missing_frontmatter_name(tmp_path: Path) -> None:

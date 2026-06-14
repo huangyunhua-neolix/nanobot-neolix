@@ -21,6 +21,7 @@ from nanobot.evolve.harness import (
     OfflineHarness,
     SkillFrontmatter,
 )
+from nanobot.evolve.schemas import ReviewReadiness
 
 
 def _frontmatter() -> SkillFrontmatter:
@@ -76,18 +77,21 @@ def _candidate(
             "tier_c_total": 10,
             "tier_a_pass": 24,
             "tier_a_total": 25,
-            # Gate 5: required review artifacts are present.
-            "review_manifest": 1,
-            "review_report": 1,
-            "review_diff": 1,
-            "review_pr_body": 1,
-            "review_optimizer_input": 1,
-            "review_optimizer_output": 1,
-            "review_requires_human_approval": 1,
         },
         content_hash=content_hash,
         parent_baseline_hash="base-hash",
         gepa_iteration=1,
+        review_readiness=ReviewReadiness(
+            artifact_paths={
+                "manifest": "manifest.json",
+                "report": "report.md",
+                "diff": "diff.patch",
+                "pr_body": "pr_body.md",
+                "optimizer_input": "optimizer/optimizer_input.json",
+                "optimizer_output": "optimizer/optimizer_output.json",
+            },
+            requires_human_approval=True,
+        ),
     )
 
 

@@ -9,11 +9,14 @@ from nanobot.evolve.gates import GateResult
 from nanobot.evolve.harness import RunManifest as HarnessRunManifest
 from nanobot.evolve.harness import load_manifest as harness_load_manifest
 from nanobot.evolve.schemas import (
+    Candidate,
     DiffStats,
     JudgeSummary,
+    ReviewReadiness,
     RubricScore,
     RubricWeights,
     RunManifest,
+    SkillFrontmatter,
     ValidationFailure,
     assert_odd_pool_size,
     dump_manifest,
@@ -120,6 +123,30 @@ def _judge_summary() -> JudgeSummary:
     )
 
 
+def _frontmatter() -> SkillFrontmatter:
+    return SkillFrontmatter(
+        name="demo-skill",
+        description="Demo skill",
+        origin="agent",
+        created_by="tests",
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+def _candidate_payload() -> dict[str, object]:
+    return {
+        "skill_name": "demo-skill",
+        "skill_md_content": "---\nname: demo-skill\n---\nUse concise answers.\n",
+        "frontmatter": _frontmatter(),
+        "body_md": "Use concise answers.\n",
+        "cache_key_hash": "cachehash",
+        "size_metrics": {"lines": 4},
+        "content_hash": "candhash",
+        "parent_baseline_hash": "basehash",
+        "gepa_iteration": 1,
+    }
+
+
 def _manifest_payload() -> dict[str, object]:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return {
@@ -147,6 +174,37 @@ def test_diff_stats_model_accepts_patch_counts() -> None:
     assert stats.files_changed == 1
     assert stats.insertions == 3
     assert stats.deletions == 2
+
+
+def test_review_readiness_defaults_and_serialization() -> None:
+    readiness = ReviewReadiness()
+
+    assert readiness.artifact_paths == {}
+    assert readiness.requires_human_approval is True
+    assert readiness.model_dump(by_alias=True) == {
+        "artifactPaths": {},
+        "requiresHumanApproval": True,
+    }
+
+
+def test_candidate_review_readiness_defaults_to_none_for_manifest_compatibility() -> None:
+    candidate = Candidate(**_candidate_payload())
+
+    assert candidate.review_readiness is None
+    assert candidate.model_dump(by_alias=True)["reviewReadiness"] is None
+
+
+def test_candidate_accepts_review_readiness_model() -> None:
+    candidate = Candidate(
+        **_candidate_payload(),
+        review_readiness=ReviewReadiness(
+            artifact_paths={"manifest": "manifest.json"},
+            requires_human_approval=True,
+        ),
+    )
+
+    assert candidate.review_readiness is not None
+    assert candidate.review_readiness.artifact_paths["manifest"] == "manifest.json"
 
 
 def test_manifest_defaults_m5_completion_fields_for_m5_1_compatibility() -> None:

@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from nanobot.evolve.schemas import ReviewReadiness
+
 
 @dataclass
 class FakeCandidate:
@@ -26,6 +28,7 @@ class FakeCandidate:
     # ``size_metrics`` (the per-file ``int``-typed fake in ``test_gate_test_pass``
     # is the divergent shape; this is the canonical one).
     size_metrics: dict[str, float] = field(default_factory=dict)
+    review_readiness: ReviewReadiness | None = None
 
 
 @dataclass
@@ -57,14 +60,18 @@ def shared_passing_candidate() -> FakeCandidate:
             "tier_a_total": 25.0,
             # Gate 2 (skill_size) — within both 400 hard cap and 150 delta cap.
             "lines": 300.0,
-            "review_manifest": 1.0,
-            "review_report": 1.0,
-            "review_diff": 1.0,
-            "review_pr_body": 1.0,
-            "review_optimizer_input": 1.0,
-            "review_optimizer_output": 1.0,
-            "review_requires_human_approval": 1.0,
         },
+        review_readiness=ReviewReadiness(
+            artifact_paths={
+                "manifest": "manifest.json",
+                "report": "report.md",
+                "diff": "diff.patch",
+                "pr_body": "pr_body.md",
+                "optimizer_input": "optimizer/optimizer_input.json",
+                "optimizer_output": "optimizer/optimizer_output.json",
+            },
+            requires_human_approval=True,
+        ),
     )
 
 

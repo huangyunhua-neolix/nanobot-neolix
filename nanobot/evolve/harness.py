@@ -35,6 +35,7 @@ from nanobot.evolve.schemas import (
     Candidate,
     DiffStats,
     JudgeSummary,
+    ReviewReadiness,
     RunManifest,
     SkillContent,
     SkillFrontmatter,
@@ -67,6 +68,18 @@ _SAFE_REASON_MAX_CHARS = 300
 _PR_BODY_FORBIDDEN_REASON_CHARS = frozenset(
     {"\n", "\r", "\u2028", "\u2029", "\u0085", "\x00"}
 )
+_REVIEW_ARTIFACT_PATHS: dict[str, str] = {
+    "manifest": "manifest.json",
+    "report": "report.md",
+    "diff": "diff.patch",
+    "pr_body": "pr_body.md",
+    "optimizer_input": "optimizer/optimizer_input.json",
+    "optimizer_output": "optimizer/optimizer_output.json",
+}
+
+
+def _review_artifact_plan() -> dict[str, str]:
+    return dict(_REVIEW_ARTIFACT_PATHS)
 
 
 def _sha256_text(text: str) -> str:
@@ -283,13 +296,6 @@ class OfflineHarness:
             "tier_c_total": tier_c_total,
             "tier_a_pass": tier_a_total,
             "tier_a_total": tier_a_total,
-            "review_manifest": 1,
-            "review_report": 1,
-            "review_diff": 1,
-            "review_pr_body": 1,
-            "review_optimizer_input": 1,
-            "review_optimizer_output": 1,
-            "review_requires_human_approval": 1,
         }
         return Candidate(
             skill_name=optimizer_candidate.skill_name,
@@ -302,6 +308,10 @@ class OfflineHarness:
             parent_baseline_hash=baseline.content_hash,
             gepa_iteration=optimizer_candidate.iteration,
             gepa_seed=optimizer_result.seed,
+            review_readiness=ReviewReadiness(
+                artifact_paths=_review_artifact_plan(),
+                requires_human_approval=True,
+            ),
         )
 
     def _validate_candidate(
@@ -469,14 +479,10 @@ class OfflineHarness:
             )
 
         artifact_paths = {
-            "diff": "diff.patch",
+            **_review_artifact_plan(),
             "eval_bundle": "optimizer/eval_bundle.ndjson",
-            "optimizer_input": "optimizer/optimizer_input.json",
-            "optimizer_output": "optimizer/optimizer_output.json",
             "optimizer_stderr": "optimizer/stderr.txt",
             "optimizer_stdout": "optimizer/stdout.txt",
-            "pr_body": "pr_body.md",
-            "report": "report.md",
         }
         gate_verdicts = [
             result

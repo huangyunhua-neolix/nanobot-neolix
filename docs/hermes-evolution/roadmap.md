@@ -72,7 +72,7 @@ M1 Foundations  ──┬──> M2 skill_manage ──> M3 Curator
 - M2: ✅ 已完成 — 详见 [`retros/m2-skill-manage.md`](retros/m2-skill-manage.md)
 - M3: ✅ 已实现 (2026-06-14, branch `feature/m3-curator`) — M3 Curator complete: runtime `/curator` command, default dry-run, forced dry-run guard, deterministic proposals, protect-list, aux guardrails, and safe M2 delete apply path.
 - M4: ✅ 骨架已完成，finish pass 补齐 `evolve init` / `report` / reduced `apply`（完整 §4.4 bundle export / atomic swap / `--force` 留 M5） — 详见 [`retros/m4-offline-skeleton.md`](retros/m4-offline-skeleton.md)
-- M5: ✅ 已完成 — M5 now provides a skills-only five-gate offline evolution lane: subprocess optimizer boundary, candidate validation, gates 1-3, semantic-fidelity gate 4, local human-review readiness gate 5, real diff stats, and explicit PR-only human approval artifacts. Tool and prompt/template evolution are intentionally split into future milestones because they need separate safety and cache designs.
+- M5: ✅ 已完成 — M5 now provides a skills-only five-gate offline evolution lane: subprocess optimizer boundary, candidate validation, gates 1-3, semantic-fidelity gate 4, local human-review readiness gate 5, real diff stats, and explicit PR-only artifacts that require external human approval before merge. Tool and prompt/template evolution are intentionally split into future milestones because they need separate safety and cache designs.
 
 ## 6. 跨 Milestone 的硬性约束
 
