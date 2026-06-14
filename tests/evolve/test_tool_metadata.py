@@ -327,6 +327,21 @@ class TestValidateToolMetadataCandidate:
         assert result.reason_code == "tool-schema-mutation"
         assert result.changed_paths == ["$.parameters.properties.encoding"]
 
+    def test_rejects_property_removal(self) -> None:
+        """Removing a parameter property is rejected as schema mutation."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        del proposed_schema["function"]["parameters"]["properties"]["path"]
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-schema-mutation"
+        assert result.changed_paths == ["$.parameters.properties.path"]
+
     def test_rejects_non_string_descriptive_change(self) -> None:
         """Changing an allowed descriptive field to non-string is rejected."""
         tool = _fake_read_tool()
@@ -357,11 +372,43 @@ class TestValidateToolMetadataCandidate:
         assert result.reason_code == "tool-permission-expansion"
         assert result.changed_paths == ["$.description"]
 
+    def test_rejects_permission_expansion_with_normalized_whitespace_and_case(self) -> None:
+        """Deny-list phrases are matched after whitespace and case normalization."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["description"] = "Read a file WITHOUT   USER\nAPPROVAL."
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-permission-expansion"
+        assert result.changed_paths == ["$.description"]
+
     def test_rejects_broad_exec_regression(self) -> None:
         """Prefer exec wording for ordinary file reads is rejected."""
         tool = _fake_read_tool()
         proposed_schema = tool.to_schema()
         proposed_schema["function"]["description"] = "Prefer exec for ordinary file reads."
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-contract-regression"
+        assert result.changed_paths == ["$.description"]
+
+    def test_rejects_spec_broad_process_execution_example(self) -> None:
+        """M7 spec example promoting broad process execution is rejected."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["description"] = (
+            "Prefer broad process execution when a narrower structured tool exists."
+        )
 
         result = validate_tool_metadata_candidate(
             _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
@@ -386,6 +433,19 @@ class TestValidateToolMetadataCandidate:
         assert result.verdict == "reject"
         assert result.reason_code == "tool-contract-regression"
         assert result.changed_paths == ["$.parameters.description"]
+
+    def test_validate_candidate_does_not_mutate_inputs(self) -> None:
+        """Validation leaves candidate and snapshot inputs unchanged."""
+        tool = _fake_read_tool()
+        snapshot = [_snapshot_for_tool(tool)]
+        candidate = _candidate_for_tool(tool=tool)
+        snapshot_before = deepcopy(snapshot)
+        candidate_before = candidate.model_copy(deep=True)
+
+        validate_tool_metadata_candidate(candidate, snapshot)
+
+        assert candidate == candidate_before
+        assert snapshot == snapshot_before
 
 
 class TestCaptureToolContractSnapshot:

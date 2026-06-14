@@ -73,8 +73,8 @@ _BROAD_TOOL_REGRESSION_PATTERNS = (
     ),
     re.compile(r"\buse\s+(?:the\s+)?(?:exec|shell|process execution)\s+as\s+(?:a\s+)?universal\s+workaround\b"),
     re.compile(
-        r"\bprefer\s+(?:the\s+)?(?:exec|shell|process execution)\b"
-        r".*\b(?:narrower|structured)\s+tool\s+exists\b"
+        r"\bprefer\s+(?:the\s+)?(?:broad\s+)?(?:exec|shell|process execution)\b"
+        r".*\b(?:narrower(?:\s+structured)?|structured)\s+tool\s+exists\b"
     ),
 )
 
