@@ -236,6 +236,21 @@ def test_dispatch_optimizer_run_error_maps_to_runtime() -> None:
     assert evolve_cli.dispatch(_ns_with_handler(boom)) == 1
 
 
+def test_optimizer_run_error_precedes_bare_runtime_error(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, str] = {}
+
+    def capture_category(category: str, _exc: BaseException) -> None:
+        captured["category"] = category
+
+    def boom(_a):
+        raise OptimizerRunError("optimizer failed", run_dir="/tmp/run", exit_code=17)
+
+    monkeypatch.setattr(evolve_cli, "_print_err", capture_category)
+
+    assert evolve_cli.dispatch(_ns_with_handler(boom)) == evolve_cli.EXIT_RUNTIME
+    assert captured["category"] == "optimizer"
+
+
 def test_dispatch_bare_value_error_maps_to_config_exit():
     def boom(_a):
         raise ValueError("bad input")
@@ -466,6 +481,7 @@ def test_run_run_prints_manifest_and_report(
     assert evolve_cli.run_run(args) == 0
     out = capsys.readouterr().out
     assert "Run: run-1" in out
+    assert "Skill: demo-skill" in out
     assert "Status: rejected_by_validation" in out
     assert f"Manifest: {workspace / 'evals' / 'runs' / 'run-1' / 'manifest.json'}" in out
     assert f"Report: {workspace / 'evals' / 'runs' / 'run-1' / 'report.md'}" in out
