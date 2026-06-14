@@ -11,6 +11,7 @@ import asyncio
 import json
 import shutil
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar
@@ -162,6 +163,32 @@ class _RaiseGate(Gate):
         raise self._exc
 
 
+class _SlowCleanupGate(Gate):
+    NONDETERMINISTIC: ClassVar[bool] = False
+
+    def __init__(self) -> None:
+        self.cleaned = False
+
+    @property
+    def name(self) -> str:
+        return "1-slow"
+
+    def evaluate(self, candidate, baseline):  # type: ignore[override]
+        time.sleep(0.5)
+        return _ok_result(self.name, candidate, baseline)
+
+    def cleanup_after_timeout(self) -> None:
+        self.cleaned = True
+
+
+class _RaiseCleanupGate(_SlowCleanupGate):
+    NONDETERMINISTIC: ClassVar[bool] = False
+
+    def cleanup_after_timeout(self) -> None:
+        self.cleaned = True
+        raise RuntimeError("cleanup failed")
+
+
 # ---------------------------------------------------------------------------
 # Constructor / workspace validation
 # ---------------------------------------------------------------------------
@@ -228,6 +255,28 @@ def test_run_gates_catches_gate_exception_as_verdict_fail(tmp_path: Path) -> Non
     assert "boom" in trace[0].failure_reason
 
 
+def test_run_gates_sanitizes_explicit_gate_failure_reason(tmp_path: Path) -> None:
+    class _UnsafeFailGate(Gate):
+        NONDETERMINISTIC: ClassVar[bool] = False
+
+        @property
+        def name(self) -> str:
+            return "1-unsafe-fail"
+
+        def evaluate(self, candidate, baseline):  # type: ignore[override]
+            result = _fail_result(self.name, candidate, baseline)
+            return result.model_copy(
+                update={"failure_reason": "first line\n```secret```\x01still failed"}
+            )
+
+    harness = OfflineHarness(workspace=tmp_path, gates=[_UnsafeFailGate()])
+
+    trace = harness._run_gates(_make_candidate(), _make_baseline())
+
+    assert len(trace) == 1
+    assert trace[0].failure_reason == "first line '''secret''' still failed"
+
+
 def test_run_gates_writes_error_traceback_file(tmp_path: Path) -> None:
     gates = [_RaiseGate("1-explodes", RuntimeError("kaboom"))]
     harness = OfflineHarness(workspace=tmp_path, gates=gates)
@@ -283,6 +332,32 @@ def test_run_gates_synthetic_fail_short_circuits(tmp_path: Path) -> None:
     assert trace[0].verdict == "fail"
     assert trace[0].failure_reason is not None
     assert "gate-internal-error" in trace[0].failure_reason
+
+
+def test_run_gates_timeout_returns_synthetic_failure_and_cleans_up(tmp_path: Path) -> None:
+    gate = _SlowCleanupGate()
+    harness = OfflineHarness(workspace=tmp_path, gates=[gate], gate_timeout_seconds=0.1)
+
+    trace = harness._run_gates(_make_candidate(), _make_baseline())
+
+    assert len(trace) == 1
+    assert trace[0].verdict == "fail"
+    assert trace[0].failure_reason == "gate-timeout:1-slow"
+    assert gate.cleaned is True
+
+
+def test_run_gates_timeout_returns_synthetic_failure_when_cleanup_raises(
+    tmp_path: Path,
+) -> None:
+    gate = _RaiseCleanupGate()
+    harness = OfflineHarness(workspace=tmp_path, gates=[gate], gate_timeout_seconds=0.1)
+
+    trace = harness._run_gates(_make_candidate(), _make_baseline())
+
+    assert len(trace) == 1
+    assert trace[0].verdict == "fail"
+    assert trace[0].failure_reason == "gate-timeout:1-slow"
+    assert gate.cleaned is True
 
 
 def test_run_gates_error_file_path_uses_unknown_when_hash_empty(tmp_path: Path) -> None:

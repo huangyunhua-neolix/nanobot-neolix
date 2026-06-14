@@ -1,0 +1,776 @@
+# M5 Darwinian Evolver Spec
+
+**Milestone**: M5.1, the first real offline evolution slice on top of the M4 skeleton.
+
+**Status**: Design approved for planning on 2026-06-14.
+
+**Goal**: Turn the M4 offline skeleton into a real skill-evolution pipeline by invoking an external optimizer through a subprocess-only boundary, validating returned skill candidates, running existing gates, and producing PR-only review artifacts.
+
+**Non-goal**: This spec does not implement tool-description evolution, system-prompt evolution, full semantic-fidelity gate 4, full PR-human gate 5, automatic git push, automatic commit, HTTP API triggers, or runtime-lane changes.
+
+---
+
+## 1. Context
+
+M4 created the offline evolution skeleton: `nanobot/evolve/`, `OfflineHarness`, `Candidate` / `Baseline` / `RunManifest`, three deterministic gates, CLI surface, and PR-only deploy helpers. The current gap is that `nanobot.evolve.pipeline.build_pipeline()` still raises `NotImplementedError`, and `nanobot evolve run` only validates the workspace.
+
+M5.1 fills that gap with the smallest safe real evolution path:
+
+1. Load exactly one baseline skill from the workspace.
+2. Build an optimizer input bundle from the baseline and evaluation records.
+3. Invoke an external optimizer command by subprocess.
+4. Read optimizer output candidates from files.
+5. Validate every returned candidate against the baseline and manifest contract.
+6. Run the existing M4 gates in order.
+7. Promote the best passing candidate.
+8. Write manifest, report, diff patch, and PR body artifacts.
+
+This preserves the M4/M5 offline-lane rule: evolution output is reviewable, PR-only, and never directly overwrites live skills.
+
+---
+
+## 2. Scope
+
+### 2.1 In scope
+
+- A subprocess-only optimizer adapter.
+- A documented optimizer input/output file contract.
+- A real `OfflineHarness.run()` orchestration path for one skill per run.
+- CLI wiring for `nanobot evolve run` to call the real harness path.
+- Candidate validation before gates run.
+- Existing gates 1-3 reused unchanged as the first promotion barrier.
+- PR-only artifact generation:
+  - `manifest.json`
+  - `report.md`
+  - `diff.patch`
+  - `pr_body.md`
+  - optimizer input/output audit files
+- Tests for subprocess invocation, validation, gate integration, CLI dispatch, and PR-only filesystem boundaries.
+- Documentation updates to roadmap and M5 carry-forward/retro notes after implementation.
+
+### 2.2 Out of scope
+
+- Importing GEPA, DSPy, Darwinian Evolver, or other AGPL/large optimizer packages directly into nanobot.
+- Running optimizer code in-process.
+- Docker/container isolation as the default path.
+- Tool source evolution under `nanobot/agent/tools/`.
+- System prompt or template evolution under `nanobot/templates/`.
+- Runtime-lane integration with `AgentLoop`, `AgentRunner`, channels, slash commands, or WebUI.
+- Direct git push, direct PR creation, direct commit, or direct overwrite of `<workspace>/skills/agent/<name>/SKILL.md`.
+- Tier B/D default enablement.
+- Full gate 4 semantic-fidelity judge and full gate 5 branch-protection enforcement.
+
+---
+
+## 3. Design decisions
+
+### 3.1 M5 is split into M5.1 and later M5.x slices
+
+M5.1 implements the first real evolution loop for skills only. Later M5 slices may add gate 4, gate 5, richer eval tiers, and broader evolution surfaces.
+
+Reason: the full roadmap M5 mixes optimizer integration, licensing, gates, deployment, and prompt/tool evolution. Shipping the first real skill optimizer path gives an end-to-end system that is reviewable and testable without expanding every surface at once.
+
+### 3.2 AGPL isolation is subprocess-only
+
+Nanobot invokes the optimizer as an external command. Nanobot does not import the optimizer's Python modules and does not include optimizer source code in this repository.
+
+The adapter boundary is:
+
+```text
+nanobot/evolve -> subprocess command -> optimizer work dir -> output JSON/files -> nanobot/evolve
+```
+
+This keeps dependency and license boundaries explicit. The optimizer command can be a local binary, a wrapper script, or a development fake used by tests, as long as it obeys the file contract.
+
+### 3.3 Promotion is deterministic after optimizer output exists
+
+M5.1 promotion uses:
+
+1. optimizer-reported score for ranking candidates within the same baseline,
+2. existing deterministic gates 1-3 for eligibility,
+3. PR review artifacts for human judgment.
+
+Nanobot's ranking is deterministic for a fixed, validated `optimizer_output.json`: score descending, iteration ascending, then content-hash ascending. The external optimizer itself may still be nondeterministic even when Nanobot provides a seed; the seed is recorded for reproducibility, not treated as a determinism guarantee.
+
+Nondeterministic gate metrics, including future LLM judge scores, are report-only by default and do not feed optimizer fitness aggregation in M5.1. This closes the M4 carry-forward concern about noisy gate-4 metrics polluting GEPA search.
+
+### 3.4 PR-only remains hard law
+
+`nanobot evolve run` writes artifacts under the run directory. `nanobot evolve apply --manifest ...` previews or materializes PR-only artifacts, but it does not modify live skill files, commit, push, or call GitHub.
+
+---
+
+## 4. File-level architecture
+
+### 4.1 New modules
+
+#### `nanobot/evolve/optimizer/__init__.py`
+
+Public exports for optimizer adapter primitives.
+
+Exports:
+
+- `OptimizerAdapter`
+- `OptimizerInput`
+- `OptimizerCandidate`
+- `OptimizerResult`
+- `OptimizerRunError`
+
+#### `nanobot/evolve/optimizer/schemas.py`
+
+Pydantic models for the subprocess file contract. The plural filename avoids confusion with the existing top-level `nanobot/evolve/schemas.py` while keeping optimizer-only models local to the adapter package.
+
+Key models:
+
+```python
+class OptimizerInput(EvolveBase):
+    schema_version: Literal["1"] = "1"
+    run_id: str
+    skill_name: str
+    baseline_hash: str
+    baseline_skill_md_redacted: str
+    eval_records_path: str
+    output_dir: str
+    max_candidates: int
+    timeout_seconds: int
+    seed: int
+
+class OptimizerCandidate(EvolveBase):
+    skill_name: str
+    skill_md_content: str
+    score: float = Field(ge=0.0, le=1.0)
+    iteration: int = Field(ge=1)
+    rationale: str = Field(max_length=2000)
+
+class OptimizerError(EvolveBase):
+    code: Literal["no_improvement", "invalid_input", "optimizer_failed"]
+    message: str = Field(max_length=500)
+
+class OptimizerResult(EvolveBase):
+    schema_version: Literal["1"] = "1"
+    candidates: list[OptimizerCandidate] = Field(default_factory=list)
+    error: OptimizerError | None = None
+    optimizer_name: str
+    optimizer_version: str | None = None
+    seed: int | None = None
+```
+
+`OptimizerResult` is valid only when exactly one of these is true:
+
+- `error is None` and `candidates` is non-empty;
+- `error.code == "no_improvement"` and `candidates` is empty.
+
+`invalid_input` and `optimizer_failed` are graceful external-optimizer failures and become `OptimizerRunError`, not `no_improvement`.
+
+These models intentionally avoid importing `dspy`, `gepa`, provider classes, or runtime agent modules.
+
+#### `nanobot/evolve/optimizer/adapter.py`
+
+Runs the external command and parses output.
+
+Responsibilities:
+
+- Create a per-run optimizer work directory.
+- Write `optimizer_input.json`.
+- Invoke command with bounded timeout.
+- Capture stdout/stderr to files with a real 10 MiB per-stream memory and disk cap.
+- Load `optimizer_output.json`.
+- Validate the output with `OptimizerResult`.
+- Raise typed errors on missing files, invalid JSON, timeout, non-zero exit, invalid structured error, or empty candidate list without a `no_improvement` error.
+
+The command contract is:
+
+```bash
+<optimizer-command> --input <run_dir>/optimizer_input.json --output <run_dir>/optimizer_output.json
+```
+
+Subprocess invocation contract:
+
+- `args = optimizer_command + ["--input", input_path, "--output", output_path]`;
+- `shell=False`;
+- `cwd=<run_dir>/optimizer`;
+- `stdin=subprocess.DEVNULL`;
+- stdout/stderr capture must enforce a real 10 MiB cap per stream while the child is running; do not use `subprocess.run(..., stdout=PIPE, stderr=PIPE)` in a way that buffers unbounded output before truncation;
+- acceptable implementations are `Popen` with bounded reader threads, temporary files that stop recording after the cap, or another mechanism with equivalent memory bounds;
+- persisted `stdout.txt` / `stderr.txt` append `<TRUNCATED>` when the cap is reached;
+- `timeout=optimizer_timeout_seconds`;
+- `env` is an explicit allowlist containing only `PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, and `LC_ALL` when present in the parent process;
+- provider/API credentials (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AWS_*`, `GOOGLE_*`, `AZURE_*`, `*_TOKEN`, `*_SECRET`, `*_KEY`) must not be present in the child environment unless added by a later approved spec;
+- empty command raises `ConfigError`;
+- missing executable (`FileNotFoundError` from process launch) is wrapped as `ConfigError`;
+- command path resolution is pinned:
+  - absolute command paths are used verbatim and must exist;
+  - bare command names without `/` use normal `PATH` lookup inside the sanitized environment;
+  - `./` and `../` command paths are resolved against the invoker's current working directory before `cwd` switches to `<run_dir>/optimizer`, and must exist;
+  - other relative paths containing `/` are rejected as `ConfigError` to avoid ambiguous path semantics.
+
+#### `nanobot/evolve/report.py`
+
+Small deterministic renderer for `report.md` only. It does not coordinate artifact writes; `OfflineHarness._write_run_artifacts(...)` owns filesystem writes.
+
+Responsibilities:
+
+- `render_run_report(manifest, gate_results_by_candidate, optimizer_result, validation_failures) -> str`
+- no filesystem writes;
+- no external calls;
+- stable section ordering;
+- safe rendering of validation failures with bounded, redacted reason strings.
+
+`deploy.assemble_pr_body()` remains the PR-body renderer.
+
+### 4.2 Modified modules
+
+#### `nanobot/evolve/harness.py`
+
+Add real orchestration while keeping existing gate behavior. As part of M5.1, move `SkillFrontmatter`, `SkillContent`, `Baseline`, `Candidate`, `JudgeSummary`, `RunManifest`, `load_manifest()`, and `dump_manifest()` from `harness.py` into `nanobot/evolve/schemas.py`; `harness.py`, `report.py`, and `deploy.py` import these shared models from `schemas.py`. This keeps `harness.py` focused on orchestration and avoids making reporting depend on a harness god-object.
+
+Migration rule: `harness.py` re-exports the moved symbols for M5.1 so existing M4 import sites and tests keep working. New M5.1 code should import from `nanobot.evolve.schemas`; a later cleanup spec may remove the compatibility re-exports after call sites have moved.
+
+New/changed APIs:
+
+```python
+class OfflineHarness:
+    def run(
+        self,
+        *,
+        skill_name: str,
+        optimizer_command: list[str],
+        tiers: list[str],
+        max_candidates: int = 8,
+        optimizer_timeout_seconds: int = 600,
+    ) -> RunManifest:
+        ...
+```
+
+Additional private helpers:
+
+- `_load_baseline_skill(skill_name) -> Baseline`
+- `_load_eval_records(skill_name, tiers) -> Path`
+- `_candidate_from_optimizer(candidate, baseline, run_id) -> Candidate`
+- `_validate_candidate(candidate, baseline) -> None`
+- `_rank_candidates(optimizer_result) -> list[OptimizerCandidate]`
+- `_write_run_artifacts(...) -> None`
+- `_build_diff_patch(baseline, promoted) -> str`
+
+Validation and provenance requirements:
+
+- returned `skill_name` must equal requested skill name;
+- candidate markdown must parse as a single skill document;
+- candidate frontmatter `name`, if present, must match skill name;
+- candidate must not contain absolute path claims or write-path fields;
+- candidate content hash is computed by nanobot, not trusted from optimizer output;
+- empty or duplicate candidate bodies are rejected;
+- nanobot overwrites or injects evolution provenance after parsing optimizer output and before building `Candidate`:
+  - frontmatter `origin = "agent"`;
+  - frontmatter `created_by = "external:optimizer"`;
+  - frontmatter `evolved_from_run = <current run id>`;
+  - frontmatter `parent_skill_hash = <baseline content hash>`;
+  - frontmatter `optimizer_name = OptimizerResult.optimizer_name`;
+  - frontmatter `optimizer_version = OptimizerResult.optimizer_version` when present;
+- candidate `parent_baseline_hash` must equal baseline content hash.
+
+#### `nanobot/evolve/pipeline.py`
+
+M5.1 removes `pipeline.py` from the runtime call path. `nanobot evolve run` calls `OfflineHarness.run()`, and `OfflineHarness.run()` calls `OptimizerAdapter.run()` directly.
+
+`build_pipeline()` becomes a deprecated compatibility shim that raises `EvolveExtraNotInstalled` with a message directing callers to the subprocess optimizer adapter. It must not import `dspy`, `gepa`, Darwinian Evolver, or any optimizer package, even lazily. `_lazy_import_gepa()` is removed. This pins the AGPL boundary and prevents an in-process optimizer path from remaining reachable.
+
+#### `nanobot/cli/evolve.py`
+
+Update `run_run(args)` to call `OfflineHarness.run()`.
+
+CLI additions:
+
+```text
+nanobot evolve run \
+  --workspace <path> \
+  --skill <skill-name> \
+  --optimizer-command <cmd> [<arg> ...] \
+  --tiers A,C \
+  --max-candidates 8 \
+  --optimizer-timeout-seconds 600
+```
+
+Notes:
+
+- `--workspace` stays required.
+- `--skill` is required for M5.1.
+- `--optimizer-command` is required for real runs and consumes the remaining argv tokens as an argument vector.
+- tests may pass a Python fake optimizer script as `--optimizer-command <python> <fake_optimizer.py>`.
+- the command is stored as `list[str]` and executed with `shell=False`; no shell-style string splitting is performed after argparse.
+
+#### `nanobot/evolve/deploy.py`
+
+Keep branch naming and PR body contracts. Replace the M4 diff-stat stub by deriving line stats from the deterministic `diff.patch` produced by the run artifact writer.
+
+No direct git push or live skill overwrite is added.
+
+#### `nanobot/config/schema.py`
+
+M5.1 does not change config schema. Optimizer command, timeout, candidate limit, skill name, and tiers are supplied by CLI flags for this first slice.
+
+A later M5.x spec may add config defaults after the CLI contract has stabilized.
+
+---
+
+## 5. Optimizer file contract
+
+### 5.1 Input file
+
+Nanobot writes `optimizer_input.json` inside the run directory.
+
+Required fields:
+
+```json
+{
+  "schemaVersion": "1",
+  "runId": "20260614T120000Z-demo-skill-0001",
+  "skillName": "demo-skill",
+  "baselineHash": "basehash00112233",
+  "baselineSkillMdRedacted": "---\nname: demo-skill\n...",
+  "evalRecordsPath": "/abs/path/to/evals/runs/<run_id>/optimizer/eval_bundle.ndjson",
+  "outputDir": "/abs/path/to/evals/runs/<run_id>/optimizer",
+  "maxCandidates": 8,
+  "timeoutSeconds": 600,
+  "seed": 123456789
+}
+```
+
+`baselineSkillMdRedacted` is the only baseline content sent across the subprocess boundary. Nanobot must redact the baseline skill document before writing it to `optimizer_input.json`; the raw baseline remains internal to nanobot and is used only for hashing, diff generation, and gates. Baseline redaction uses `nanobot.evolve.privacy.redact.redact()` with no custom patterns in M5.1. The redactor must remove or mask local absolute paths, common secret/token patterns, and session/user identifiers before the optimizer receives the field.
+
+`evalRecordsPath` points to a pre-redacted NDJSON bundle generated under `<run_dir>/optimizer/eval_bundle.ndjson`. Each line is one JSON object with these fields: `recordId`, `tier`, `promptRedacted`, `expectedRedacted`, and `metadata`. Tier A/C are the default tiers. If a source record cannot be redacted into this shape, it is excluded and counted in `report.md`.
+
+The optimizer may read `baselineSkillMdRedacted` and `evalRecordsPath`, then must write `optimizer_output.json` to the path supplied by `--output`.
+
+### 5.2 Output file
+
+The optimizer writes a success result:
+
+```json
+{
+  "schemaVersion": "1",
+  "optimizerName": "external-gepa-wrapper",
+  "optimizerVersion": "0.1.0",
+  "seed": 123456789,
+  "error": null,
+  "candidates": [
+    {
+      "skillName": "demo-skill",
+      "skillMdContent": "---\nname: demo-skill\n...",
+      "score": 0.82,
+      "iteration": 1,
+      "rationale": "Improved instruction specificity."
+    }
+  ]
+}
+```
+
+A graceful no-improvement result is:
+
+```json
+{
+  "schemaVersion": "1",
+  "optimizerName": "external-gepa-wrapper",
+  "optimizerVersion": "0.1.0",
+  "seed": 123456789,
+  "error": {"code": "no_improvement", "message": "No candidate improved the baseline."},
+  "candidates": []
+}
+```
+
+Nanobot treats this file as untrusted input. It validates schema, recomputes hashes, parses skill frontmatter, overwrites/injects M5.1 provenance fields, and rejects invalid candidates before running gates.
+
+### 5.3 Audit files
+
+Each run directory stores:
+
+```text
+<workspace>/evals/runs/<run_id>/
+├── manifest.json
+├── report.md
+├── diff.patch
+├── pr_body.md
+├── optimizer/
+│   ├── eval_bundle.ndjson
+│   ├── optimizer_input.json
+│   ├── optimizer_output.json
+│   ├── stdout.txt
+│   └── stderr.txt
+└── candidates/
+    ├── <candidate_hash>.SKILL.md
+    └── ...
+```
+
+The run directory is append-only for a single run. `run_id` is generated by the harness, never accepted from CLI input. Format: `<UTC timestamp YYYYMMDDTHHMMSSZ>-<skill-name>-<4 digit monotonic suffix>`. The monotonic suffix is computed per workspace and timestamp prefix by scanning existing `<workspace>/evals/runs/` directories and choosing the first unused suffix from `0001` through `9999`. Directory creation must use an atomic create mode so parallel runs either get different suffixes after retrying or fail with `EXIT_FS=6` if all suffixes are exhausted. If `<workspace>/evals/runs/<run_id>/` already exists after suffix selection, the run fails with `EXIT_FS=6`. M5.1 does not implement `--force`; any future `--force` design must preserve PR-only behavior and must not overwrite live skill files.
+
+Audit classification: `optimizer_input.json`, `optimizer_output.json`, `stdout.txt`, `stderr.txt`, and `eval_bundle.ndjson` are local-only run audit files. They are not included in `pr_body.md`. `report.md` may include only redacted paths and bounded excerpts. The audit files themselves must not contain environment secrets.
+
+`diff.patch` format is pinned for deterministic review:
+
+- unified diff only;
+- from-file header: `--- a/skills/agent/<skill-name>/SKILL.md`;
+- to-file header: `+++ b/skills/agent/<skill-name>/SKILL.md`;
+- hunk body generated from normalized LF line endings;
+- missing trailing newlines are represented by the standard `\\ No newline at end of file` marker;
+- no absolute paths, timestamps, local usernames, or temporary directories in headers;
+- exactly one baseline-to-promoted diff per run; if there is no promoted candidate, `diff.patch` is an empty file.
+
+---
+
+## 6. Data flow
+
+```text
+CLI args
+  -> OfflineHarness.run()
+  -> load baseline SKILL.md
+  -> build eval bundle
+  -> OptimizerAdapter.run()
+  -> optimizer_output.json
+  -> validate OptimizerResult
+  -> convert to Candidate models
+  -> run gates 1-3 in score order
+  -> first passing candidate is promoted
+  -> write manifest/report/diff/pr_body artifacts
+```
+
+Candidate ranking:
+
+1. Sort optimizer candidates by descending `score`.
+2. For equal score, sort by ascending `iteration`.
+3. For equal score and iteration, sort by candidate content hash for deterministic tie-break.
+4. Run gates in that order.
+5. Promote the first candidate with all gates passing.
+6. If candidates exist but all fail gates, final status is `rejected_by_gate`.
+7. If optimizer returns `error.code == "no_improvement"` with no candidates, final status is `no_improvement`.
+8. If optimizer returns candidates but every candidate is rejected during validation before gates run, final status is `rejected_by_validation`.
+
+Mixed validation outcomes are allowed: invalid candidates are recorded in `validation_failures[]`, valid candidates continue to gates, and final status is decided by the valid candidate set (`promoted_to_pr` if one passes, otherwise `rejected_by_gate`). `validation_failures[].candidate_index` is the zero-based index in post-ranking order, after score/iteration/hash sorting and before invalid candidates are filtered out.
+
+`RunManifest.final_status` must be extended to include `rejected_by_validation` in M5.1. Future final-status additions are schema changes and must include manifest compatibility tests for loading older manifests.
+
+---
+
+## 7. Error handling
+
+### 7.1 Optimizer command errors
+
+Introduce:
+
+```python
+class OptimizerRunError(EvolveError, RuntimeError):
+    STRUCTURED_KWARGS = frozenset({"run_dir", "exit_code"})
+    MUST_PRECEDE = frozenset({"RuntimeError"})
+```
+
+Use it for:
+
+- timeout;
+- non-zero exit;
+- missing output file;
+- invalid JSON;
+- output schema validation failure;
+- optimizer output with `error.code in {"invalid_input", "optimizer_failed"}`;
+- empty `candidates` when the command claims success.
+
+CLI mapping is pinned as:
+
+- command missing, empty, or invalid command config -> exit 2 (`ConfigError`);
+- command executable not found -> exit 2 (`ConfigError`, operator supplied an invalid command; adapter wraps `FileNotFoundError` from `subprocess.run` before CLI dispatch sees it);
+- run directory already exists -> exit 6 (`FileExistsError` / `EXIT_FS`);
+- command timed out -> exit 1 (`OptimizerRunError`);
+- command ran and returned non-zero -> exit 1 (`OptimizerRunError`);
+- command produced missing/invalid output -> exit 1 (`OptimizerRunError`).
+
+`nanobot/cli/evolve.py` must add an explicit `except OptimizerRunError` branch before bare `RuntimeError`. The implementation must add tests for each mapped branch and keep the authoritative exit-code table in `docs/hermes-evolution/specs/m4-offline-skeleton.md` consistent if this PR changes any exit-code meaning.
+
+### 7.2 Candidate validation errors
+
+Per-candidate validation failure should not abort the whole run if other candidates remain. Each invalid candidate is recorded in `report.md` through the `validation_failures` renderer parameter.
+
+A safe validation-failure reason string:
+
+- is generated by nanobot, not copied verbatim from optimizer rationale;
+- is capped at 300 characters;
+- contains no absolute paths, environment variable values, tokens, raw prompt text, or local usernames;
+- uses stable reason codes such as `skill-name-mismatch`, `frontmatter-invalid`, `duplicate-candidate`, `empty-content`, `path-claim-rejected`.
+
+Abort the run only when:
+
+- baseline cannot be loaded;
+- eval bundle cannot be built;
+- optimizer command cannot be executed;
+- optimizer output is missing or invalid at the top level;
+- artifact write fails.
+
+### 7.3 Gate errors
+
+Existing `_run_gates()` behavior remains:
+
+- `Exception` from a gate becomes a synthetic fail `GateResult`.
+- `KeyboardInterrupt`, `SystemExit`, and `asyncio.CancelledError` propagate.
+- Gate chain short-circuits on first fail per candidate.
+
+---
+
+## 8. Security and privacy
+
+### 8.1 Subprocess safety
+
+- Use process execution with `shell=False`, `cwd=optimizer_dir`, `stdin=subprocess.DEVNULL`, and `env=safe_env`.
+- Do not construct shell strings.
+- Persist stdout/stderr with a real 10 MiB cap per stream while the child is running and append `<TRUNCATED>` when truncated.
+- Do not include environment secrets in report, manifest, optimizer input, optimizer output, stdout/stderr excerpts, or PR body.
+- Use a dedicated optimizer work directory inside the run directory.
+- Treat optimizer output as untrusted.
+- Treat the optimizer command as trusted-local operator-supplied code, not as a sandboxed untrusted plugin. M5.1 limits credential exposure through environment allowlisting and redacted input files, but it does not claim container-level isolation.
+
+### 8.2 Path safety
+
+- Optimizer output cannot specify write paths.
+- Nanobot decides all artifact paths.
+- Candidate files are written under `<run_dir>/candidates/` using computed content hashes.
+- No optimizer-controlled path is opened for writing.
+
+### 8.3 Privacy boundary
+
+M5.1 uses Tier A/C by default. Tier B/D remain opt-in and are not required for the first real optimizer path.
+
+If eval bundle generation touches session-derived records, it must use `nanobot.evolve.privacy.redact.redact()` and preserve the M4 rule: no `raw_*`, `user_*`, session id, channel id, IP, email, phone, or local file path fields in exported eval records.
+
+### 8.4 Prompt/cache boundary
+
+M5.1 evolves skills only. It must not alter stable prompt templates or tool descriptions. Gate 3 remains the guard that rejects cache-key drift.
+
+---
+
+## 9. Gate policy
+
+### 9.1 M5.1 gates
+
+M5.1 runs the existing M4 gate registry:
+
+1. `1-test-pass`
+2. `2-size-cap`
+3. `3-cache-compat`
+
+No gate reorder is made in M5.1. The M4 carry-forward item about cheap-first ordering should be revisited in the M5.1 retrospective using observed gate-3 failure rate.
+
+### 9.2 Future gate 4/5 extension points
+
+M5.1 must not hard-code assumptions that block future gate 4/5.
+
+Allowed future extension:
+
+- `SemanticFidelityGate` with `NONDETERMINISTIC = True`
+- `PrHumanReviewGate` or manifest status check gate
+- additional `final_status` values in a later spec, with manifest compatibility tests and without removing or renaming existing statuses
+
+Policy for nondeterministic metrics:
+
+- default: report-only;
+- excluded from optimizer fitness;
+- if a future spec includes them in fitness, it must define averaging, seeding, or variance bounding.
+
+### 9.3 Gate budget
+
+M5.1 adds a finite wall-clock budget around each gate call in `OfflineHarness._run_gates()`. Default per-gate budget: 300 seconds. If a gate exceeds the budget, the candidate receives a synthetic fail `GateResult` with `failure_reason="gate-timeout:<gate-name>"`; the gate does not pass by default. This bounds gate 1 subprocess hangs and prepares the contract for future long-running gate 4.
+
+Budget enforcement must terminate subprocesses spawned by the timed-out gate before returning the synthetic failure. It is not enough to abandon an awaitable or background future while the child process keeps running. Gate 1 test-pass execution must expose a kill/cleanup path that `_run_gates()` can call on timeout.
+
+M5.1 also adds a cross-reference or docstring note to the `Gate.evaluate` contract: long-running gates must check budget between records. This closes the M4 carry-forward concern without adding a new `LONG_RUNNING` abstraction yet.
+
+---
+
+## 10. CLI behavior
+
+### 10.1 `nanobot evolve run`
+
+Required happy path:
+
+```bash
+nanobot evolve run \
+  --workspace /path/to/workspace \
+  --skill demo-skill \
+  --optimizer-command /path/to/optimizer-wrapper \
+  --tiers A,C
+```
+
+Expected output:
+
+```text
+Run: <run_id>
+Skill: demo-skill
+Status: promoted_to_pr | rejected_by_gate | rejected_by_validation | no_improvement
+Manifest: <workspace>/evals/runs/<run_id>/manifest.json
+Report: <workspace>/evals/runs/<run_id>/report.md
+```
+
+### 10.2 `nanobot evolve report`
+
+Existing report command should continue to read `--manifest`. It may gain prefix `run_id` resolution later, but M5.1 can keep manifest-path-first behavior.
+
+### 10.3 `nanobot evolve apply`
+
+`apply` remains PR-only. For a promoted manifest it renders branch name and PR body. It must not push or mutate live skills.
+
+---
+
+## 11. Test strategy
+
+### 11.1 Optimizer adapter tests
+
+Use a temporary Python script as a fake external optimizer for contract/error-path tests. The script writes controlled `optimizer_output.json` fixtures and does not attempt a meaningful transformation.
+
+Tests:
+
+- writes `optimizer_input.json` with `schemaVersion`, redacted baseline content, redacted eval bundle path, seed, timeout, and candidate limit;
+- invokes command with `shell=False`, fixed `cwd`, `stdin=DEVNULL`, and argument list;
+- passes an allowlisted environment and excludes provider/API key patterns;
+- captures stdout/stderr with 10 MiB caps and truncation markers;
+- parses valid success output;
+- parses valid `no_improvement` output;
+- raises typed error for timeout;
+- raises typed error for non-zero exit;
+- wraps missing executable as `ConfigError`;
+- raises typed error for missing output;
+- raises typed error for invalid JSON;
+- raises typed error for invalid structured `error` output;
+- rejects empty candidate list when `error` is null.
+
+### 11.2 Candidate validation tests
+
+Tests:
+
+- rejects mismatched skill name;
+- rejects mismatched frontmatter name;
+- rejects empty skill content;
+- rejects duplicate candidate body;
+- rejects absolute path claims and write-path fields;
+- recomputes candidate hash instead of trusting optimizer;
+- sets `parent_baseline_hash` from baseline;
+- overwrites optimizer-supplied provenance with `origin = "agent"`, `created_by = "external:optimizer"`, current `evolved_from_run`, and current `parent_skill_hash`;
+- preserves `optimizer_name` and `optimizer_version` from `OptimizerResult` as injected frontmatter;
+- records validation failures using safe reason codes, not raw optimizer rationale;
+- rejects path-like output fields if the schema ever grows one.
+
+### 11.3 Harness integration tests
+
+Tests:
+
+- full fake optimizer happy path promotes first passing candidate;
+- one subprocess-boundary smoke test uses a stdlib-only local optimizer wrapper that performs a non-trivial transformation: it reads `optimizer_input.json`, derives a candidate from the redacted baseline/eval bundle, emits content different from baseline, and passes gates without importing GEPA/DSPy packages;
+- if `OptimizerResult.seed` is omitted, `RunManifest.optimizer_seed` remains `None`; Nanobot must not backfill the input seed into the manifest;
+- first high-score candidate fails a gate, second lower-score candidate passes and is promoted;
+- all candidates fail gates -> `rejected_by_gate`;
+- all candidates invalid -> `rejected_by_validation` with validation warnings;
+- graceful optimizer `no_improvement` output -> `no_improvement`;
+- `manifest.json`, `report.md`, `diff.patch`, and `pr_body.md` exist under the run directory;
+- artifacts are deterministic for a fixed workspace, seed, fake optimizer output, and clock fixture;
+- `diff.patch` uses the pinned unified-diff headers and contains no absolute paths;
+- live skill file is unchanged;
+- gate order remains 1, 2, 3;
+- optimizer packages are not imported during adapter/harness tests.
+
+### 11.4 CLI tests
+
+Tests:
+
+- `evolve run` requires `--skill`;
+- `evolve run` requires `--optimizer-command`;
+- happy path exits 0 and prints manifest path;
+- `rejected_by_validation` is printed as a supported run status;
+- missing workspace maps to config exit;
+- missing optimizer executable maps to config exit 2;
+- optimizer timeout, non-zero exit, missing output, and invalid output map to exit 1;
+- run-id collision maps to filesystem exit 6;
+- `report` and `apply` remain compatible with M4 manifests.
+
+### 11.5 Decoupling tests
+
+Extend existing evolve decoupling tests if present:
+
+- `nanobot/evolve/**` does not import `nanobot.agent.loop`, `nanobot.agent.runner`, channels, command, API server, or tool modules;
+- optimizer adapter does not import `dspy`, `gepa`, or AGPL package names;
+- `pipeline.py` does not import `dspy`, `gepa`, Darwinian Evolver, or optimizer package names, and `_lazy_import_gepa()` no longer exists;
+- subprocess adapter does not use `shell=True`;
+- subprocess adapter passes a sanitized allowlisted environment and omits provider/API key patterns.
+
+---
+
+## 12. Implementation boundaries
+
+### 12.1 No runtime lane changes
+
+Do not modify:
+
+- `nanobot/agent/loop.py`
+- `nanobot/agent/runner.py`
+- `nanobot/channels/**`
+- `nanobot/command/**`
+- `nanobot/api/server.py`
+
+unless a later approved spec explicitly expands scope.
+
+### 12.2 No broad config expansion
+
+Prefer CLI flags and small internal models. Add config only for stable defaults that are hard to pass repeatedly.
+
+### 12.3 No direct dependency addition unless necessary
+
+M5.1 should not add GEPA/DSPy/Darwinian packages to core dependencies. If test-only helpers need dependencies, prefer stdlib fake optimizer scripts.
+
+---
+
+## 13. Carry-forward handling
+
+M5.1 explicitly addresses these M4 carry-forward items:
+
+- Nondeterministic gate metrics: report-only by default, excluded from optimizer fitness.
+- Gate budget-check duty: add docstring/cross-reference before future long-running gate 4.
+- Gate ordering: keep 1->2->3 for M5.1; record observed gate-3 failure rate in retro.
+- Decision-log/carry-forward review: M5.1 retro must review `docs/hermes-evolution/specs/m4-carry-forward.md` and close entries whose criteria are met.
+
+M5.1 also extends `RunManifest` with these fields:
+
+- `optimizer_name: str`
+- `optimizer_version: str | None`
+- `optimizer_seed: int | None`
+- `validation_failures: list[ValidationFailure]`
+- `subprocess_runtime_ms: int | None`
+- `artifact_paths: dict[str, str]` containing relative paths for `report`, `diff`, `pr_body`, `optimizer_input`, `optimizer_output`, `optimizer_stdout`, `optimizer_stderr`, and `eval_bundle`
+
+`manifest.json` is not listed inside `artifact_paths` because the manifest path is the load root for `nanobot evolve report --manifest ...`. Optimizer audit files remain local-only and are discoverable through fixed `artifact_paths` entries; they are not copied into `pr_body.md`.
+
+`ValidationFailure` is a shared schema model with `candidate_index`, `candidate_hash`, and safe `reason_code` / `reason` fields. Existing M4 manifests must still load; new fields either have defaults or are optional where needed for compatibility.
+
+M5.1 does not close full gate 4/5 carry-forward items, because those gates remain later M5.x work.
+
+---
+
+## 14. Acceptance criteria
+
+M5.1 is complete when:
+
+1. `nanobot evolve run --workspace ... --skill ... --optimizer-command ...` can execute an external optimizer command and produce a promoted candidate in a run directory.
+2. At least one subprocess-boundary smoke test uses a stdlib-only optimizer wrapper that reads `optimizer_input.json`, performs a non-trivial transformation, emits a candidate different from baseline, and reaches `promoted_to_pr` without importing optimizer packages in-process.
+3. The adapter never imports optimizer packages in-process.
+4. The subprocess child environment excludes provider/API credentials and other key/token/secret patterns.
+5. `optimizer_input.json` contains only redacted baseline/eval content across the subprocess boundary.
+6. Candidate output is validated before gates run, and all-invalid candidate output produces `rejected_by_validation` rather than `no_improvement`.
+7. Existing gates 1-3 decide promotion eligibility.
+8. `manifest.json`, `report.md`, `diff.patch`, and `pr_body.md` are written deterministically, with `diff.patch` using the pinned unified-diff format.
+9. The live skill file is not modified by `run` or `apply`.
+10. Focused evolve tests pass.
+11. `ruff check nanobot/evolve nanobot/cli/evolve.py tests/evolve` passes.
+12. Roadmap marks M5.1 implemented only after PR merge.
+
+---
+
+## 15. Deferred work
+
+- M5.2: full semantic-fidelity gate 4 with judge pool and nondeterminism policy.
+- M5.3: PR-human gate 5 with branch protection / CODEOWNERS checks.
+- M5.4: richer GEPA/Darwinian optimizer integration once the subprocess contract is proven.
+- M5.5: tool-description evolution.
+- M5.6: system-prompt/template evolution.
+- Future: HTTP/API trigger surface if there is a concrete operator need.

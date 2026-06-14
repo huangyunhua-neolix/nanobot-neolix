@@ -92,6 +92,24 @@ def clean_lazy_module_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delitem(sys.modules, "gepa", raising=False)
 
 
+def test_pipeline_build_pipeline_is_deprecated_shim_without_gepa_imports(
+    clean_lazy_module_state: None,
+) -> None:
+    import nanobot.evolve.pipeline as pipeline
+    from nanobot.evolve.exceptions import EvolveExtraNotInstalled
+
+    assert not hasattr(pipeline, "_lazy_import_gepa")
+    with pytest.raises(EvolveExtraNotInstalled, match="subprocess optimizer adapter"):
+        pipeline.build_pipeline(
+            skill_name="demo-skill",
+            judge_pool=None,
+            baseline=None,
+            eval_records=[],
+        )
+    assert "dspy" not in sys.modules
+    assert "gepa" not in sys.modules
+
+
 def test_pipeline_all_three_gates_pass_with_aligned_candidate(
     tmp_path: Path, clean_lazy_module_state: None
 ) -> None:
@@ -153,3 +171,44 @@ def test_pipeline_does_not_import_dspy_or_gepa(
         "lazy-import contract violated: gepa ended up in sys.modules "
         "after _run_gates — the gate pipeline must not import gepa"
     )
+
+
+def test_evolve_modules_stay_decoupled_from_runtime_lane() -> None:
+    import ast
+
+    forbidden_prefixes = (
+        "nanobot.agent.loop",
+        "nanobot.agent.runner",
+        "nanobot.channels",
+        "nanobot.command",
+        "nanobot.api.server",
+        "nanobot.agent.tools",
+        "dspy",
+        "gepa",
+    )
+    root = Path(__file__).resolve().parents[2] / "nanobot" / "evolve"
+    assert root.is_dir(), f"evolve scan root must exist: {root}"
+    python_files = sorted(root.rglob("*.py"))
+    assert python_files, f"evolve scan must inspect at least one Python file under {root}"
+
+    offenders: list[str] = []
+    for path in python_files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            module = None
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    module = alias.name
+                    if any(
+                        module == prefix or module.startswith(f"{prefix}.")
+                        for prefix in forbidden_prefixes
+                    ):
+                        offenders.append(f"{path}:{module}")
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                module = node.module
+                if any(
+                    module == prefix or module.startswith(f"{prefix}.")
+                    for prefix in forbidden_prefixes
+                ):
+                    offenders.append(f"{path}:{module}")
+    assert offenders == []

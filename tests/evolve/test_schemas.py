@@ -1,7 +1,23 @@
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
-from nanobot.evolve.schemas import RubricScore, RubricWeights, assert_odd_pool_size
+from nanobot.evolve.gates import GateResult
+from nanobot.evolve.harness import RunManifest as HarnessRunManifest
+from nanobot.evolve.harness import load_manifest as harness_load_manifest
+from nanobot.evolve.schemas import (
+    JudgeSummary,
+    RubricScore,
+    RubricWeights,
+    RunManifest,
+    ValidationFailure,
+    assert_odd_pool_size,
+    dump_manifest,
+    load_manifest,
+)
 
 
 def test_rubric_weights_defaults_sum_to_one():
@@ -74,3 +90,117 @@ def test_assert_odd_pool_size_one_returns_none():
 def test_assert_odd_pool_size_negative_raises():
     with pytest.raises(ValueError, match=r"must be odd and >= 1"):
         assert_odd_pool_size(-1, context="x")
+
+
+# ---------------------------------------------------------------------------
+# M5 shared schema / harness compatibility
+# ---------------------------------------------------------------------------
+
+
+def _judge_summary_for_m5_schema_tests() -> JudgeSummary:
+    return JudgeSummary(
+        record_count=0,
+        median_aggregate=0.0,
+        median_process=0.0,
+        median_output=0.0,
+        median_token=0.0,
+        consensus_split_count=0,
+    )
+
+
+def test_harness_reexports_run_manifest_for_m5_compatibility() -> None:
+    assert HarnessRunManifest is RunManifest
+    assert harness_load_manifest is load_manifest
+
+
+def test_validation_failure_shape_uses_safe_fields() -> None:
+    failure = ValidationFailure(
+        candidate_index=1,
+        candidate_hash="abc123",
+        reason_code="frontmatter-invalid",
+        reason="frontmatter-invalid",
+    )
+
+    assert failure.model_dump(by_alias=True) == {
+        "candidateIndex": 1,
+        "candidateHash": "abc123",
+        "reasonCode": "frontmatter-invalid",
+        "reason": "frontmatter-invalid",
+    }
+
+
+def test_run_manifest_m5_fields_have_defaults_for_m4_compatibility(tmp_path: Path) -> None:
+    raw = {
+        "runId": "run-xyz",
+        "startedAt": "2026-01-01T00:00:00Z",
+        "finishedAt": "2026-01-01T00:05:00Z",
+        "nanobotVersion": "0.0.0",
+        "evolveExtraVersion": {"dspy": "2.4.0"},
+        "skillName": "demo-skill",
+        "baselineHash": "basehash00112233",
+        "candidateHashes": ["candhash44556677"],
+        "promotedCandidateHash": None,
+        "gateVerdicts": [],
+        "judgeSummary": _judge_summary_for_m5_schema_tests().model_dump(by_alias=True),
+        "finalStatus": "no_improvement",
+        "tiersUsed": ["A", "C"],
+        "recordCountPerTier": {"A": 0, "C": 0},
+        "judgePoolHealth": {},
+    }
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    manifest = load_manifest(path)
+
+    assert manifest.optimizer_name is None
+    assert manifest.validation_failures == []
+    assert manifest.artifact_paths == {}
+
+
+def test_run_manifest_accepts_rejected_by_validation_and_artifact_paths(tmp_path: Path) -> None:
+    manifest = RunManifest(
+        run_id="run-xyz",
+        started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc),
+        nanobot_version="0.0.0",
+        evolve_extra_version={"optimizer": "external"},
+        skill_name="demo-skill",
+        baseline_hash="basehash00112233",
+        candidate_hashes=[],
+        promoted_candidate_hash=None,
+        gate_verdicts=[
+            GateResult(
+                gate_name="1-test-pass",
+                candidate_hash="candhash",
+                baseline_hash="basehash00112233",
+                verdict="fail",
+                metrics={},
+                timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                duration_ms=1,
+            )
+        ],
+        judge_summary=_judge_summary_for_m5_schema_tests(),
+        final_status="rejected_by_validation",
+        tiers_used=["A", "C"],
+        record_count_per_tier={"A": 0, "C": 0},
+        judge_pool_health={},
+        optimizer_name="external-wrapper",
+        optimizer_seed=None,
+        validation_failures=[
+            ValidationFailure(
+                candidate_index=0,
+                candidate_hash="candhash",
+                reason_code="empty-content",
+                reason="empty-content",
+            )
+        ],
+        artifact_paths={"report": "report.md", "optimizer_input": "optimizer/optimizer_input.json"},
+    )
+    path = tmp_path / "manifest.json"
+
+    dump_manifest(path, manifest)
+    loaded = load_manifest(path)
+
+    assert loaded.final_status == "rejected_by_validation"
+    assert loaded.validation_failures[0].candidate_index == 0
+    assert loaded.artifact_paths["optimizer_input"] == "optimizer/optimizer_input.json"

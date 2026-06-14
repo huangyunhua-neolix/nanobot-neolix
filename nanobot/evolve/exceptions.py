@@ -113,3 +113,13 @@ class GateInternalError(EvolveError, RuntimeError):
 
     STRUCTURED_KWARGS: ClassVar[frozenset[str]] = frozenset()
     MUST_PRECEDE: ClassVar[frozenset[str]] = frozenset({"RuntimeError"})
+
+
+class OptimizerRunError(EvolveError, RuntimeError):
+    STRUCTURED_KWARGS: ClassVar[frozenset[str]] = frozenset({"run_dir", "exit_code"})
+    MUST_PRECEDE: ClassVar[frozenset[str]] = frozenset({"RuntimeError"})
+
+    def __init__(self, message: str, *, run_dir: str, exit_code: int | None = None) -> None:
+        super().__init__(message)
+        self.run_dir = run_dir
+        self.exit_code = exit_code

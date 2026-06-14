@@ -28,7 +28,7 @@ from nanobot.evolve.gates._constants import (
 )
 
 if TYPE_CHECKING:
-    from nanobot.evolve.harness import Baseline, Candidate
+    from nanobot.evolve.schemas import Baseline, Candidate
 
 
 __all__ = ["TestPassGate"]

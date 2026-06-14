@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, ClassVar, Literal
 from nanobot.evolve._base import EvolveBase
 
 if TYPE_CHECKING:
-    from nanobot.evolve.harness import Baseline, Candidate
+    from nanobot.evolve.schemas import Baseline, Candidate
 
 
 __all__ = ["Gate", "GateResult", "GATES"]
@@ -59,6 +59,13 @@ class Gate(ABC):
 
     @abstractmethod
     def evaluate(self, candidate: "Candidate", baseline: "Baseline") -> GateResult: ...
+
+    def cleanup_after_timeout(self) -> None:
+        """Release subprocesses or other resources after a gate timeout.
+
+        Gates that spawn child processes must override this method and terminate
+        those children. The default is a no-op for pure in-process gates.
+        """
 
 
 # Ordered EXECUTION registry — concrete Gate INSTANCES only, appended at module

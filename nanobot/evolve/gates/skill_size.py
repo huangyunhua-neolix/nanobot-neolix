@@ -22,7 +22,7 @@ from nanobot.evolve.gates import Gate, GateResult
 from nanobot.evolve.gates._constants import SKILL_LINE_DELTA_CAP, SKILL_LINE_HARD_CAP
 
 if TYPE_CHECKING:
-    from nanobot.evolve.harness import Baseline, Candidate
+    from nanobot.evolve.schemas import Baseline, Candidate
 
 
 __all__ = ["SkillSizeGate", "count_lines"]
