@@ -158,26 +158,42 @@ def test_assert_not_main_passes_on_user_feature_branch(tmp_path: Path) -> None:
 
 def _section_headers_in_order(body: str) -> list[str]:
     # Capture every line that starts with "## " — the level used by the spec
-    # for the 5 sections. Sub-headers would be "### " etc., so this is exact.
+    # for the 6 sections. Sub-headers would be "### " etc., so this is exact.
     return [line[3:].strip() for line in body.splitlines() if line.startswith("## ")]
 
 
-def test_assemble_pr_body_has_5_sections_in_order() -> None:
+def test_assemble_pr_body_has_6_sections_in_order() -> None:
     manifest = _make_run_manifest()
     body = assemble_pr_body(manifest, [])
     headers = _section_headers_in_order(body)
     # Pin BOTH count and order — a regression that reorders or duplicates the
     # sections must fail loudly.
-    assert len(headers) == 5
+    assert len(headers) == 6
     assert headers == [
         "Summary",
         "Eval results",
         "Gates passed",
         "Diff stats",
+        "Human review checklist",
         "Rollback plan",
     ]
     # PR_BODY_SECTIONS constant must stay in sync.
     assert headers == list(PR_BODY_SECTIONS)
+
+
+def test_assemble_pr_body_uses_real_diff_stats_and_human_checklist() -> None:
+    manifest = _make_run_manifest(
+        diff_stats={"files_changed": 1, "insertions": 3, "deletions": 2},
+        requires_human_approval=True,
+    )
+    body = assemble_pr_body(manifest, [_gate_result("5-human-review")])
+
+    assert "files changed: 1" in body
+    assert "insertions: 3" in body
+    assert "deletions: 2" in body
+    assert "Human review checklist" in body
+    assert "[ ] Human reviewer approved this skill evolution" in body
+    assert "No live skill file was changed by this run" in body
 
 
 def test_assemble_pr_body_includes_manifest_run_id() -> None:
@@ -251,7 +267,7 @@ def test_assemble_pr_body_is_deterministic() -> None:
 # ---------------------------------------------------------------------------
 #
 # A field containing ``\n## ...`` would forge extra level-2 headers and break
-# the 5-section invariant the renderer promises. ``assemble_pr_body`` is a
+# the 6-section invariant the renderer promises. ``assemble_pr_body`` is a
 # leaf renderer; it MUST NOT rely on caller hygiene. The guard raises
 # ValueError naming the offending field so callers can fail loudly.
 
@@ -316,8 +332,8 @@ def test_assemble_pr_body_accepts_none_failure_reason() -> None:
     assert "1-test-pass" in body
 
 
-def test_assemble_pr_body_5_section_invariant_holds_under_safe_input() -> None:
-    # Reconfirm the count==5 + ordering after the validation pass to prove
+def test_assemble_pr_body_6_section_invariant_holds_under_safe_input() -> None:
+    # Reconfirm the count==6 + ordering after the validation pass to prove
     # the guard didn't accidentally regress the happy path.
     manifest = _make_run_manifest()
     gates = [
@@ -326,7 +342,7 @@ def test_assemble_pr_body_5_section_invariant_holds_under_safe_input() -> None:
     ]
     body = assemble_pr_body(manifest, gates)
     headers = _section_headers_in_order(body)
-    assert len(headers) == 5
+    assert len(headers) == 6
     assert headers == list(PR_BODY_SECTIONS)
 
 
@@ -403,7 +419,7 @@ def test_assemble_pr_body_raises_runtime_error_if_assembled_body_drops_section(
 def test_assemble_pr_body_rejects_each_forbidden_line_break_char(
     char: str, codepoint_hex: str
 ) -> None:
-    """Spec §8.2 5-section invariant defense: every char in
+    """Spec §8.2 6-section invariant defense: every char in
     ``_FORBIDDEN_NEWLINE_CHARS`` is rejected with a message naming the offending
     field AND the specific code point."""
     manifest = _make_run_manifest().model_copy(
@@ -419,7 +435,7 @@ def test_assemble_pr_body_rejects_each_forbidden_line_break_char(
 def test_assemble_pr_body_rejects_triple_backtick_in_failure_reason() -> None:
     """R3.5 follow-up: triple-backtick in ``failure_reason`` would open a
     fenced code block in the rendered PR view that swallows subsequent
-    ``## `` headers, breaking the visible 5-section layout (raw-text
+    ``## `` headers, breaking the visible 6-section layout (raw-text
     invariant still passes — this is a defense-in-depth rendered-layout
     guard)."""
     # Use a single-line payload so the triple-backtick check wins (the more

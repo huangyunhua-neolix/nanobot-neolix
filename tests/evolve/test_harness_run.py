@@ -193,6 +193,51 @@ Path(args.output).write_text(json.dumps({
     assert manifest.requires_human_approval is True
 
 
+def test_harness_report_and_pr_body_show_human_review_state(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "optimizer.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'review-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'adds example instruction'
+    }]
+}))
+""".lstrip(),
+    )
+
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    report = (run_dir / "report.md").read_text(encoding="utf-8")
+    pr_body = (run_dir / "pr_body.md").read_text(encoding="utf-8")
+    assert "Human approval required: `true`" in report
+    assert "Diff stats" in report
+    assert "Human review checklist" in pr_body
+
+
 def test_harness_default_gates_include_semantic_and_human_review(tmp_path: Path) -> None:
     _write_skill(tmp_path, "demo-skill")
     script = tmp_path / "optimizer.py"
