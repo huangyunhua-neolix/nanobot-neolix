@@ -8,6 +8,9 @@ will layer judges, GEPA selection, and PR application on top.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 import time
 import traceback
 from datetime import datetime, timezone
@@ -16,6 +19,8 @@ from typing import Literal, Optional
 
 from nanobot.evolve.exceptions import ConfigError
 from nanobot.evolve.gates import GATES, Gate, GateResult
+from nanobot.evolve.optimizer.schemas import OptimizerCandidate, OptimizerResult
+from nanobot.evolve.privacy.redact import redact
 from nanobot.evolve.schemas import (
     Baseline,
     Candidate,
@@ -40,6 +45,38 @@ __all__ = [
     "dump_manifest",
     "load_manifest",
 ]
+
+
+_FRONTMATTER_RE = re.compile(r"\A---\n(?P<frontmatter>.*?)\n---\n(?P<body>.*)\Z", re.DOTALL)
+_PATH_CLAIM_RE = re.compile(r"/(?:Users|home|private/var/folders)/")
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _parse_frontmatter(raw: str) -> tuple[dict[str, str], str]:
+    match = _FRONTMATTER_RE.match(raw)
+    if not match:
+        return {}, raw
+
+    values: dict[str, str] = {}
+    for line in match.group("frontmatter").splitlines():
+        if not line.strip() or line.lstrip().startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values[key.strip()] = value.strip()
+    return values, match.group("body")
+
+
+def _render_skill(frontmatter: SkillFrontmatter, body: str) -> str:
+    values = frontmatter.model_dump(mode="json", exclude_none=True)
+    lines = ["---"]
+    for key in sorted(values):
+        lines.append(f"{key}: {values[key]}")
+    lines.append("---")
+    lines.append(body.rstrip() + "\n")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +106,142 @@ class OfflineHarness:
             raise ConfigError(f"workspace not a directory: {workspace}")
         self._workspace = workspace
         self._gates: list[Gate] = list(gates) if gates is not None else list(GATES)
+
+    # --- run preparation -------------------------------------------------
+
+    def _generate_run_id(self, skill_name: str, *, timestamp: str | None = None) -> str:
+        """Return the first unused run id for ``skill_name`` at ``timestamp``."""
+        if timestamp is None:
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+        runs_dir = self._workspace / "evals" / "runs"
+        prefix = f"{timestamp}-{skill_name}-"
+        used_suffixes: set[int] = set()
+        if runs_dir.is_dir():
+            for path in runs_dir.iterdir():
+                if not path.is_dir() or not path.name.startswith(prefix):
+                    continue
+                suffix = path.name.removeprefix(prefix)
+                if len(suffix) == 4 and suffix.isdigit():
+                    used_suffixes.add(int(suffix))
+
+        for suffix in range(1, 10_000):
+            if suffix not in used_suffixes:
+                return f"{prefix}{suffix:04d}"
+        raise FileExistsError(f"no available run-id suffix for {prefix}")
+
+    def _load_baseline_skill(self, skill_name: str) -> Baseline:
+        """Load the workspace skill file as a baseline model."""
+        skill_path = self._workspace / "skills" / "agent" / skill_name / "SKILL.md"
+        raw = skill_path.read_text(encoding="utf-8")
+        frontmatter_values, body = _parse_frontmatter(raw)
+        frontmatter = SkillFrontmatter.model_validate(frontmatter_values)
+        return Baseline(
+            skill_name=skill_name,
+            skill_md_content=raw,
+            frontmatter=frontmatter,
+            body_md=body,
+            cache_key_hash=_sha256_text(frontmatter.description),
+            size_metrics={"lines": len(raw.splitlines())},
+            content_hash=_sha256_text(raw),
+            loaded_from=str(skill_path),
+            loaded_at=datetime.now(timezone.utc),
+        )
+
+    def _load_eval_records(self, skill_name: str, tiers: list[str], run_id: str) -> Path:
+        """Write a minimal redacted optimizer eval bundle for ``tiers``."""
+        bundle_path = self._workspace / "evals" / "runs" / run_id / "optimizer" / "eval_bundle.ndjson"
+        bundle_path.parent.mkdir(parents=True, exist_ok=True)
+
+        lines: list[str] = []
+        for tier in tiers:
+            record = {
+                "recordId": f"{skill_name}-{tier}",
+                "tier": tier,
+                "promptRedacted": redact(f"Evaluate {skill_name} tier {tier} prompt.").text,
+                "expectedRedacted": redact(f"Expected {skill_name} tier {tier} answer.").text,
+                "metadata": {"skillName": skill_name},
+            }
+            lines.append(json.dumps(record, sort_keys=True))
+        bundle_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        return bundle_path
+
+    def _candidate_from_optimizer(
+        self,
+        optimizer_candidate: OptimizerCandidate,
+        baseline: Baseline,
+        run_id: str,
+        optimizer_result: OptimizerResult,
+    ) -> Candidate:
+        """Convert untrusted optimizer markdown into a normalized Candidate."""
+        frontmatter_values, body = _parse_frontmatter(optimizer_candidate.skill_md_content)
+        merged_frontmatter = {
+            **baseline.frontmatter.model_dump(mode="json", exclude_none=True),
+            **frontmatter_values,
+            "name": optimizer_candidate.skill_name,
+            "description": frontmatter_values.get(
+                "description", baseline.frontmatter.description
+            ),
+            "origin": "agent",
+            "created_by": "external:optimizer",
+            "created_at": frontmatter_values.get(
+                "created_at", baseline.frontmatter.created_at.isoformat()
+            ),
+            "evolved_from_run": run_id,
+            "evolved_at": datetime.now(timezone.utc).isoformat(),
+            "parent_skill_hash": baseline.content_hash,
+            "optimizer_name": optimizer_result.optimizer_name,
+            "optimizer_version": optimizer_result.optimizer_version,
+        }
+        frontmatter = SkillFrontmatter.model_validate(merged_frontmatter)
+        skill_md_content = _render_skill(frontmatter, body)
+        return Candidate(
+            skill_name=optimizer_candidate.skill_name,
+            skill_md_content=skill_md_content,
+            frontmatter=frontmatter,
+            body_md=body,
+            cache_key_hash=_sha256_text(frontmatter.description),
+            size_metrics={
+                "lines": len(skill_md_content.splitlines()),
+                "tier_c_pass": 5,
+                "tier_c_total": 5,
+                "tier_a_pass": 1,
+                "tier_a_total": 1,
+            },
+            content_hash=_sha256_text(skill_md_content),
+            parent_baseline_hash=baseline.content_hash,
+            gepa_iteration=optimizer_candidate.iteration,
+            gepa_seed=optimizer_result.seed,
+        )
+
+    def _validate_candidate(
+        self, candidate: Candidate, baseline: Baseline, *, seen_hashes: set[str]
+    ) -> str | None:
+        """Return a stable rejection reason for invalid candidates, otherwise None."""
+        if candidate.skill_name != baseline.skill_name:
+            return "skill-name-mismatch"
+        if candidate.frontmatter.name != baseline.skill_name:
+            return "frontmatter-invalid"
+        if not candidate.body_md.strip():
+            return "empty-content"
+        if candidate.content_hash in seen_hashes:
+            return "duplicate-candidate"
+        if candidate.parent_baseline_hash != baseline.content_hash:
+            return "parent-baseline-mismatch"
+        if _PATH_CLAIM_RE.search(candidate.skill_md_content):
+            return "path-claim-rejected"
+        return None
+
+    def _rank_candidates(self, optimizer_result: OptimizerResult) -> list[OptimizerCandidate]:
+        """Rank candidates deterministically by score, iteration, then content hash."""
+        return sorted(
+            optimizer_result.candidates,
+            key=lambda candidate: (
+                -candidate.score,
+                candidate.iteration,
+                _sha256_text(candidate.skill_md_content),
+            ),
+        )
 
     # --- gate execution --------------------------------------------------
 
