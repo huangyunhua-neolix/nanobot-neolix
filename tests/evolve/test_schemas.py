@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from nanobot.evolve.gates import GateResult
 from nanobot.evolve.harness import RunManifest as HarnessRunManifest
 from nanobot.evolve.harness import load_manifest as harness_load_manifest
+from nanobot.evolve.optimizer.schemas import OptimizerError, OptimizerInput, OptimizerResult
 from nanobot.evolve.schemas import (
     Candidate,
     DiffStats,
@@ -494,6 +495,17 @@ def test_tool_contract_snapshot_serializes_hash_surface() -> None:
     assert ToolContractSnapshot.model_validate(dumped) == snapshot
 
 
+def test_tool_contract_snapshot_rejects_empty_schema_hash() -> None:
+    with pytest.raises(ValidationError):
+        ToolContractSnapshot(
+            tool_name="read_file",
+            description_text="Read a workspace file.",
+            parameters_schema={},
+            source_kind="builtin",
+            schema_hash="",
+        )
+
+
 def test_tool_metadata_candidate_uses_proposed_schema_as_single_source() -> None:
     candidate = ToolMetadataCandidate(
         tool_name="read_file",
@@ -525,6 +537,39 @@ def test_tool_metadata_candidate_uses_proposed_schema_as_single_source() -> None
     assert ToolMetadataCandidate.model_validate(dumped) == candidate
 
 
+def test_tool_metadata_candidate_rejects_empty_baseline_schema_hash() -> None:
+    with pytest.raises(ValidationError):
+        ToolMetadataCandidate(
+            tool_name="read_file",
+            baseline_schema_hash="",
+            proposed_schema={"type": "object"},
+            intended_improvement="Clarifies scope.",
+            risk_assessment="No permission or schema expansion.",
+        )
+
+
+def test_tool_metadata_candidate_rejects_blank_intended_improvement() -> None:
+    with pytest.raises(ValidationError):
+        ToolMetadataCandidate(
+            tool_name="read_file",
+            baseline_schema_hash="a" * 64,
+            proposed_schema={"type": "object"},
+            intended_improvement="",
+            risk_assessment="No permission or schema expansion.",
+        )
+
+
+def test_tool_metadata_candidate_rejects_blank_risk_assessment() -> None:
+    with pytest.raises(ValidationError):
+        ToolMetadataCandidate(
+            tool_name="read_file",
+            baseline_schema_hash="a" * 64,
+            proposed_schema={"type": "object"},
+            intended_improvement="Clarifies scope.",
+            risk_assessment="",
+        )
+
+
 def test_tool_metadata_validation_result_round_trips_rejection() -> None:
     result = ToolMetadataValidationResult(
         tool_name="read_file",
@@ -547,6 +592,46 @@ def test_tool_metadata_validation_result_round_trips_rejection() -> None:
         "changedPaths": ["$.description"],
         "judgeEvidencePath": None,
     }
+    assert ToolMetadataValidationResult.model_validate(dumped) == result
+
+
+def test_tool_metadata_validation_result_rejects_verdict_reject_without_reason_code() -> None:
+    with pytest.raises(ValidationError):
+        ToolMetadataValidationResult(
+            tool_name="read_file",
+            baseline_schema_hash="a" * 64,
+            verdict="reject",
+            reason_code=None,
+        )
+
+
+def test_tool_metadata_validation_result_rejects_empty_baseline_schema_hash() -> None:
+    with pytest.raises(ValidationError):
+        ToolMetadataValidationResult(
+            tool_name="read_file",
+            baseline_schema_hash="",
+            verdict="accept",
+        )
+
+
+def test_tool_metadata_validation_result_accepts_verdict_with_evidence() -> None:
+    result = ToolMetadataValidationResult(
+        tool_name="read_file",
+        baseline_schema_hash="a" * 64,
+        verdict="accept",
+        reason_code=None,
+        reason=None,
+        changed_paths=["$.description", "$.parameters.path.description"],
+        judge_evidence_path="path/to/evidence.jsonl",
+    )
+
+    assert result.verdict == "accept"
+    assert result.judge_evidence_path == "path/to/evidence.jsonl"
+    assert len(result.changed_paths) == 2
+
+    dumped = result.model_dump(by_alias=True)
+    assert dumped["judgeEvidencePath"] == "path/to/evidence.jsonl"
+    assert dumped["changedPaths"] == ["$.description", "$.parameters.path.description"]
     assert ToolMetadataValidationResult.model_validate(dumped) == result
 
 
@@ -579,8 +664,6 @@ def test_run_manifest_accepts_tool_metadata_artifact_paths() -> None:
 
 
 def test_optimizer_input_accepts_tool_contract_snapshot_context() -> None:
-    from nanobot.evolve.optimizer.schemas import OptimizerInput
-
     snapshot = ToolContractSnapshot(
         tool_name="read_file",
         description_text="Read a workspace file.",
@@ -609,8 +692,6 @@ def test_optimizer_input_accepts_tool_contract_snapshot_context() -> None:
 
 
 def test_optimizer_result_accepts_optional_tool_metadata_candidates() -> None:
-    from nanobot.evolve.optimizer.schemas import OptimizerResult
-
     candidate = ToolMetadataCandidate(
         tool_name="read_file",
         baseline_schema_hash="a" * 64,
@@ -623,10 +704,12 @@ def test_optimizer_result_accepts_optional_tool_metadata_candidates() -> None:
         risk_assessment="No permission or schema expansion.",
     )
 
+    error = OptimizerError(code="no_improvement", message="No skill improvement.")
+
     result = OptimizerResult(
         optimizer_name="external-wrapper",
         candidates=[],
-        error={"code": "no_improvement", "message": "No skill improvement."},
+        error=error,
         tool_metadata_candidates=[candidate],
     )
 

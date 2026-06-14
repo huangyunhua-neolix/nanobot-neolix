@@ -112,25 +112,33 @@ class ToolContractSnapshot(EvolveBase):
     description_text: str = ""
     parameters_schema: dict[str, object] = Field(default_factory=dict)
     source_kind: Literal["builtin", "mcp", "unknown"]
-    schema_hash: str
+    schema_hash: str = Field(min_length=1)
 
 
 class ToolMetadataCandidate(EvolveBase):
     tool_name: str
-    baseline_schema_hash: str
+    baseline_schema_hash: str = Field(min_length=1)
     proposed_schema: dict[str, object]
-    intended_improvement: str = Field(max_length=2000)
-    risk_assessment: str = Field(max_length=2000)
+    intended_improvement: str = Field(min_length=1, max_length=2000)
+    risk_assessment: str = Field(min_length=1, max_length=2000)
 
 
 class ToolMetadataValidationResult(EvolveBase):
     tool_name: str
-    baseline_schema_hash: str
+    baseline_schema_hash: str = Field(min_length=1)
     verdict: Literal["accept", "reject"]
     reason_code: str | None = None
     reason: str | None = None
     changed_paths: list[str] = Field(default_factory=list)
     judge_evidence_path: str | None = None
+
+    @model_validator(mode="after")
+    def _reject_requires_reason_code(self) -> "ToolMetadataValidationResult":
+        if self.verdict == "reject" and self.reason_code is None:
+            raise ValueError(
+                "ToolMetadataValidationResult with verdict='reject' requires reason_code to be non-None"
+            )
+        return self
 
 
 class ValidationFailure(EvolveBase):
