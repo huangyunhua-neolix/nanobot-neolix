@@ -1,4 +1,5 @@
 from nanobot.evolve.exceptions import OptimizerRunError
+from nanobot.evolve.optimizer.adapter import OptimizerAdapter
 from nanobot.evolve.optimizer.schemas import (
     OptimizerCandidate,
     OptimizerError,
@@ -7,6 +8,7 @@ from nanobot.evolve.optimizer.schemas import (
 )
 
 __all__ = [
+    "OptimizerAdapter",
     "OptimizerCandidate",
     "OptimizerError",
     "OptimizerInput",
