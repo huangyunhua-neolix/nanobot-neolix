@@ -107,6 +107,32 @@ class JudgeRunSummary(EvolveBase):
     disagreement_max: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
+class ToolContractSnapshot(EvolveBase):
+    tool_name: str
+    description_text: str = ""
+    parameters_schema: dict[str, object] = Field(default_factory=dict)
+    source_kind: Literal["builtin", "mcp", "unknown"]
+    schema_hash: str
+
+
+class ToolMetadataCandidate(EvolveBase):
+    tool_name: str
+    baseline_schema_hash: str
+    proposed_schema: dict[str, object]
+    intended_improvement: str = Field(max_length=2000)
+    risk_assessment: str = Field(max_length=2000)
+
+
+class ToolMetadataValidationResult(EvolveBase):
+    tool_name: str
+    baseline_schema_hash: str
+    verdict: Literal["accept", "reject"]
+    reason_code: str | None = None
+    reason: str | None = None
+    changed_paths: list[str] = Field(default_factory=list)
+    judge_evidence_path: str | None = None
+
+
 class ValidationFailure(EvolveBase):
     candidate_index: int = Field(ge=0)
     candidate_hash: str
@@ -157,6 +183,7 @@ class RunManifest(FrozenEvolveBase):
     requires_human_approval: bool = False
     judge_run_summary: JudgeRunSummary | None = None
     judge_evidence_paths: dict[str, str] = Field(default_factory=dict)
+    tool_metadata_artifact_paths: dict[str, str] = Field(default_factory=dict)
 
 
 def assert_odd_pool_size(n: int, *, context: str) -> None:

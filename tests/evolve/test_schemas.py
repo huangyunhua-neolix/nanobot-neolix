@@ -20,6 +20,9 @@ from nanobot.evolve.schemas import (
     RubricWeights,
     RunManifest,
     SkillFrontmatter,
+    ToolContractSnapshot,
+    ToolMetadataCandidate,
+    ToolMetadataValidationResult,
     ValidationFailure,
     assert_odd_pool_size,
     dump_manifest,
@@ -451,3 +454,183 @@ def test_run_manifest_accepts_rejected_by_validation_and_artifact_paths(tmp_path
     assert loaded.final_status == "rejected_by_validation"
     assert loaded.validation_failures[0].candidate_index == 0
     assert loaded.artifact_paths["optimizer_input"] == "optimizer/optimizer_input.json"
+
+
+# ---------------------------------------------------------------------------
+# M7 Tool Metadata Schemas
+# ---------------------------------------------------------------------------
+
+
+def test_tool_contract_snapshot_serializes_hash_surface() -> None:
+    snapshot = ToolContractSnapshot(
+        tool_name="read_file",
+        description_text="Read a workspace file.",
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Workspace path"}
+            },
+            "required": ["path"],
+        },
+        source_kind="builtin",
+        schema_hash="a" * 64,
+    )
+
+    dumped = snapshot.model_dump(by_alias=True)
+
+    assert dumped == {
+        "toolName": "read_file",
+        "descriptionText": "Read a workspace file.",
+        "parametersSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Workspace path"}
+            },
+            "required": ["path"],
+        },
+        "sourceKind": "builtin",
+        "schemaHash": "a" * 64,
+    }
+    assert ToolContractSnapshot.model_validate(dumped) == snapshot
+
+
+def test_tool_metadata_candidate_uses_proposed_schema_as_single_source() -> None:
+    candidate = ToolMetadataCandidate(
+        tool_name="read_file",
+        baseline_schema_hash="a" * 64,
+        proposed_schema={
+            "name": "read_file",
+            "description": "Read one explicitly requested workspace file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Explicit workspace file path",
+                    }
+                },
+                "required": ["path"],
+            },
+        },
+        intended_improvement="Clarifies that the path must be explicit.",
+        risk_assessment="No permission or schema expansion.",
+    )
+
+    dumped = candidate.model_dump(by_alias=True)
+
+    assert dumped["toolName"] == "read_file"
+    assert dumped["baselineSchemaHash"] == "a" * 64
+    assert "candidateDescription" not in dumped
+    assert "candidateParameterNotes" not in dumped
+    assert ToolMetadataCandidate.model_validate(dumped) == candidate
+
+
+def test_tool_metadata_validation_result_round_trips_rejection() -> None:
+    result = ToolMetadataValidationResult(
+        tool_name="read_file",
+        baseline_schema_hash="a" * 64,
+        verdict="reject",
+        reason_code="tool-permission-expansion",
+        reason="tool-permission-expansion: changed text contains 'without permission'",
+        changed_paths=["$.description"],
+        judge_evidence_path=None,
+    )
+
+    dumped = result.model_dump(by_alias=True)
+
+    assert dumped == {
+        "toolName": "read_file",
+        "baselineSchemaHash": "a" * 64,
+        "verdict": "reject",
+        "reasonCode": "tool-permission-expansion",
+        "reason": "tool-permission-expansion: changed text contains 'without permission'",
+        "changedPaths": ["$.description"],
+        "judgeEvidencePath": None,
+    }
+    assert ToolMetadataValidationResult.model_validate(dumped) == result
+
+
+def test_run_manifest_defaults_m7_tool_metadata_fields_for_m6_compatibility() -> None:
+    manifest = RunManifest(**_manifest_payload())
+
+    assert manifest.tool_metadata_artifact_paths == {}
+
+
+def test_run_manifest_accepts_tool_metadata_artifact_paths() -> None:
+    manifest = RunManifest(
+        **_manifest_payload(),
+        tool_metadata_artifact_paths={
+            "tool_contract_snapshot": "tool_contract_snapshot.json",
+            "tool_metadata_candidates": "tool_metadata_candidates.jsonl",
+            "tool_metadata_review": "tool_metadata_review.md",
+        },
+    )
+
+    assert manifest.tool_metadata_artifact_paths == {
+        "tool_contract_snapshot": "tool_contract_snapshot.json",
+        "tool_metadata_candidates": "tool_metadata_candidates.jsonl",
+        "tool_metadata_review": "tool_metadata_review.md",
+    }
+
+
+# ---------------------------------------------------------------------------
+# M7 Optimizer Contract Fields
+# ---------------------------------------------------------------------------
+
+
+def test_optimizer_input_accepts_tool_contract_snapshot_context() -> None:
+    from nanobot.evolve.optimizer.schemas import OptimizerInput
+
+    snapshot = ToolContractSnapshot(
+        tool_name="read_file",
+        description_text="Read a workspace file.",
+        parameters_schema={"type": "object", "properties": {}},
+        source_kind="builtin",
+        schema_hash="a" * 64,
+    )
+
+    payload = OptimizerInput(
+        run_id="run-1",
+        skill_name="demo-skill",
+        baseline_hash="basehash",
+        baseline_skill_md_redacted="redacted",
+        eval_records_path="optimizer/eval_bundle.ndjson",
+        output_dir="optimizer",
+        max_candidates=8,
+        timeout_seconds=600,
+        seed=123,
+        tool_contract_snapshot=[snapshot],
+    )
+
+    dumped = payload.model_dump(by_alias=True)
+
+    assert dumped["toolContractSnapshot"][0]["toolName"] == "read_file"
+    assert OptimizerInput.model_validate(dumped).tool_contract_snapshot == [snapshot]
+
+
+def test_optimizer_result_accepts_optional_tool_metadata_candidates() -> None:
+    from nanobot.evolve.optimizer.schemas import OptimizerResult
+
+    candidate = ToolMetadataCandidate(
+        tool_name="read_file",
+        baseline_schema_hash="a" * 64,
+        proposed_schema={
+            "name": "read_file",
+            "description": "Read one explicitly requested workspace file.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        intended_improvement="Clarifies scope.",
+        risk_assessment="No permission or schema expansion.",
+    )
+
+    result = OptimizerResult(
+        optimizer_name="external-wrapper",
+        candidates=[],
+        error={"code": "no_improvement", "message": "No skill improvement."},
+        tool_metadata_candidates=[candidate],
+    )
+
+    dumped = result.model_dump(by_alias=True)
+
+    assert dumped["toolMetadataCandidates"][0]["toolName"] == "read_file"
+    assert OptimizerResult.model_validate(dumped).tool_metadata_candidates == [candidate]
