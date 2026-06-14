@@ -7,6 +7,7 @@ from nanobot.agent.tools.base import Tool
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.schema import StringSchema
 from nanobot.evolve.harness import OfflineHarness
+from nanobot.evolve.tool_metadata import sanitize_tool_schema_definition
 from tests.evolve.test_harness_run import _write_optimizer_script, _write_skill
 
 
@@ -39,8 +40,7 @@ def test_harness_tool_snapshot_sanitizes_without_mutating_registry() -> None:
     definitions = registry.get_definitions()
     original_parameter = definitions[0]["function"]["parameters"]["properties"]["query"]
 
-    harness = OfflineHarness(workspace=Path.cwd())
-    safe_schema = harness._sanitize_tool_schema_definition(definitions[0])["function"]["parameters"]
+    safe_schema = sanitize_tool_schema_definition(definitions[0])["function"]["parameters"]
 
     assert safe_schema["properties"]["query"] == {
         "type": "string",

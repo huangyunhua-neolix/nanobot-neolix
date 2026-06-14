@@ -665,6 +665,7 @@ class TestRenderToolMetadataReview:
         review = render_tool_metadata_review([snapshot], [candidate], [stale_validation_result])
 
         assert "Verdict: `missing-validation`" in review
+        assert "Validation result does not match candidate tool name or baseline hash." in review
         assert "Verdict: `reject`" not in review
         assert "Stale validation result must not be rendered." not in review
         assert "`$.parameters.properties.path.type`" not in review

@@ -6,7 +6,11 @@ import re
 from copy import deepcopy
 from typing import Any, Literal
 
+from nanobot.agent.tools.base import Schema
+from nanobot.agent.tools.context import ToolContext
+from nanobot.agent.tools.loader import ToolLoader
 from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.config import Config
 from nanobot.evolve.privacy.redact import redact
 from nanobot.evolve.schemas import (
     ToolContractSnapshot,
@@ -248,6 +252,43 @@ def _snapshot_schema(snapshot: ToolContractSnapshot) -> dict[str, Any]:
     return _build_baseline_schema(snapshot)
 
 
+def _json_safe_tool_schema(value: object) -> object:
+    """Convert loaded runtime schema fragments into JSON-safe structures."""
+    if isinstance(value, Schema):
+        return _json_safe_tool_schema(value.to_json_schema())
+    if isinstance(value, dict):
+        return {str(key): _json_safe_tool_schema(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_json_safe_tool_schema(child) for child in value]
+    if isinstance(value, tuple):
+        return [_json_safe_tool_schema(child) for child in value]
+    return value
+
+
+def sanitize_tool_schema_definition(schema_def: dict[str, Any]) -> dict[str, Any]:
+    """Return a JSON-safe copy of a tool schema definition."""
+    safe_schema_def = deepcopy(schema_def)
+    flat_schema = safe_schema_def.get("function")
+    if not isinstance(flat_schema, dict):
+        flat_schema = safe_schema_def
+    parameters_schema = flat_schema.get("parameters")
+    if isinstance(parameters_schema, dict):
+        flat_schema["parameters"] = _json_safe_tool_schema(parameters_schema)
+    return safe_schema_def
+
+
+def capture_loaded_tool_contract_snapshot(*, workspace: str) -> list[ToolContractSnapshot]:
+    """Capture a JSON-safe tool contract snapshot through the runtime loader path."""
+    registry = ToolRegistry()
+    context = ToolContext(config=Config().tools, workspace=workspace)
+    ToolLoader().load(context, registry)
+    safe_definitions = [
+        sanitize_tool_schema_definition(schema_def)
+        for schema_def in registry.get_definitions()
+    ]
+    return capture_tool_contract_snapshot(safe_definitions)
+
+
 def validate_tool_metadata_candidate(
     candidate: ToolMetadataCandidate,
     snapshot: list[ToolContractSnapshot],
@@ -389,16 +430,19 @@ def render_tool_metadata_review(
         enumerate(candidates), key=lambda item: (item[1].tool_name, item[0])
     ):
         result = validation_results[index] if index < len(validation_results) else None
-        if result is not None and (
+        validation_mismatch = result is not None and (
             result.tool_name != candidate.tool_name
             or result.baseline_schema_hash != candidate.baseline_schema_hash
-        ):
+        )
+        if validation_mismatch:
             result = None
         matching_snapshot = snapshots_by_name.get(candidate.tool_name)
         baseline_schema = _snapshot_schema(matching_snapshot) if matching_snapshot is not None else {}
         proposed_schema = canonical_tool_schema(candidate.model_dump()["proposed_schema"])
         changed_paths = result.changed_paths if result is not None else _changed_paths(baseline_schema, proposed_schema)
         reason = result.reason if result is not None and result.reason else "<none>"
+        if validation_mismatch:
+            reason = "Validation result does not match candidate tool name or baseline hash."
         verdict = result.verdict if result is not None else "missing-validation"
         judge_evidence_path = result.judge_evidence_path if result is not None and result.judge_evidence_path else "<none>"
         baseline_description = baseline_schema.get("description") if baseline_schema else "<missing snapshot>"
