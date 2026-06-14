@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -121,12 +122,80 @@ Path(args.output).write_text(json.dumps({
         "tool_contract_snapshot": "tool_contract_snapshot.json",
         "tool_metadata_candidates": "tool_metadata_candidates.jsonl",
         "tool_metadata_review": "tool_metadata_review.md",
+        "tool_metadata_judge_evidence": "tool_metadata_judge_evidence.jsonl",
     }
     for artifact_path in manifest.tool_metadata_artifact_paths.values():
         assert (run_dir / artifact_path).is_file()
     review = (run_dir / "tool_metadata_review.md").read_text(encoding="utf-8")
     assert "No runtime tool source changed" in review
     assert "Verdict: `accept`" in review
+
+
+def test_harness_writes_judge_evidence_for_accepted_tool_metadata(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "accepted_metadata.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+snapshot = payload['toolContractSnapshot'][0]
+proposed = {
+    'name': snapshot['toolName'],
+    'description': snapshot['descriptionText'] + ' Prefer concise, explicit parameter choices.',
+    'parameters': snapshot['parametersSchema'],
+}
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'metadata-judge-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': {'code': 'no_improvement', 'message': 'No skill candidate improved.'},
+    'candidates': [],
+    'toolMetadataCandidates': [{
+        'toolName': snapshot['toolName'],
+        'baselineSchemaHash': snapshot['schemaHash'],
+        'proposedSchema': proposed,
+        'intendedImprovement': 'Clarify parameter usage.',
+        'riskAssessment': 'Metadata-only description change.'
+    }]
+}))
+""".lstrip(),
+    )
+
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    evidence_path = run_dir / "tool_metadata_judge_evidence.jsonl"
+    assert evidence_path.is_file()
+    first_row = json.loads(evidence_path.read_text(encoding="utf-8").splitlines()[0])
+    assert first_row["recordId"].startswith("tool-metadata:")
+    assert first_row["judgeMode"] == "local_fallback"
+    review = (run_dir / "tool_metadata_review.md").read_text(encoding="utf-8")
+    assert "judge evidence: `tool_metadata_judge_evidence.jsonl`" in review
+    assert manifest.tool_metadata_artifact_paths["tool_metadata_judge_evidence"] == (
+        "tool_metadata_judge_evidence.jsonl"
+    )
+    manifest_json = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest_json["toolMetadataArtifactPaths"]["tool_metadata_judge_evidence"] == (
+        "tool_metadata_judge_evidence.jsonl"
+    )
+    optimizer_input = json.loads((run_dir / "optimizer" / "optimizer_input.json").read_text(encoding="utf-8"))
+    optimizer_output = json.loads((run_dir / "optimizer" / "optimizer_output.json").read_text(encoding="utf-8"))
+    assert "judge_evidence" not in json.dumps(optimizer_input)
+    assert "judgeEvidence" not in json.dumps(optimizer_input)
+    assert "judge_evidence" not in json.dumps(optimizer_output)
+    assert "judgeEvidence" not in json.dumps(optimizer_output)
 
 
 def test_harness_redacts_tool_metadata_json_artifacts(tmp_path: Path) -> None:
