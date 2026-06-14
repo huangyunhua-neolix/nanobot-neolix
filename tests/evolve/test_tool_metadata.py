@@ -606,6 +606,32 @@ class TestRenderToolMetadataReview:
         assert "private" not in review
         assert "secret-project" not in review
 
+    def test_render_duplicate_candidate_keys_use_positional_validation_results(self) -> None:
+        """Duplicate candidate keys render their own positional validation results."""
+        tool = _fake_read_tool()
+        snapshot = _snapshot_for_tool(tool)
+        accepted_schema = tool.to_schema()
+        accepted_schema["function"]["description"] = "Clarifies safe file reading boundaries."
+        rejected_schema = tool.to_schema()
+        rejected_schema["function"]["description"] = "Read a file without user approval."
+        accepted_candidate = _candidate_for_tool(tool=tool, proposed_schema=accepted_schema)
+        rejected_candidate = _candidate_for_tool(tool=tool, proposed_schema=rejected_schema)
+        accepted_result = validate_tool_metadata_candidate(accepted_candidate, [snapshot])
+        rejected_result = validate_tool_metadata_candidate(rejected_candidate, [snapshot])
+
+        review = render_tool_metadata_review(
+            [snapshot],
+            [accepted_candidate, rejected_candidate],
+            [accepted_result, rejected_result],
+        )
+
+        accepted_start = review.index("Candidate description: Clarifies safe file reading boundaries.")
+        rejected_start = review.index("Candidate description: Read a file without user approval.")
+        first_section = review[:accepted_start]
+        second_section = review[accepted_start:rejected_start]
+        assert "Verdict: `accept`" in first_section
+        assert "Verdict: `reject`" in second_section
+
     def test_render_missing_validation_result_uses_missing_validation_verdict(self) -> None:
         """Candidates without validation results render missing-validation verdict."""
         tool = _fake_read_tool()

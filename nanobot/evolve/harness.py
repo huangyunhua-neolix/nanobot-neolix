@@ -17,9 +17,10 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import ValidationError
 
@@ -458,19 +459,27 @@ class OfflineHarness:
             consensus_split_count=0,
         )
 
+    def _sanitize_tool_schema_definition(self, schema_def: dict[str, Any]) -> dict[str, Any]:
+        """Return a JSON-safe copy of a tool schema definition."""
+        safe_schema_def = deepcopy(schema_def)
+        flat_schema = safe_schema_def.get("function")
+        if not isinstance(flat_schema, dict):
+            flat_schema = safe_schema_def
+        parameters_schema = flat_schema.get("parameters")
+        if isinstance(parameters_schema, dict):
+            flat_schema["parameters"] = _json_safe_tool_schema(parameters_schema)
+        return safe_schema_def
+
     def _capture_tool_contract_snapshot(self) -> list[ToolContractSnapshot]:
         """Capture tool contracts using the same loader path as runtime startup."""
         registry = ToolRegistry()
         context = ToolContext(config=Config().tools, workspace=str(self._workspace))
         ToolLoader().load(context, registry)
-        for schema_def in registry.get_definitions():
-            flat_schema = schema_def.get("function")
-            if not isinstance(flat_schema, dict):
-                flat_schema = schema_def
-            parameters_schema = flat_schema.get("parameters")
-            if isinstance(parameters_schema, dict):
-                flat_schema["parameters"] = _json_safe_tool_schema(parameters_schema)
-        return capture_tool_contract_snapshot(registry)
+        safe_definitions = [
+            self._sanitize_tool_schema_definition(schema_def)
+            for schema_def in registry.get_definitions()
+        ]
+        return capture_tool_contract_snapshot(safe_definitions)
 
     def _write_tool_metadata_artifacts(
         self,

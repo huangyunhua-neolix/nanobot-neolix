@@ -363,9 +363,6 @@ def render_tool_metadata_review(
     change runtime tool source.
     """
     snapshots_by_name = {item.tool_name: item for item in snapshot}
-    validation_by_candidate = {
-        (item.tool_name, item.baseline_schema_hash): item for item in validation_results
-    }
     lines = [
         "# Tool Metadata Review",
         "",
@@ -388,8 +385,15 @@ def render_tool_metadata_review(
         lines.append("No tool metadata candidates emitted.")
         return "\n".join(lines) + "\n"
 
-    for candidate in sorted(candidates, key=lambda item: item.tool_name):
-        result = validation_by_candidate.get((candidate.tool_name, candidate.baseline_schema_hash))
+    for index, candidate in sorted(
+        enumerate(candidates), key=lambda item: (item[1].tool_name, item[0])
+    ):
+        result = validation_results[index] if index < len(validation_results) else None
+        if result is not None and (
+            result.tool_name != candidate.tool_name
+            or result.baseline_schema_hash != candidate.baseline_schema_hash
+        ):
+            result = None
         matching_snapshot = snapshots_by_name.get(candidate.tool_name)
         baseline_schema = _snapshot_schema(matching_snapshot) if matching_snapshot is not None else {}
         proposed_schema = canonical_tool_schema(candidate.model_dump()["proposed_schema"])
@@ -435,21 +439,24 @@ def render_tool_metadata_review(
     return "\n".join(lines) + "\n"
 
 
-def capture_tool_contract_snapshot(registry: ToolRegistry) -> list[ToolContractSnapshot]:
-    """Capture snapshot of tool contracts from registry.
+def capture_tool_contract_snapshot(
+    registry: ToolRegistry | list[dict[str, Any]],
+) -> list[ToolContractSnapshot]:
+    """Capture snapshot of tool contracts from registry definitions.
 
-    Iterate registry.get_definitions(), canonicalize each schema, extract
-    tool metadata, and compute schema hashes. Sort results by (source_kind, tool_name).
+    Iterate tool definitions, canonicalize each schema, extract tool metadata,
+    and compute schema hashes. Sort results by (source_kind, tool_name).
 
     Args:
-        registry: ToolRegistry instance containing tool definitions.
+        registry: Tool registry or already-captured schema definitions.
 
     Returns:
         List of ToolContractSnapshot ordered by (source_kind, tool_name).
     """
     snapshots: list[ToolContractSnapshot] = []
+    definitions = registry if isinstance(registry, list) else registry.get_definitions()
 
-    for schema_def in registry.get_definitions():
+    for schema_def in definitions:
         # Canonicalize to flat shape
         flat_schema = canonical_tool_schema(schema_def)
 
