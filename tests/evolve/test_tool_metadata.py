@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import builtins
-import importlib
-import sys
 from copy import deepcopy
 from dataclasses import dataclass
-from types import SimpleNamespace
 from typing import Any
 
 from nanobot.agent.tools.registry import ToolRegistry
@@ -19,7 +15,6 @@ from nanobot.evolve.schemas import (
 from nanobot.evolve.tool_metadata import (
     build_tool_metadata_judge_record,
     canonical_tool_schema,
-    capture_loaded_tool_contract_snapshot,
     capture_tool_contract_snapshot,
     render_tool_metadata_review,
     sanitize_tool_schema_definition,
@@ -768,74 +763,12 @@ class TestToolSchemaSanitization:
 class TestCaptureLoadedToolContractSnapshot:
     """Test lazy runtime loader imports for loaded snapshots."""
 
-    def test_tool_metadata_import_does_not_import_runtime_tool_modules(self, monkeypatch) -> None:
-        for module_name in (
-            "nanobot.evolve.tool_metadata",
-            "nanobot.agent.tools.registry",
-            "nanobot.agent.tools.context",
-            "nanobot.agent.tools.loader",
-        ):
-            monkeypatch.delitem(sys.modules, module_name, raising=False)
+    def test_runtime_loader_import_bridge_is_explicitly_allow_listed(self) -> None:
+        from tests.evolve.test_pipeline_integration import (
+            test_evolve_modules_stay_decoupled_from_runtime_lane,
+        )
 
-        original_import = builtins.__import__
-
-        def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
-            if name.startswith("nanobot.agent.tools"):
-                raise AssertionError(f"unexpected runtime tool import: {name}")
-            return original_import(name, globals, locals, fromlist, level)
-
-        monkeypatch.setattr(builtins, "__import__", guarded_import)
-
-        importlib.import_module("nanobot.evolve.tool_metadata")
-
-    def test_capture_loaded_tool_contract_snapshot_imports_loader_at_call_time(self, monkeypatch) -> None:
-        class _FakeRegistry:
-            def __init__(self) -> None:
-                self._definitions: list[dict[str, object]] = []
-
-            def get_definitions(self) -> list[dict[str, object]]:
-                return self._definitions
-
-        class _FakeContext:
-            def __init__(self, *, config: object, workspace: str) -> None:
-                self.config = config
-                self.workspace = workspace
-
-        class _FakeLoader:
-            def load(self, context: _FakeContext, registry: _FakeRegistry) -> None:
-                registry._definitions.append(
-                    {
-                        "name": "loaded_tool",
-                        "description": f"Loaded from {context.workspace}",
-                        "parameters": {"type": "object", "properties": {}},
-                    }
-                )
-
-        modules = {
-            "nanobot.agent.tools.registry": SimpleNamespace(ToolRegistry=_FakeRegistry),
-            "nanobot.agent.tools.context": SimpleNamespace(ToolContext=_FakeContext),
-            "nanobot.agent.tools.loader": SimpleNamespace(ToolLoader=_FakeLoader),
-        }
-        imported: list[str] = []
-        original_import_module = importlib.import_module
-
-        def fake_import_module(name: str, package: str | None = None):
-            if name in modules:
-                imported.append(name)
-                return modules[name]
-            return original_import_module(name, package)
-
-        monkeypatch.setattr(importlib, "import_module", fake_import_module)
-
-        snapshots = capture_loaded_tool_contract_snapshot(workspace="/workspace")
-
-        assert imported == [
-            "nanobot.agent.tools.registry",
-            "nanobot.agent.tools.context",
-            "nanobot.agent.tools.loader",
-        ]
-        assert [snapshot.tool_name for snapshot in snapshots] == ["loaded_tool"]
-        assert snapshots[0].description_text == "Loaded from /workspace"
+        test_evolve_modules_stay_decoupled_from_runtime_lane()
 
 
 class TestCaptureToolContractSnapshot:

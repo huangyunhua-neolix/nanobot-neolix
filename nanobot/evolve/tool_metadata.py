@@ -1,11 +1,10 @@
 """Deterministic tool contract snapshots for M7 metadata-only tool evolution."""
 
 import hashlib
-import importlib
 import json
 import re
 from copy import deepcopy
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from nanobot.config import Config
 from nanobot.evolve.judges.calibration import CalibrationRecord
@@ -98,6 +97,14 @@ _MAX_REVIEW_SNIPPET_CHARS = 240
 _HASH_PREFIX_LENGTH = 12
 _REDACTED_HOME_PATH_RE = re.compile(r"/<REDACTED_HOME>/[^\s`]*")
 _REDACTED_APIKEY_MARKER_RE = re.compile(r"\[REDACTED:APIKEY:[^\]]+\]")
+
+
+class ToolDefinitionProvider(Protocol):
+    """Registry-like source for tool schema definitions."""
+
+    def get_definitions(self) -> list[dict[str, Any]]:
+        """Return OpenAI-style or flat tool schema definitions."""
+        ...
 
 
 def _compute_source_kind(tool_name: str) -> Literal["builtin", "mcp"]:
@@ -304,12 +311,13 @@ def sanitize_tool_schema_definition(schema_def: dict[str, Any]) -> dict[str, Any
 
 def capture_loaded_tool_contract_snapshot(*, workspace: str) -> list[ToolContractSnapshot]:
     """Capture a JSON-safe tool contract snapshot through the runtime loader path."""
-    tools_registry = importlib.import_module("nanobot.agent.tools.registry")
-    tools_context = importlib.import_module("nanobot.agent.tools.context")
-    tools_loader = importlib.import_module("nanobot.agent.tools.loader")
-    registry = tools_registry.ToolRegistry()
-    context = tools_context.ToolContext(config=Config().tools, workspace=workspace)
-    tools_loader.ToolLoader().load(context, registry)
+    from nanobot.agent.tools.context import ToolContext
+    from nanobot.agent.tools.loader import ToolLoader
+    from nanobot.agent.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    context = ToolContext(config=Config().tools, workspace=workspace)
+    ToolLoader().load(context, registry)
     safe_definitions = [
         sanitize_tool_schema_definition(schema_def)
         for schema_def in registry.get_definitions()
@@ -513,7 +521,7 @@ def render_tool_metadata_review(
 
 
 def capture_tool_contract_snapshot(
-    registry: Any,
+    registry: ToolDefinitionProvider | list[dict[str, Any]],
 ) -> list[ToolContractSnapshot]:
     """Capture snapshot of tool contracts from registry definitions.
 
