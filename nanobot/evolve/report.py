@@ -5,6 +5,15 @@ from nanobot.evolve.optimizer.schemas import OptimizerResult
 from nanobot.evolve.privacy.redact import redact
 from nanobot.evolve.schemas import RunManifest, ValidationFailure
 
+_MAX_SAFE_TEXT_CHARS = 300
+
+
+def _redact_and_bound(text: str, max_chars: int = _MAX_SAFE_TEXT_CHARS) -> str:
+    redacted = redact(text).text
+    if len(redacted) <= max_chars:
+        return redacted
+    return redacted[: max_chars - 3] + "..."
+
 
 def render_run_report(
     manifest: RunManifest,
@@ -31,7 +40,7 @@ def render_run_report(
         lines.append("None")
     else:
         for failure in validation_failures:
-            reason = redact(failure.reason[:300]).text
+            reason = _redact_and_bound(failure.reason)
             lines.append(
                 f"- candidate #{failure.candidate_index} `{failure.candidate_hash[:8]}` "
                 f"{failure.reason_code}: {reason}"
@@ -43,12 +52,13 @@ def render_run_report(
         for candidate_hash in sorted(gate_results_by_candidate):
             lines.append(f"Candidate `{candidate_hash[:8]}`:")
             for result in gate_results_by_candidate[candidate_hash]:
-                suffix = f" ({result.failure_reason})" if result.failure_reason else ""
+                suffix = f" ({_redact_and_bound(result.failure_reason)})" if result.failure_reason else ""
                 lines.append(f"- {result.gate_name}: {result.verdict}{suffix}")
     lines.extend(["", "## Artifacts"])
     if not manifest.artifact_paths:
         lines.append("None")
     else:
         for key in sorted(manifest.artifact_paths):
-            lines.append(f"- {key}: `{manifest.artifact_paths[key]}`")
+            path = _redact_and_bound(manifest.artifact_paths[key])
+            lines.append(f"- {key}: `{path}`")
     return "\n".join(lines) + "\n"
