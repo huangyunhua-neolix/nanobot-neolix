@@ -48,7 +48,11 @@ __all__ = [
 
 
 _FRONTMATTER_RE = re.compile(r"\A---\n(?P<frontmatter>.*?)\n---\n(?P<body>.*)\Z", re.DOTALL)
-_PATH_CLAIM_RE = re.compile(r"/(?:Users|home|private/var/folders)/")
+_PATH_CLAIM_RE = re.compile(
+    r"/(?:Users|home|root|Volumes)/|/(?:private/)?var/folders/|[A-Za-z]:[/\\]Users[/\\]",
+    re.IGNORECASE,
+)
+_RUN_ID_SUFFIX_LIMIT = 10_000
 
 
 def _sha256_text(text: str) -> str:
@@ -125,7 +129,7 @@ class OfflineHarness:
                 if len(suffix) == 4 and suffix.isdigit():
                     used_suffixes.add(int(suffix))
 
-        for suffix in range(1, 10_000):
+        for suffix in range(1, _RUN_ID_SUFFIX_LIMIT):
             if suffix not in used_suffixes:
                 return f"{prefix}{suffix:04d}"
         raise FileExistsError(f"no available run-id suffix for {prefix}")
@@ -178,7 +182,7 @@ class OfflineHarness:
         merged_frontmatter = {
             **baseline.frontmatter.model_dump(mode="json", exclude_none=True),
             **frontmatter_values,
-            "name": optimizer_candidate.skill_name,
+            "name": frontmatter_values.get("name", optimizer_candidate.skill_name),
             "description": frontmatter_values.get(
                 "description", baseline.frontmatter.description
             ),
@@ -188,7 +192,6 @@ class OfflineHarness:
                 "created_at", baseline.frontmatter.created_at.isoformat()
             ),
             "evolved_from_run": run_id,
-            "evolved_at": datetime.now(timezone.utc).isoformat(),
             "parent_skill_hash": baseline.content_hash,
             "optimizer_name": optimizer_result.optimizer_name,
             "optimizer_version": optimizer_result.optimizer_version,
