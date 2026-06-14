@@ -76,6 +76,37 @@ class JudgeSummary(EvolveBase):
     consensus_split_count: int
 
 
+class JudgeProviderIdentity(EvolveBase):
+    provider_name: str
+    base_url: str | None = None
+    api_version: str | None = None
+    model_id: str
+    prompt_template_version: str
+    rubric_version: str
+    score_schema_version: str = "2"
+
+
+class JudgeEvidence(EvolveBase):
+    record_id: str
+    judge_mode: Literal["local_fallback", "aux_llm"]
+    provider_identity: JudgeProviderIdentity | None = None
+    score: RubricScore
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    reasoning_redacted: str | None = None
+    disagreement: dict[str, float] = Field(default_factory=dict)
+    calibrated: bool = False
+
+
+class JudgeRunSummary(EvolveBase):
+    judge_mode: Literal["local_fallback", "aux_llm", "mixed"]
+    calibrated: bool
+    provider_identity: JudgeProviderIdentity | None = None
+    evidence_count: int = Field(ge=0)
+    median_aggregate: float = Field(ge=0.0, le=1.0)
+    min_axis_score: float = Field(ge=0.0, le=1.0)
+    disagreement_max: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 class ValidationFailure(EvolveBase):
     candidate_index: int = Field(ge=0)
     candidate_hash: str
@@ -124,6 +155,8 @@ class RunManifest(FrozenEvolveBase):
     artifact_paths: dict[str, str] = Field(default_factory=dict)
     diff_stats: DiffStats | None = None
     requires_human_approval: bool = False
+    judge_run_summary: JudgeRunSummary | None = None
+    judge_evidence_paths: dict[str, str] = Field(default_factory=dict)
 
 
 def assert_odd_pool_size(n: int, *, context: str) -> None:

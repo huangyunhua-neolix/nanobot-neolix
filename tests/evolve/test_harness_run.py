@@ -194,6 +194,148 @@ Path(args.output).write_text(json.dumps({
     assert manifest.requires_human_approval is True
 
 
+def test_harness_manifest_records_semantic_judge_artifact(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "optimizer.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'judge-artifact-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'adds example instruction'
+    }]
+}))
+""".lstrip(),
+    )
+
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+
+    assert manifest.judge_run_summary is not None
+    assert manifest.judge_run_summary.judge_mode == "local_fallback"
+    assert manifest.judge_run_summary.evidence_count == 1
+    assert manifest.judge_run_summary.median_aggregate >= 0.8
+    assert manifest.judge_evidence_paths == {"semantic_fidelity": "judge_evidence.jsonl"}
+    assert (run_dir / "judge_evidence.jsonl").is_file()
+
+
+def test_optimizer_audit_files_do_not_include_judge_metrics(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "optimizer.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'audit-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'adds example instruction'
+    }]
+}))
+""".lstrip(),
+    )
+
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+
+    optimizer_input = (run_dir / "optimizer" / "optimizer_input.json").read_text(
+        encoding="utf-8"
+    )
+    optimizer_output = (run_dir / "optimizer" / "optimizer_output.json").read_text(
+        encoding="utf-8"
+    )
+
+    assert "semantic_aggregate" not in optimizer_input
+    assert "semantic_aggregate" not in optimizer_output
+    assert "judge_evidence" not in optimizer_input
+    assert "judge_evidence" not in optimizer_output
+
+
+def test_judge_summary_from_gate_results_uses_true_even_median() -> None:
+    from datetime import datetime, timezone
+
+    from nanobot.evolve.gates import GateResult
+    from nanobot.evolve.harness import _judge_summary_from_gate_results
+
+    results = [
+        GateResult(
+            gate_name="4-semantic-fidelity",
+            candidate_hash="cand-1",
+            baseline_hash="base",
+            verdict="fail",
+            metrics={
+                "semantic_process": 0.0,
+                "semantic_output": 0.0,
+                "semantic_token": 0.0,
+                "semantic_aggregate": 0.0,
+            },
+            evidence={"judge_mode": "local_fallback", "calibrated": "false"},
+            timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            duration_ms=1,
+        ),
+        GateResult(
+            gate_name="4-semantic-fidelity",
+            candidate_hash="cand-2",
+            baseline_hash="base",
+            verdict="pass",
+            metrics={
+                "semantic_process": 0.9,
+                "semantic_output": 0.9,
+                "semantic_token": 0.9,
+                "semantic_aggregate": 0.9,
+            },
+            evidence={"judge_mode": "local_fallback", "calibrated": "false"},
+            timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            duration_ms=1,
+        ),
+    ]
+
+    summary = _judge_summary_from_gate_results(results)
+
+    assert summary is not None
+    assert summary.median_aggregate == 0.45
+
+
 def test_harness_report_and_pr_body_show_human_review_state(tmp_path: Path) -> None:
     _write_skill(tmp_path, "demo-skill")
     script = tmp_path / "optimizer.py"

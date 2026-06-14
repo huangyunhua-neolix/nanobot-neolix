@@ -2,17 +2,30 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 from nanobot.evolve.gates import Gate, GateResult
 from nanobot.evolve.gates._constants import RUBRIC_PASS_THRESHOLD
 
 if TYPE_CHECKING:
-    from nanobot.evolve.schemas import Baseline, Candidate
+    from nanobot.evolve.judges.auxiliary import AuxJudgeClient
+    from nanobot.evolve.schemas import Baseline, Candidate, JudgeEvidence
 
 
 class SemanticFidelityGate(Gate):
     NONDETERMINISTIC: ClassVar[bool] = True
+
+    def __init__(
+        self,
+        *,
+        evidence_dir: Path | None = None,
+        require_external: bool = False,
+        aux_client: "AuxJudgeClient | None" = None,
+    ) -> None:
+        self._evidence_dir = evidence_dir
+        self._require_external = require_external
+        self._aux_client = aux_client
 
     @property
     def name(self) -> str:
@@ -24,19 +37,37 @@ class SemanticFidelityGate(Gate):
 
         start = time.monotonic()
         pool = JudgePool(judges=[JudgeConfig(model="local/deterministic")])
-        score = pool.score(
-            CalibrationRecord(
-                record_id=f"semantic:{candidate.content_hash}",
-                human_scores={"process": 1.0, "output": 1.0, "token": 1.0},
-                input_payload={
-                    "baselineBody": baseline.body_md,
-                    "candidateBody": candidate.body_md,
-                    "expectedRedacted": baseline.body_md,
-                },
-            )
+        record = CalibrationRecord(
+            record_id=f"semantic:{candidate.content_hash}",
+            human_scores={"process": 1.0, "output": 1.0, "token": 1.0},
+            input_payload={
+                "baselineBody": baseline.body_md,
+                "candidateBody": candidate.body_md,
+                "expectedRedacted": baseline.body_md,
+            },
         )
+        try:
+            judge_evidence = pool.score_with_evidence(
+                record,
+                aux_client=self._aux_client,
+                require_external=self._require_external,
+            )
+        except ValueError as exc:
+            return self._failure(candidate, baseline, start, str(exc))
+
+        evidence_path = self._write_evidence(judge_evidence)
+        score = judge_evidence.score
         passed = score.aggregate >= RUBRIC_PASS_THRESHOLD
         duration_ms = int((time.monotonic() - start) * 1000)
+        gate_evidence = {
+            "judge_model": judge_evidence.provider_identity.model_id
+            if judge_evidence.provider_identity is not None
+            else "local/deterministic",
+            "judge_mode": judge_evidence.judge_mode,
+            "calibrated": str(judge_evidence.calibrated).lower(),
+        }
+        if evidence_path is not None:
+            gate_evidence["judge_evidence_path"] = evidence_path
         return GateResult(
             gate_name=self.name,
             candidate_hash=candidate.content_hash,
@@ -48,8 +79,41 @@ class SemanticFidelityGate(Gate):
                 "semantic_token": score.token,
                 "semantic_aggregate": score.aggregate,
             },
-            evidence={"judge_model": "local/deterministic"},
+            evidence=gate_evidence,
             failure_reason=None if passed else "semantic-fidelity-below-threshold",
             timestamp=datetime.now(timezone.utc),
             duration_ms=duration_ms,
         )
+
+    def _failure(
+        self,
+        candidate: "Candidate",
+        baseline: "Baseline",
+        start: float,
+        reason: str,
+    ) -> GateResult:
+        return GateResult(
+            gate_name=self.name,
+            candidate_hash=candidate.content_hash,
+            baseline_hash=baseline.content_hash,
+            verdict="fail",
+            metrics={
+                "semantic_process": 0.0,
+                "semantic_output": 0.0,
+                "semantic_token": 0.0,
+                "semantic_aggregate": 0.0,
+            },
+            evidence={"judge_mode": "none", "calibrated": "false"},
+            failure_reason=reason,
+            timestamp=datetime.now(timezone.utc),
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
+
+    def _write_evidence(self, evidence: JudgeEvidence) -> str | None:
+        if self._evidence_dir is None:
+            return None
+        self._evidence_dir.mkdir(parents=True, exist_ok=True)
+        path = self._evidence_dir / "judge_evidence.jsonl"
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(evidence.model_dump_json(by_alias=True) + "\n")
+        return path.name

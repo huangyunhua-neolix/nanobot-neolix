@@ -4,7 +4,18 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import Field, computed_field, field_validator, model_validator
 
 from nanobot.evolve._base import EvolveBase, FrozenEvolveBase
-from nanobot.evolve.schemas import RubricScore, RubricWeights, assert_odd_pool_size
+from nanobot.evolve.judges.auxiliary import (
+    AuxJudgeClient,
+    build_semantic_judge_prompt,
+    parse_aux_judge_response,
+)
+from nanobot.evolve.schemas import (
+    JudgeEvidence,
+    JudgeProviderIdentity,
+    RubricScore,
+    RubricWeights,
+    assert_odd_pool_size,
+)
 
 if TYPE_CHECKING:
     from nanobot.evolve.judges.calibration import CalibrationRecord
@@ -12,6 +23,7 @@ if TYPE_CHECKING:
 
 class JudgeConfig(EvolveBase):
     model: str
+    provider_identity: JudgeProviderIdentity | None = None
 
 
 class JudgeResult(EvolveBase):
@@ -102,4 +114,56 @@ class JudgePool(FrozenEvolveBase):
             output=round(output, 6),
             token=round(token, 6),
             aggregate=round(aggregate, 6),
+        )
+
+    def score_with_evidence(
+        self,
+        record: "CalibrationRecord",
+        *,
+        aux_client: AuxJudgeClient | None = None,
+        require_external: bool = False,
+        calibrated: bool = False,
+        timeout_seconds: float = 15.0,
+    ) -> JudgeEvidence:
+        identity = self.judges[0].provider_identity
+        if aux_client is not None and identity is not None:
+            prompt = build_semantic_judge_prompt(
+                baseline_body=str(record.input_payload.get("baselineBody", "")),
+                candidate_body=str(record.input_payload.get("candidateBody", "")),
+                expected=str(record.input_payload.get("expectedRedacted", "")),
+            )
+            try:
+                raw = aux_client.complete(prompt, timeout_seconds=timeout_seconds)
+            except Exception as exc:
+                raise ValueError("judge-timeout") from exc
+            response = parse_aux_judge_response(raw)
+            del raw
+            if response is None:
+                raise ValueError("judge-output-invalid")
+            score = response.to_score(
+                process_weight=self.weights.process,
+                output_weight=self.weights.output,
+                token_weight=self.weights.token,
+            )
+            return JudgeEvidence(
+                record_id=record.record_id,
+                judge_mode="aux_llm",
+                provider_identity=identity,
+                score=score,
+                confidence=response.confidence,
+                reasoning_redacted=response.reasoning_redacted,
+                calibrated=calibrated,
+            )
+
+        if require_external:
+            raise ValueError("judge-provider-missing")
+
+        return JudgeEvidence(
+            record_id=record.record_id,
+            judge_mode="local_fallback",
+            provider_identity=None,
+            score=self.score(record),
+            confidence=None,
+            reasoning_redacted=None,
+            calibrated=False,
         )

@@ -16,16 +16,22 @@ the coincidental numeric match is documented in spec decision #124 / #126.
 from __future__ import annotations
 
 import bisect
+import hashlib
+import json
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from nanobot.evolve._base import EvolveBase
-from nanobot.evolve.schemas import RubricScore
+from nanobot.evolve.schemas import JudgeProviderIdentity, RubricScore
 
 # Landis & Koch 1977: κ ≥ 0.61 = "substantial"; spec §7.4 / decision #126
 # rounds to 0.6 as the hard gate.
 CALIBRATION_KAPPA_THRESHOLD: float = 0.6
+
+# M6 requires every axis to clear a lower floor so one collapsed axis cannot hide
+# behind a passing mean.
+CALIBRATION_AXIS_FLOOR: float = 0.4
 
 # Threshold-compare tolerance. Landis & Koch threshold is inclusive (κ ≥ 0.6);
 # FP accumulation in per-axis κ + mean/3 can underflow 0.6 by ~1e-16 on
@@ -74,8 +80,21 @@ class CalibrationReport(EvolveBase):
     """
 
     kappa_mean: float
+    kappa_min: float
     kappa_per_axis: dict[str, float]
     passed: bool
+
+
+def calibration_identity_key(
+    identity: JudgeProviderIdentity, *, corpus_version: str
+) -> str:
+    """Return a schema-coupled key for the calibrated judge/corpus surface."""
+    payload = {
+        "identity": identity.model_dump(mode="json", by_alias=True),
+        "corpusVersion": corpus_version,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _bin_cutoffs(bins: int) -> list[float]:
@@ -207,8 +226,13 @@ def calibrate(records: list[CalibrationRecord], pool: _JudgeScorer) -> Calibrati
         kappa_per_axis[axis] = compute_cohen_kappa(human_axis, judge_axis)
 
     kappa_mean = sum(kappa_per_axis.values()) / len(kappa_per_axis)
+    kappa_min = min(kappa_per_axis.values())
     return CalibrationReport(
         kappa_mean=kappa_mean,
+        kappa_min=kappa_min,
         kappa_per_axis=kappa_per_axis,
-        passed=kappa_mean >= CALIBRATION_KAPPA_THRESHOLD - _KAPPA_EPSILON,
+        passed=(
+            kappa_mean >= CALIBRATION_KAPPA_THRESHOLD - _KAPPA_EPSILON
+            and kappa_min >= CALIBRATION_AXIS_FLOOR - _KAPPA_EPSILON
+        ),
     )

@@ -1,4 +1,6 @@
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from nanobot.evolve.gates.semantic_fidelity import SemanticFidelityGate
 from nanobot.evolve.schemas import Baseline, Candidate, SkillFrontmatter
@@ -53,6 +55,35 @@ def test_semantic_fidelity_gate_passes_candidate_above_threshold() -> None:
     assert result.metrics["semantic_aggregate"] >= 0.8
     assert result.evidence is not None
     assert result.evidence["judge_model"] == "local/deterministic"
+
+
+def test_semantic_fidelity_gate_records_local_fallback_evidence_path(tmp_path: Path) -> None:
+    result = SemanticFidelityGate(evidence_dir=tmp_path).evaluate(
+        _candidate("Use concise answers. Include one concrete example."),
+        _baseline(),
+    )
+
+    assert result.verdict == "pass"
+    assert result.evidence is not None
+    assert result.evidence["judge_mode"] == "local_fallback"
+    assert result.evidence["calibrated"] == "false"
+    assert result.evidence["judge_evidence_path"] == "judge_evidence.jsonl"
+
+    evidence_path = tmp_path / "judge_evidence.jsonl"
+    rows = [json.loads(line) for line in evidence_path.read_text(encoding="utf-8").splitlines()]
+    assert rows[0]["judgeMode"] == "local_fallback"
+    assert rows[0]["score"]["aggregate"] >= 0.8
+
+
+def test_semantic_fidelity_gate_external_required_fails_without_provider() -> None:
+    result = SemanticFidelityGate(require_external=True).evaluate(
+        _candidate("Use concise answers. Include one concrete example."),
+        _baseline(),
+    )
+
+    assert result.verdict == "fail"
+    assert result.failure_reason == "judge-provider-missing"
+    assert result.metrics["semantic_aggregate"] == 0.0
 
 
 def test_semantic_fidelity_gate_fails_empty_candidate() -> None:

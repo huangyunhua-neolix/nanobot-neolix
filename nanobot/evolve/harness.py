@@ -26,6 +26,7 @@ from pydantic import ValidationError
 from nanobot.evolve.deploy import assemble_pr_body
 from nanobot.evolve.exceptions import ConfigError
 from nanobot.evolve.gates import GATES, Gate, GateResult
+from nanobot.evolve.gates.semantic_fidelity import SemanticFidelityGate
 from nanobot.evolve.optimizer.adapter import OptimizerAdapter
 from nanobot.evolve.optimizer.schemas import OptimizerCandidate, OptimizerInput, OptimizerResult
 from nanobot.evolve.privacy.redact import redact
@@ -34,6 +35,7 @@ from nanobot.evolve.schemas import (
     Baseline,
     Candidate,
     DiffStats,
+    JudgeRunSummary,
     JudgeSummary,
     ReviewReadiness,
     RunManifest,
@@ -139,6 +141,39 @@ def _diff_stats_from_patch(patch: str) -> DiffStats:
     return DiffStats(files_changed=files_changed, insertions=insertions, deletions=deletions)
 
 
+def _judge_summary_from_gate_results(gate_results: list[GateResult]) -> JudgeRunSummary | None:
+    semantic_results = [r for r in gate_results if r.gate_name == "4-semantic-fidelity"]
+    if not semantic_results:
+        return None
+    aggregates = sorted(float(r.metrics.get("semantic_aggregate", 0.0)) for r in semantic_results)
+    min_axis = min(
+        min(
+            float(r.metrics.get("semantic_process", 0.0)),
+            float(r.metrics.get("semantic_output", 0.0)),
+            float(r.metrics.get("semantic_token", 0.0)),
+        )
+        for r in semantic_results
+    )
+    modes = {(r.evidence or {}).get("judge_mode", "local_fallback") for r in semantic_results}
+    mode = modes.pop() if len(modes) == 1 else "mixed"
+    calibrated = any((r.evidence or {}).get("calibrated") == "true" for r in semantic_results)
+    mid = len(aggregates) // 2
+    median = (
+        aggregates[mid]
+        if len(aggregates) % 2 == 1
+        else (aggregates[mid - 1] + aggregates[mid]) / 2.0
+    )
+    return JudgeRunSummary(
+        judge_mode=mode,  # type: ignore[arg-type]
+        calibrated=calibrated,
+        provider_identity=None,
+        evidence_count=len(semantic_results),
+        median_aggregate=median,
+        min_axis_score=min_axis,
+        disagreement_max=None,
+    )
+
+
 def _safe_single_line_reason(text: str, *, max_chars: int = _SAFE_REASON_MAX_CHARS) -> str:
     """Return a redacted, bounded one-line reason safe for markdown fields."""
     redacted = redact(text).text
@@ -192,6 +227,15 @@ class OfflineHarness:
         self._workspace = workspace
         self._gates: list[Gate] = list(gates) if gates is not None else list(GATES)
         self._gate_timeout_seconds = gate_timeout_seconds
+
+    def _gates_for_run(self, run_dir: Path) -> list[Gate]:
+        gates: list[Gate] = []
+        for gate in self._gates:
+            if isinstance(gate, SemanticFidelityGate):
+                gates.append(SemanticFidelityGate(evidence_dir=run_dir))
+            else:
+                gates.append(gate)
+        return gates
 
     # --- run preparation -------------------------------------------------
 
@@ -390,8 +434,38 @@ class OfflineHarness:
         run_id = self._generate_run_id(skill_name)
         run_dir = self._workspace / "evals" / "runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=False)
+        previous_gates = self._gates
+        self._gates = self._gates_for_run(run_dir)
         optimizer_dir = run_dir / "optimizer"
 
+        try:
+            return self._run(
+                skill_name=skill_name,
+                optimizer_command=optimizer_command,
+                tiers=tiers,
+                max_candidates=max_candidates,
+                optimizer_timeout_seconds=optimizer_timeout_seconds,
+                started_at=started_at,
+                run_id=run_id,
+                run_dir=run_dir,
+                optimizer_dir=optimizer_dir,
+            )
+        finally:
+            self._gates = previous_gates
+
+    def _run(
+        self,
+        *,
+        skill_name: str,
+        optimizer_command: list[str],
+        tiers: list[str],
+        max_candidates: int,
+        optimizer_timeout_seconds: int,
+        started_at: datetime,
+        run_id: str,
+        run_dir: Path,
+        optimizer_dir: Path,
+    ) -> RunManifest:
         baseline = self._load_baseline_skill(skill_name)
         eval_bundle = self._load_eval_records(skill_name, tiers, run_id)
         record_count_per_tier = _count_eval_bundle_records(eval_bundle)
@@ -491,6 +565,12 @@ class OfflineHarness:
         ]
         diff_patch = self._build_diff_patch(baseline, promoted)
         diff_stats = _diff_stats_from_patch(diff_patch)
+        judge_run_summary = _judge_summary_from_gate_results(gate_verdicts)
+        judge_evidence_paths = (
+            {"semantic_fidelity": "judge_evidence.jsonl"}
+            if (run_dir / "judge_evidence.jsonl").is_file()
+            else {}
+        )
         finished_at = datetime.now(timezone.utc)
         manifest = RunManifest(
             run_id=run_id,
@@ -516,6 +596,8 @@ class OfflineHarness:
             artifact_paths=artifact_paths,
             diff_stats=diff_stats,
             requires_human_approval=promoted is not None,
+            judge_run_summary=judge_run_summary,
+            judge_evidence_paths=judge_evidence_paths,
         )
 
         (run_dir / "diff.patch").write_text(diff_patch, encoding="utf-8")

@@ -11,6 +11,9 @@ from nanobot.evolve.harness import load_manifest as harness_load_manifest
 from nanobot.evolve.schemas import (
     Candidate,
     DiffStats,
+    JudgeEvidence,
+    JudgeProviderIdentity,
+    JudgeRunSummary,
     JudgeSummary,
     ReviewReadiness,
     RubricScore,
@@ -68,6 +71,105 @@ def test_rubric_score_field_out_of_range_rejected():
 def test_rubric_score_aggregate_out_of_range_rejected():
     with pytest.raises(ValidationError):
         RubricScore(process=0.5, output=0.5, token=0.3, aggregate=-0.1)
+
+
+def _judge_provider_identity() -> JudgeProviderIdentity:
+    return JudgeProviderIdentity(
+        provider_name="anthropic",
+        base_url="https://api.example.invalid",
+        api_version="2026-06-14",
+        model_id="claude-sonnet-4-6",
+        prompt_template_version="semantic-judge-v2",
+        rubric_version="rubric-v2",
+    )
+
+
+def test_judge_provider_identity_serializes_full_calibration_surface() -> None:
+    identity = _judge_provider_identity()
+
+    dumped = identity.model_dump(by_alias=True)
+    assert dumped == {
+        "providerName": "anthropic",
+        "baseUrl": "https://api.example.invalid",
+        "apiVersion": "2026-06-14",
+        "modelId": "claude-sonnet-4-6",
+        "promptTemplateVersion": "semantic-judge-v2",
+        "rubricVersion": "rubric-v2",
+        "scoreSchemaVersion": "2",
+    }
+    assert JudgeProviderIdentity.model_validate(dumped) == identity
+
+
+def test_judge_evidence_serializes_aux_provider_and_score() -> None:
+    evidence = JudgeEvidence(
+        record_id="record-1",
+        judge_mode="aux_llm",
+        provider_identity=_judge_provider_identity(),
+        score=RubricScore(process=0.9, output=0.8, token=0.7, aggregate=0.82),
+        confidence=0.75,
+        reasoning_redacted="Candidate preserves the redacted intent.",
+        disagreement={"output": 0.1},
+        calibrated=True,
+    )
+
+    dumped = evidence.model_dump(by_alias=True)
+    assert dumped == {
+        "recordId": "record-1",
+        "judgeMode": "aux_llm",
+        "providerIdentity": _judge_provider_identity().model_dump(by_alias=True),
+        "score": {"process": 0.9, "output": 0.8, "token": 0.7, "aggregate": 0.82},
+        "confidence": 0.75,
+        "reasoningRedacted": "Candidate preserves the redacted intent.",
+        "disagreement": {"output": 0.1},
+        "calibrated": True,
+    }
+    assert JudgeEvidence.model_validate(dumped) == evidence
+
+
+def test_judge_evidence_defaults_to_local_uncalibrated_metadata() -> None:
+    evidence = JudgeEvidence(
+        record_id="record-1",
+        judge_mode="local_fallback",
+        score=RubricScore(process=0.9, output=0.8, token=0.7, aggregate=0.82),
+    )
+
+    assert evidence.provider_identity is None
+    assert evidence.confidence is None
+    assert evidence.reasoning_redacted is None
+    assert evidence.disagreement == {}
+    assert evidence.calibrated is False
+
+
+def test_judge_run_summary_validates_bounds_and_round_trips() -> None:
+    summary = JudgeRunSummary(
+        judge_mode="aux_llm",
+        calibrated=True,
+        provider_identity=_judge_provider_identity(),
+        evidence_count=3,
+        median_aggregate=0.8,
+        min_axis_score=0.6,
+        disagreement_max=0.2,
+    )
+
+    dumped = summary.model_dump(by_alias=True)
+    assert JudgeRunSummary.model_validate(dumped) == summary
+    with pytest.raises(ValidationError):
+        JudgeRunSummary(
+            judge_mode="aux_llm",
+            calibrated=True,
+            evidence_count=-1,
+            median_aggregate=0.8,
+            min_axis_score=0.6,
+        )
+    with pytest.raises(ValidationError):
+        JudgeRunSummary(
+            judge_mode="aux_llm",
+            calibrated=True,
+            evidence_count=1,
+            median_aggregate=0.8,
+            min_axis_score=0.6,
+            disagreement_max=1.1,
+        )
 
 
 def test_rubric_weights_negative_weight_rejected():
@@ -214,6 +316,31 @@ def test_manifest_defaults_m5_completion_fields_for_m5_1_compatibility() -> None
     assert manifest.requires_human_approval is False
 
 
+def test_manifest_defaults_m6_judge_fields_for_m5_compatibility() -> None:
+    manifest = RunManifest(**_manifest_payload())
+
+    assert manifest.judge_run_summary is None
+    assert manifest.judge_evidence_paths == {}
+
+
+def test_manifest_accepts_m6_judge_summary_and_evidence_paths() -> None:
+    manifest = RunManifest(
+        **_manifest_payload(),
+        judge_run_summary=JudgeRunSummary(
+            judge_mode="local_fallback",
+            calibrated=False,
+            evidence_count=1,
+            median_aggregate=0.82,
+            min_axis_score=0.7,
+        ),
+        judge_evidence_paths={"semantic_fidelity": "judge_evidence.jsonl"},
+    )
+
+    assert manifest.judge_run_summary is not None
+    assert manifest.judge_run_summary.judge_mode == "local_fallback"
+    assert manifest.judge_evidence_paths == {"semantic_fidelity": "judge_evidence.jsonl"}
+
+
 def test_manifest_accepts_diff_stats_and_human_review_flag() -> None:
     manifest = RunManifest(
         **_manifest_payload(),
@@ -273,6 +400,8 @@ def test_run_manifest_m5_fields_have_defaults_for_m4_compatibility(tmp_path: Pat
     assert manifest.optimizer_name is None
     assert manifest.validation_failures == []
     assert manifest.artifact_paths == {}
+    assert manifest.judge_run_summary is None
+    assert manifest.judge_evidence_paths == {}
 
 
 def test_run_manifest_accepts_rejected_by_validation_and_artifact_paths(tmp_path: Path) -> None:

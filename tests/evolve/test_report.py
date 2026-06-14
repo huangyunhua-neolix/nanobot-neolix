@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from nanobot.evolve.gates import GateResult
 from nanobot.evolve.optimizer.schemas import OptimizerError, OptimizerResult
 from nanobot.evolve.report import render_run_report
-from nanobot.evolve.schemas import JudgeSummary, RunManifest, ValidationFailure
+from nanobot.evolve.schemas import JudgeRunSummary, JudgeSummary, RunManifest, ValidationFailure
 
 
 def _judge_summary() -> JudgeSummary:
@@ -95,6 +95,67 @@ def test_render_run_report_has_stable_sections() -> None:
     ]
     assert "Run: `20260614T120000Z-demo-skill-0001`" in report
     assert "Status: `promoted_to_pr`" in report
+
+
+def test_render_run_report_includes_semantic_judge_summary() -> None:
+    report = render_run_report(
+        _manifest(
+            judge_run_summary=JudgeRunSummary(
+                judge_mode="local_fallback",
+                calibrated=False,
+                evidence_count=1,
+                median_aggregate=0.82,
+                min_axis_score=0.71,
+                disagreement_max=None,
+            ),
+            judge_evidence_paths={"semantic_fidelity": "judge_evidence.jsonl"},
+        ),
+        {},
+        _optimizer_result(),
+        [],
+    )
+
+    assert report.index("## Review state") < report.index("## Semantic judge")
+    assert report.index("## Semantic judge") < report.index("## Validation failures")
+    assert "Mode: `local_fallback`" in report
+    assert "Calibrated: `false`" in report
+    assert "Evidence count: `1`" in report
+    assert "Median aggregate: `0.82`" in report
+    assert "Minimum axis score: `0.71`" in report
+    assert "Disagreement max: `<none>`" in report
+    assert "Evidence: `judge_evidence.jsonl`" in report
+    assert "Judge metrics were not returned to the optimizer" in report
+
+
+def test_render_run_report_redacts_semantic_judge_evidence_path() -> None:
+    report = render_run_report(
+        _manifest(
+            judge_run_summary=JudgeRunSummary(
+                judge_mode="local_fallback",
+                calibrated=False,
+                evidence_count=1,
+                median_aggregate=0.7100000000000001,
+                min_axis_score=0.8200000000000001,
+                disagreement_max=None,
+            ),
+            judge_evidence_paths={
+                "semantic_fidelity": (
+                    "/Users/alice/private/sk-ant-1234567890abcdefghijklmnop/"
+                    "judge_evidence.jsonl"
+                )
+            },
+        ),
+        {},
+        _optimizer_result(),
+        [],
+    )
+
+    assert "Median aggregate: `0.71`" in report
+    assert "Minimum axis score: `0.82`" in report
+    assert "[REDACTED:APIKEY:ANTHROPIC]" in report
+    assert "/Users/" not in report
+    assert "alice" not in report
+    assert "sk-ant-" not in report
 
 
 def test_render_run_report_lists_validation_failures_safely() -> None:
