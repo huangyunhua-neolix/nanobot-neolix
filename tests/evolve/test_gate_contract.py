@@ -10,6 +10,7 @@ import inspect
 
 # Force submodule imports (registers concrete gates into GATES + _subclasses).
 import nanobot.evolve.gates.cache_compat  # noqa: F401
+import nanobot.evolve.gates.human_review  # noqa: F401
 import nanobot.evolve.gates.semantic_fidelity  # noqa: F401
 import nanobot.evolve.gates.skill_size  # noqa: F401
 import nanobot.evolve.gates.test_pass  # noqa: F401

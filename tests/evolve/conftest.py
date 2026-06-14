@@ -57,6 +57,13 @@ def shared_passing_candidate() -> FakeCandidate:
             "tier_a_total": 25.0,
             # Gate 2 (skill_size) — within both 400 hard cap and 150 delta cap.
             "lines": 300.0,
+            "review_manifest": 1.0,
+            "review_report": 1.0,
+            "review_diff": 1.0,
+            "review_pr_body": 1.0,
+            "review_optimizer_input": 1.0,
+            "review_optimizer_output": 1.0,
+            "review_requires_human_approval": 1.0,
         },
     )
 
