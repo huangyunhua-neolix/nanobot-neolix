@@ -315,6 +315,14 @@ def assemble_pr_body(
                 "- [ ] Reviewer confirmed no judge metric was used as optimizer fitness",
             ]
         )
+    if manifest.tool_metadata_artifact_paths:
+        human_review_lines.extend(
+            [
+                "- [ ] Reviewer inspected tool metadata diff artifacts",
+                "- [ ] Reviewer confirmed no runtime tool source changed",
+                "- [ ] Reviewer confirmed tool metadata does not expand permissions",
+            ]
+        )
     human_review_lines.extend(
         [
             f"- Human approval required: `{str(manifest.requires_human_approval).lower()}`",

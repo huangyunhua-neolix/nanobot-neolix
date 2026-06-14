@@ -158,6 +158,56 @@ def test_render_run_report_redacts_semantic_judge_evidence_path() -> None:
     assert "sk-ant-" not in report
 
 
+def test_render_run_report_includes_tool_metadata_review_artifacts() -> None:
+    report = render_run_report(
+        _manifest(
+            tool_metadata_artifact_paths={
+                "tool_contract_snapshot": "runs/1/tool_contract_snapshot.json",
+                "tool_metadata_candidates": "runs/1/tool_metadata_candidates.jsonl",
+                "tool_metadata_review": "runs/1/tool_metadata_review.md",
+                "tool_metadata_judge_evidence": (
+                    "runs/1/tool_metadata_judge_evidence.jsonl"
+                ),
+            }
+        ),
+        {},
+        _optimizer_result(),
+        [],
+    )
+
+    assert report.index("## Review state") < report.index("## Tool metadata review")
+    assert report.index("## Tool metadata review") < report.index("## Validation failures")
+    assert (
+        "No runtime tool source changed; artifacts require human review before "
+        "any application."
+    ) in report
+    assert "Snapshot: `runs/1/tool_contract_snapshot.json`" in report
+    assert "Candidates: `runs/1/tool_metadata_candidates.jsonl`" in report
+    assert "Review: `runs/1/tool_metadata_review.md`" in report
+    assert "Judge evidence: `runs/1/tool_metadata_judge_evidence.jsonl`" in report
+
+
+def test_render_run_report_redacts_tool_metadata_artifact_paths() -> None:
+    report = render_run_report(
+        _manifest(
+            tool_metadata_artifact_paths={
+                "tool_contract_snapshot": (
+                    "/Users/alice/private/sk-ant-1234567890abcdefghijklmnop/"
+                    "tool_contract_snapshot.json"
+                )
+            }
+        ),
+        {},
+        _optimizer_result(),
+        [],
+    )
+
+    assert "[REDACTED:APIKEY:ANTHROPIC]" in report
+    assert "/Users/" not in report
+    assert "alice" not in report
+    assert "sk-ant-" not in report
+
+
 def test_render_run_report_lists_validation_failures_safely() -> None:
     failure = ValidationFailure(
         candidate_index=0,

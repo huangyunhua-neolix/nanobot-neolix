@@ -226,6 +226,29 @@ def test_assemble_pr_body_omits_semantic_judge_checklist_without_summary() -> No
     assert _section_headers_in_order(body) == list(PR_BODY_SECTIONS)
 
 
+def test_assemble_pr_body_includes_tool_metadata_review_checklist() -> None:
+    manifest = _make_run_manifest(
+        tool_metadata_artifact_paths={
+            "tool_contract_snapshot": "runs/1/tool_contract_snapshot.json",
+        }
+    )
+    body = assemble_pr_body(manifest, [])
+
+    assert "- [ ] Reviewer inspected tool metadata diff artifacts" in body
+    assert "- [ ] Reviewer confirmed no runtime tool source changed" in body
+    assert "- [ ] Reviewer confirmed tool metadata does not expand permissions" in body
+    assert _section_headers_in_order(body) == list(PR_BODY_SECTIONS)
+
+
+def test_assemble_pr_body_omits_tool_metadata_review_checklist_without_artifacts() -> None:
+    body = assemble_pr_body(_make_run_manifest(), [])
+
+    assert "- [ ] Reviewer inspected tool metadata diff artifacts" not in body
+    assert "- [ ] Reviewer confirmed no runtime tool source changed" not in body
+    assert "- [ ] Reviewer confirmed tool metadata does not expand permissions" not in body
+    assert _section_headers_in_order(body) == list(PR_BODY_SECTIONS)
+
+
 def test_assemble_pr_body_includes_manifest_run_id() -> None:
     manifest = _make_run_manifest(run_id="run-pinned-abc")
     body = assemble_pr_body(manifest, [])
