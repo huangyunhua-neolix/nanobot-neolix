@@ -6,7 +6,6 @@ import re
 from copy import deepcopy
 from typing import Any, Literal, Protocol
 
-from nanobot.config import Config
 from nanobot.evolve.judges.calibration import CalibrationRecord
 from nanobot.evolve.privacy.redact import redact
 from nanobot.evolve.schemas import (
@@ -314,6 +313,7 @@ def capture_loaded_tool_contract_snapshot(*, workspace: str) -> list[ToolContrac
     from nanobot.agent.tools.context import ToolContext
     from nanobot.agent.tools.loader import ToolLoader
     from nanobot.agent.tools.registry import ToolRegistry
+    from nanobot.config import Config
 
     registry = ToolRegistry()
     context = ToolContext(config=Config().tools, workspace=workspace)
