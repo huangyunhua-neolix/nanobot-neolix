@@ -272,40 +272,42 @@ class OfflineHarness:
         for gate in self._gates:
             t0 = time.perf_counter()
             executor = ThreadPoolExecutor(max_workers=1)
-            future = executor.submit(gate.evaluate, candidate, baseline)
             try:
-                result = future.result(timeout=self._gate_timeout_seconds)
-            except FutureTimeoutError:
-                duration_ms = int((time.perf_counter() - t0) * 1000)
-                gate.cleanup_after_timeout()
-                result = GateResult(
-                    gate_name=gate.name,
-                    candidate_hash=candidate.content_hash,
-                    baseline_hash=baseline.content_hash,
-                    verdict="fail",
-                    metrics={},
-                    failure_reason=f"gate-timeout:{gate.name}",
-                    timestamp=datetime.now(timezone.utc),
-                    duration_ms=duration_ms,
-                )
+                future = executor.submit(gate.evaluate, candidate, baseline)
+                try:
+                    result = future.result(timeout=self._gate_timeout_seconds)
+                except FutureTimeoutError:
+                    duration_ms = int((time.perf_counter() - t0) * 1000)
+                    try:
+                        gate.cleanup_after_timeout()
+                    except Exception:
+                        pass
+                    result = GateResult(
+                        gate_name=gate.name,
+                        candidate_hash=candidate.content_hash,
+                        baseline_hash=baseline.content_hash,
+                        verdict="fail",
+                        metrics={},
+                        failure_reason=f"gate-timeout:{gate.name}",
+                        timestamp=datetime.now(timezone.utc),
+                        duration_ms=duration_ms,
+                    )
+                except Exception as exc:  # NOT BaseException — see docstring.
+                    duration_ms = int((time.perf_counter() - t0) * 1000)
+                    reason = f"gate-internal-error: {type(exc).__name__}: {str(exc)[:200]}"
+                    self._write_gate_error(gate, candidate, exc)
+                    result = GateResult(
+                        gate_name=gate.name,
+                        candidate_hash=candidate.content_hash,
+                        baseline_hash=baseline.content_hash,
+                        verdict="fail",
+                        metrics={},
+                        failure_reason=reason,
+                        timestamp=datetime.now(timezone.utc),
+                        duration_ms=duration_ms,
+                    )
+            finally:
                 executor.shutdown(wait=False, cancel_futures=True)
-            except Exception as exc:  # NOT BaseException — see docstring.
-                duration_ms = int((time.perf_counter() - t0) * 1000)
-                reason = f"gate-internal-error: {type(exc).__name__}: {str(exc)[:200]}"
-                self._write_gate_error(gate, candidate, exc)
-                result = GateResult(
-                    gate_name=gate.name,
-                    candidate_hash=candidate.content_hash,
-                    baseline_hash=baseline.content_hash,
-                    verdict="fail",
-                    metrics={},
-                    failure_reason=reason,
-                    timestamp=datetime.now(timezone.utc),
-                    duration_ms=duration_ms,
-                )
-                executor.shutdown(wait=True)
-            else:
-                executor.shutdown(wait=True)
             trace.append(result)
             if result.verdict == "fail":
                 break  # §6.4.2 — first fail short-circuits the gate chain.
