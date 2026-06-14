@@ -23,7 +23,7 @@ from nanobot.evolve.exceptions import ApplyTerminalError
 
 if TYPE_CHECKING:
     from nanobot.evolve.gates import GateResult
-    from nanobot.evolve.harness import RunManifest
+    from nanobot.evolve.schemas import RunManifest
 
 
 # §8.1: branch protection set — spec pins exactly these two names; other

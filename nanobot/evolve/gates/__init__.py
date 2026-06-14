@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, ClassVar, Literal
 from nanobot.evolve._base import EvolveBase
 
 if TYPE_CHECKING:
-    from nanobot.evolve.harness import Baseline, Candidate
+    from nanobot.evolve.schemas import Baseline, Candidate
 
 
 __all__ = ["Gate", "GateResult", "GATES"]

@@ -8,103 +8,38 @@ will layer judges, GEPA selection, and PR application on top.
 
 from __future__ import annotations
 
-import json
 import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
-from nanobot.evolve._base import EvolveBase, FrozenEvolveBase
 from nanobot.evolve.exceptions import ConfigError
 from nanobot.evolve.gates import GATES, Gate, GateResult
+from nanobot.evolve.schemas import (
+    Baseline,
+    Candidate,
+    JudgeSummary,
+    RunManifest,
+    SkillContent,
+    SkillFrontmatter,
+    ValidationFailure,
+    dump_manifest,
+    load_manifest,
+)
 
-# ---------------------------------------------------------------------------
-# Pydantic data models (§3.2 / §3.7)
-# ---------------------------------------------------------------------------
-
-
-class SkillFrontmatter(EvolveBase):
-    name: str
-    description: str
-    origin: Literal["bundled", "user", "agent"]
-    created_by: str
-    created_at: datetime
-    evolved_from_run: Optional[str] = None
-    evolved_at: Optional[datetime] = None
-    parent_skill_hash: Optional[str] = None
-
-
-class SkillContent(EvolveBase):
-    skill_name: str
-    skill_md_content: str
-    frontmatter: SkillFrontmatter
-    body_md: str
-    cache_key_hash: str
-    size_metrics: dict[str, int]
-    content_hash: str
-
-
-class Baseline(SkillContent):
-    loaded_from: str
-    loaded_at: datetime
-
-
-class Candidate(SkillContent):
-    parent_baseline_hash: str
-    gepa_iteration: int
-    gepa_seed: Optional[int] = None
-
-
-class JudgeSummary(EvolveBase):
-    record_count: int
-    median_aggregate: float
-    median_process: float
-    median_output: float
-    median_token: float
-    consensus_split_count: int
-
-
-class RunManifest(FrozenEvolveBase):
-    # FrozenEvolveBase carries the immutable-once-written contract (§3.7) while
-    # propagating EvolveBase's camelCase alias contract — see `_base.py` for the
-    # rationale on centralising this overlay.
-
-    run_id: str
-    started_at: datetime
-    finished_at: datetime
-    nanobot_version: str
-    evolve_extra_version: dict[str, str]
-    skill_name: str
-    baseline_hash: str
-    candidate_hashes: list[str]
-    promoted_candidate_hash: Optional[str]
-    gate_verdicts: list[GateResult]
-    judge_summary: JudgeSummary
-    final_status: Literal[
-        "promoted_to_pr", "rejected_by_gate", "no_improvement", "harness_error"
-    ]
-    tiers_used: list[Literal["A", "B", "C", "D"]]
-    record_count_per_tier: dict[str, int]
-    judge_pool_health: dict[str, str]
-
-
-def load_manifest(path: Path) -> RunManifest:
-    """Load and validate a RunManifest from JSON."""
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid manifest JSON at {path}: {exc}") from exc
-    return RunManifest.model_validate(raw)
-
-
-def dump_manifest(path: Path, manifest: RunManifest) -> None:
-    """Write a RunManifest JSON file using the model's alias contract."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        manifest.model_dump_json(by_alias=True, indent=2),
-        encoding="utf-8",
-    )
+__all__ = [
+    "Baseline",
+    "Candidate",
+    "JudgeSummary",
+    "OfflineHarness",
+    "RunManifest",
+    "SkillContent",
+    "SkillFrontmatter",
+    "ValidationFailure",
+    "dump_manifest",
+    "load_manifest",
+]
 
 
 # ---------------------------------------------------------------------------
