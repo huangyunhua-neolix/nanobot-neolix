@@ -175,7 +175,6 @@ def test_pipeline_does_not_import_dspy_or_gepa(
 
 def test_evolve_modules_stay_decoupled_from_runtime_lane() -> None:
     import ast
-    from pathlib import Path
 
     forbidden_prefixes = (
         "nanobot.agent.loop",
@@ -187,19 +186,29 @@ def test_evolve_modules_stay_decoupled_from_runtime_lane() -> None:
         "dspy",
         "gepa",
     )
-    root = Path("nanobot/evolve")
+    root = Path(__file__).resolve().parents[2] / "nanobot" / "evolve"
+    assert root.is_dir(), f"evolve scan root must exist: {root}"
+    python_files = sorted(root.rglob("*.py"))
+    assert python_files, f"evolve scan must inspect at least one Python file under {root}"
+
     offenders: list[str] = []
-    for path in root.rglob("*.py"):
+    for path in python_files:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             module = None
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     module = alias.name
-                    if module.startswith(forbidden_prefixes):
+                    if any(
+                        module == prefix or module.startswith(f"{prefix}.")
+                        for prefix in forbidden_prefixes
+                    ):
                         offenders.append(f"{path}:{module}")
             elif isinstance(node, ast.ImportFrom) and node.module:
                 module = node.module
-                if module.startswith(forbidden_prefixes):
+                if any(
+                    module == prefix or module.startswith(f"{prefix}.")
+                    for prefix in forbidden_prefixes
+                ):
                     offenders.append(f"{path}:{module}")
     assert offenders == []
