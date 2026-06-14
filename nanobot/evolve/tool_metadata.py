@@ -76,6 +76,14 @@ _BROAD_TOOL_REGRESSION_PATTERNS = (
         r"\bprefer\s+(?:the\s+)?(?:broad\s+)?(?:exec|shell|process execution)\b"
         r".*\b(?:narrower(?:\s+structured)?|structured)\s+tool\s+exists\b"
     ),
+    re.compile(
+        r"\buse\s+(?:the\s+)?(?:exec|shell|process execution)\s+as\s+(?:a\s+)?replacement\s+for\s+"
+        r"(?:narrower(?:\s+structured)?|structured)\s+tools?\b"
+    ),
+    re.compile(
+        r"\buse\s+(?:the\s+)?(?:exec|shell|process execution)\s+instead\s+of\s+"
+        r"(?:narrower(?:\s+structured)?|structured)\s+tools?\b"
+    ),
 )
 
 
@@ -262,7 +270,7 @@ def validate_tool_metadata_candidate(
     invalid_paths.extend(
         path
         for path in changed_paths
-        if _is_allowed_descriptive_path(path) and not isinstance(proposed_paths[path], str)
+        if _is_allowed_descriptive_path(path) and not isinstance(proposed_paths.get(path), str)
     )
     if invalid_paths:
         return _reject_result(

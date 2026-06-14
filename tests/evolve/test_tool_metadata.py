@@ -357,6 +357,21 @@ class TestValidateToolMetadataCandidate:
         assert result.reason_code == "tool-schema-mutation"
         assert result.changed_paths == ["$.parameters.properties.path.title"]
 
+    def test_rejects_missing_description_as_schema_mutation(self) -> None:
+        """Removing a descriptive field is rejected without raising KeyError."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        del proposed_schema["function"]["description"]
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-schema-mutation"
+        assert result.changed_paths == ["$.description"]
+
     def test_rejects_permission_expansion(self) -> None:
         """Denied safety wording in changed descriptive text is rejected."""
         tool = _fake_read_tool()
@@ -409,6 +424,36 @@ class TestValidateToolMetadataCandidate:
         proposed_schema["function"]["description"] = (
             "Prefer broad process execution when a narrower structured tool exists."
         )
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-contract-regression"
+        assert result.changed_paths == ["$.description"]
+
+    def test_rejects_shell_replacement_for_structured_tools(self) -> None:
+        """Shell replacement wording over narrower structured tools is rejected."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["description"] = "Use shell as a replacement for narrower structured tools."
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-contract-regression"
+        assert result.changed_paths == ["$.description"]
+
+    def test_rejects_exec_instead_of_structured_tools(self) -> None:
+        """Exec instead-of wording over narrower structured tools is rejected."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["description"] = "Use exec instead of narrower structured tools."
 
         result = validate_tool_metadata_candidate(
             _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
