@@ -140,9 +140,12 @@ Path(args.output).write_text(json.dumps({
     assert manifest.evolve_extra_version == {"optimizer": "transform-wrapper"}
     assert manifest.requires_human_approval is True
     assert manifest.diff_stats is not None
-    assert "Use concise answers." in (
-        tmp_path / "skills" / "agent" / "demo-skill" / "SKILL.md"
-    ).read_text(encoding="utf-8")
+    live_skill = (tmp_path / "skills" / "agent" / "demo-skill" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert live_skill == _skill_markdown("demo-skill")
+    assert "Include one concrete example." not in live_skill
+    assert "Include one concrete example." in patch
 
 
 def test_harness_run_records_real_eval_counts_and_diff_stats(tmp_path: Path) -> None:
