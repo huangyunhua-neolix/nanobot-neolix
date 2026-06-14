@@ -49,6 +49,28 @@ def test_harness_tool_snapshot_sanitizes_without_mutating_registry() -> None:
     assert definitions[0]["function"]["parameters"]["properties"]["query"] is original_parameter
 
 
+def test_harness_tool_snapshot_sanitizes_flat_schema_without_mutating() -> None:
+    flat_schema = {
+        "name": "flat_tool",
+        "description": "Flat schema tool.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": StringSchema("Search text."),
+            },
+        },
+    }
+    original_parameter = flat_schema["parameters"]["properties"]["query"]
+
+    safe_schema = sanitize_tool_schema_definition(flat_schema)
+
+    assert safe_schema["parameters"]["properties"]["query"] == {
+        "type": "string",
+        "description": "Search text.",
+    }
+    assert flat_schema["parameters"]["properties"]["query"] is original_parameter
+
+
 def test_harness_run_writes_tool_metadata_artifacts(tmp_path: Path) -> None:
     _write_skill(tmp_path, "demo-skill")
     script = tmp_path / "metadata_only.py"
@@ -105,6 +127,61 @@ Path(args.output).write_text(json.dumps({
     review = (run_dir / "tool_metadata_review.md").read_text(encoding="utf-8")
     assert "No runtime tool source changed" in review
     assert "Verdict: `accept`" in review
+
+
+def test_harness_redacts_tool_metadata_json_artifacts(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "metadata_secrets.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+snapshot = payload['toolContractSnapshot'][0]
+proposed = {
+    'name': snapshot['toolName'],
+    'description': 'Review /Users/alice/private/sk-ant-abcdefghijklmnopqrstuvwxyzABCDEF before using this tool.',
+    'parameters': snapshot['parametersSchema'],
+}
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'metadata-secrets-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': {'code': 'no_improvement', 'message': 'No skill candidate improved.'},
+    'candidates': [],
+    'toolMetadataCandidates': [{
+        'toolName': snapshot['toolName'],
+        'baselineSchemaHash': snapshot['schemaHash'],
+        'proposedSchema': proposed,
+        'intendedImprovement': 'Email alice@example.com from /Users/alice/private.',
+        'riskAssessment': 'Uses sk-ant-abcdefghijklmnopqrstuvwxyzABCDEF only in test text.'
+    }]
+}))
+""".lstrip(),
+    )
+
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    candidates_jsonl = (run_dir / "tool_metadata_candidates.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "/Users/" not in candidates_jsonl
+    assert "alice@example.com" not in candidates_jsonl
+    assert "sk-ant-" not in candidates_jsonl
+    assert "[REDACTED:EMAIL]" in candidates_jsonl
+    assert "[REDACTED:APIKEY:ANTHROPIC]" in candidates_jsonl
 
 
 def test_harness_rejects_unsafe_tool_metadata_candidate_without_gate_execution(tmp_path: Path) -> None:

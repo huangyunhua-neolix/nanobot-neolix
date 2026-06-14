@@ -267,13 +267,9 @@ def _json_safe_tool_schema(value: object) -> object:
 
 def sanitize_tool_schema_definition(schema_def: dict[str, Any]) -> dict[str, Any]:
     """Return a JSON-safe copy of a tool schema definition."""
-    safe_schema_def = deepcopy(schema_def)
-    flat_schema = safe_schema_def.get("function")
-    if not isinstance(flat_schema, dict):
-        flat_schema = safe_schema_def
-    parameters_schema = flat_schema.get("parameters")
-    if isinstance(parameters_schema, dict):
-        flat_schema["parameters"] = _json_safe_tool_schema(parameters_schema)
+    safe_schema_def = _json_safe_tool_schema(schema_def)
+    if not isinstance(safe_schema_def, dict):
+        return {}
     return safe_schema_def
 
 
@@ -429,6 +425,7 @@ def render_tool_metadata_review(
     for index, candidate in sorted(
         enumerate(candidates), key=lambda item: (item[1].tool_name, item[0])
     ):
+        # Validation results are parallel to candidates by original optimizer index.
         result = validation_results[index] if index < len(validation_results) else None
         validation_mismatch = result is not None and (
             result.tool_name != candidate.tool_name

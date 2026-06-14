@@ -223,13 +223,29 @@ def _review_validation_results(
     return [
         result.model_copy(
             update={
-                "reason": f"{result.reason_code}: {result.reason}"
-                if result.verdict == "reject" and result.reason_code and result.reason
-                else result.reason
+                "reason": _safe_single_line_reason(
+                    f"{result.reason_code}: {result.reason}"
+                    if result.verdict == "reject" and result.reason_code and result.reason
+                    else result.reason or "<none>"
+                )
             }
         )
         for result in results
     ]
+
+
+def _redacted_tool_metadata_candidate(candidate: ToolMetadataCandidate) -> ToolMetadataCandidate:
+    """Return a metadata candidate safe for shareable JSON artifacts."""
+    return ToolMetadataCandidate.model_validate_json(
+        redact(candidate.model_dump_json(by_alias=True)).text
+    )
+
+
+def _redacted_tool_contract_snapshot(snapshot: ToolContractSnapshot) -> ToolContractSnapshot:
+    """Return a tool contract snapshot safe for shareable JSON artifacts."""
+    return ToolContractSnapshot.model_validate_json(
+        redact(snapshot.model_dump_json(by_alias=True)).text
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -468,9 +484,11 @@ class OfflineHarness:
             return {}
 
         artifact_paths = _tool_metadata_artifact_plan()
+        safe_snapshot = [_redacted_tool_contract_snapshot(item) for item in snapshot]
+        safe_candidates = [_redacted_tool_metadata_candidate(candidate) for candidate in candidates]
         (run_dir / artifact_paths["tool_contract_snapshot"]).write_text(
             json.dumps(
-                [item.model_dump(mode="json", by_alias=True) for item in snapshot],
+                [item.model_dump(mode="json", by_alias=True) for item in safe_snapshot],
                 indent=2,
                 sort_keys=True,
             )
@@ -478,7 +496,10 @@ class OfflineHarness:
             encoding="utf-8",
         )
         (run_dir / artifact_paths["tool_metadata_candidates"]).write_text(
-            "".join(candidate.model_dump_json(by_alias=True) + "\n" for candidate in candidates),
+            "".join(
+                candidate.model_dump_json(by_alias=True) + "\n"
+                for candidate in safe_candidates
+            ),
             encoding="utf-8",
         )
         (run_dir / artifact_paths["tool_metadata_review"]).write_text(
