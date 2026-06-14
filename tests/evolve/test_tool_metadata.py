@@ -518,6 +518,27 @@ class TestValidateToolMetadataCandidate:
 class TestRenderToolMetadataReview:
     """Test human-readable tool metadata review markdown rendering."""
 
+    def test_render_empty_inputs_includes_empty_state_messages(self) -> None:
+        """Empty review inputs render stable empty-state guidance."""
+        review = render_tool_metadata_review([], [], [])
+
+        assert review.endswith("\n")
+        assert "# Tool Metadata Review" in review
+        assert "No runtime tool source changed." in review
+        assert "No tools captured." in review
+        assert "No tool metadata candidates emitted." in review
+
+    def test_render_snapshot_without_candidates_includes_snapshot_and_empty_candidates(self) -> None:
+        """Snapshot-only review renders captured tools and candidate empty state."""
+        tool = _fake_read_tool()
+        snapshot = _snapshot_for_tool(tool)
+
+        review = render_tool_metadata_review([snapshot], [], [])
+
+        assert "`read_file` (builtin)" in review
+        assert "No tools captured." not in review
+        assert "No tool metadata candidates emitted." in review
+
     def test_render_includes_diff_and_non_application_language(self) -> None:
         """Review markdown includes candidate diff and non-application wording."""
         tool = _fake_read_tool()
@@ -533,6 +554,7 @@ class TestRenderToolMetadataReview:
         assert "# Tool Metadata Review" in review
         assert "No runtime tool source changed" in review
         assert "Tool: `read_file`" in review
+        assert review.count("Tool: `read_file`") == 1
         assert "Baseline hash:" in review
         assert "Verdict: `accept`" in review
         assert "Redacted reason: <none>" in review
@@ -551,7 +573,7 @@ class TestRenderToolMetadataReview:
             baseline_schema_hash=snapshot.schema_hash,
             verdict="reject",
             reason_code="tool-permission-expansion",
-            reason="Secret at /Users/alice/private/sk-ant-abcdefghijklmnopqrstuvwxyzABCDEF.",
+            reason="Secret at /Users/alice/private/secret-project/sk-ant-abcdefghijklmnopqrstuvwxyzABCDEF.",
             changed_paths=["$.description"],
         )
 
@@ -559,8 +581,40 @@ class TestRenderToolMetadataReview:
 
         assert "/Users/" not in review
         assert "alice" not in review
+        assert "private" not in review
+        assert "secret-project" not in review
         assert "sk-ant-" not in review
         assert "[REDACTED:APIKEY:ANTHROPIC]" in review
+
+    def test_render_redacts_judge_evidence_path(self) -> None:
+        """Judge evidence paths from user homes are redacted before rendering."""
+        tool = _fake_read_tool()
+        snapshot = _snapshot_for_tool(tool)
+        candidate = _candidate_for_tool(tool=tool)
+        validation_result = ToolMetadataValidationResult(
+            tool_name=tool.name,
+            baseline_schema_hash=snapshot.schema_hash,
+            verdict="accept",
+            changed_paths=[],
+            judge_evidence_path="/Users/alice/private/secret-project/evidence.jsonl",
+        )
+
+        review = render_tool_metadata_review([snapshot], [candidate], [validation_result])
+
+        assert "/Users/" not in review
+        assert "alice" not in review
+        assert "private" not in review
+        assert "secret-project" not in review
+
+    def test_render_missing_validation_result_uses_missing_validation_verdict(self) -> None:
+        """Candidates without validation results render missing-validation verdict."""
+        tool = _fake_read_tool()
+        snapshot = _snapshot_for_tool(tool)
+        candidate = _candidate_for_tool(tool=tool)
+
+        review = render_tool_metadata_review([snapshot], [candidate], [])
+
+        assert "Verdict: `missing-validation`" in review
 
     def test_render_includes_parameter_note_diff(self) -> None:
         """Parameter description changes render baseline and candidate snippets."""

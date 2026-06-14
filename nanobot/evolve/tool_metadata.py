@@ -94,6 +94,8 @@ _BROAD_TOOL_REGRESSION_PATTERNS = (
 _MAX_REVIEW_TEXT_CHARS = 500
 _MAX_REVIEW_SNIPPET_CHARS = 240
 _HASH_PREFIX_LENGTH = 12
+_REDACTED_HOME_PATH_RE = re.compile(r"/<REDACTED_HOME>/[^\s`]*")
+_REDACTED_APIKEY_MARKER_RE = re.compile(r"\[REDACTED:APIKEY:[^\]]+\]")
 
 
 def _compute_source_kind(tool_name: str) -> Literal["builtin", "mcp"]:
@@ -319,10 +321,20 @@ def validate_tool_metadata_candidate(
     )
 
 
+def _collapse_redacted_home_path(match: re.Match[str]) -> str:
+    """Collapse a redacted home path without exposing private subpaths."""
+    text = match.group(0)
+    api_key_match = _REDACTED_APIKEY_MARKER_RE.search(text)
+    if api_key_match is None:
+        return "/<REDACTED_HOME_PATH>"
+    return f"/<REDACTED_HOME_PATH>/{api_key_match.group(0)}"
+
+
 def _review_text(value: object, *, max_chars: int = _MAX_REVIEW_TEXT_CHARS) -> str:
     """Redact, escape, and bound text for review markdown."""
     text = "<none>" if value is None else str(value)
     redacted = redact(text).text.replace("```", "'''")
+    redacted = _REDACTED_HOME_PATH_RE.sub(_collapse_redacted_home_path, redacted)
     if len(redacted) <= max_chars:
         return redacted
     return redacted[: max_chars - 3] + "..."
@@ -361,7 +373,7 @@ def render_tool_metadata_review(
     ]
 
     if not snapshot:
-        lines.append("- <none>")
+        lines.append("No tools captured.")
     else:
         for item in sorted(snapshot, key=lambda snap: (snap.source_kind, snap.tool_name)):
             lines.append(
@@ -371,7 +383,7 @@ def render_tool_metadata_review(
 
     lines.extend(["", "## Candidates"])
     if not candidates:
-        lines.append("<none>")
+        lines.append("No tool metadata candidates emitted.")
         return "\n".join(lines) + "\n"
 
     for candidate in sorted(candidates, key=lambda item: item.tool_name):
@@ -390,7 +402,6 @@ def render_tool_metadata_review(
             [
                 "",
                 f"### Tool: `{_review_text(candidate.tool_name)}`",
-                f"Tool: `{_review_text(candidate.tool_name)}`",
                 f"Baseline hash: `{_review_text(candidate.baseline_schema_hash[:_HASH_PREFIX_LENGTH])}`",
                 f"Verdict: `{_review_text(verdict)}`",
                 f"Redacted reason: {_review_text(reason)}",
