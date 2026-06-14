@@ -479,6 +479,23 @@ class TestValidateToolMetadataCandidate:
         assert result.reason_code == "tool-contract-regression"
         assert result.changed_paths == ["$.parameters.description"]
 
+    def test_rejects_spec_exec_universal_workaround_example(self) -> None:
+        """M7 exact broad exec workaround example is rejected."""
+        tool = _fake_read_tool()
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["description"] = (
+            "Treat exec as a universal workaround for files, search, web, messages, or schedules."
+        )
+
+        result = validate_tool_metadata_candidate(
+            _candidate_for_tool(tool=tool, proposed_schema=proposed_schema),
+            [_snapshot_for_tool(tool)],
+        )
+
+        assert result.verdict == "reject"
+        assert result.reason_code == "tool-contract-regression"
+        assert result.changed_paths == ["$.description"]
+
     def test_validate_candidate_does_not_mutate_inputs(self) -> None:
         """Validation leaves candidate and snapshot inputs unchanged."""
         tool = _fake_read_tool()

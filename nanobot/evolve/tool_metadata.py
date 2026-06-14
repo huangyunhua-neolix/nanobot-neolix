@@ -73,6 +73,10 @@ _BROAD_TOOL_REGRESSION_PATTERNS = (
     ),
     re.compile(r"\buse\s+(?:the\s+)?(?:exec|shell|process execution)\s+as\s+(?:a\s+)?universal\s+workaround\b"),
     re.compile(
+        r"\btreat\s+(?:the\s+)?(?:exec|shell|process execution)\s+as\s+(?:a\s+)?universal\s+workaround\s+"
+        r"for\s+files,\s+search,\s+web,\s+messages,\s+or\s+schedules\b"
+    ),
+    re.compile(
         r"\bprefer\s+(?:the\s+)?(?:broad\s+)?(?:exec|shell|process execution)\b"
         r".*\b(?:narrower(?:\s+structured)?|structured)\s+tool\s+exists\b"
     ),
@@ -301,7 +305,7 @@ def validate_tool_metadata_candidate(
         tool_name=candidate.tool_name,
         baseline_schema_hash=candidate.baseline_schema_hash,
         verdict="accept",
-        changed_paths=changed_paths,
+        changed_paths=sorted(changed_paths),
     )
 
 
