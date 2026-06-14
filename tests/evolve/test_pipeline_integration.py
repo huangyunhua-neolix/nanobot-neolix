@@ -1,8 +1,7 @@
-"""Integration smoke for the 3-gate pipeline (spec §3.6 / §6.4 / §3.7).
+"""Integration smoke for the M5 gate pipeline (spec §3.6 / §6.4 / §3.7).
 
-Exercises the real ``GATES`` registry (``TestPassGate``, ``SkillSizeGate``,
-``CacheCompatGate``) through ``OfflineHarness._run_gates`` with stub
-``Baseline`` + ``Candidate`` pydantic instances. Also pins the
+Exercises the real ``GATES`` registry through ``OfflineHarness._run_gates``
+with stub ``Baseline`` + ``Candidate`` pydantic instances. Also pins the
 ``EvolveExtraNotInstalled`` lazy-import contract: walking the gate chain MUST
 NOT pull ``dspy`` or ``gepa`` into ``sys.modules`` — those are reserved for
 the GEPA-driven ``run`` path that t-14 / t-15 will introduce.
@@ -77,6 +76,14 @@ def _candidate(
             "tier_c_total": 10,
             "tier_a_pass": 24,
             "tier_a_total": 25,
+            # Gate 5: required review artifacts are present.
+            "review_manifest": 1,
+            "review_report": 1,
+            "review_diff": 1,
+            "review_pr_body": 1,
+            "review_optimizer_input": 1,
+            "review_optimizer_output": 1,
+            "review_requires_human_approval": 1,
         },
         content_hash=content_hash,
         parent_baseline_hash="base-hash",
@@ -110,7 +117,7 @@ def test_pipeline_build_pipeline_is_deprecated_shim_without_gepa_imports(
     assert "gepa" not in sys.modules
 
 
-def test_pipeline_all_three_gates_pass_with_aligned_candidate(
+def test_pipeline_all_gates_pass_with_aligned_candidate(
     tmp_path: Path, clean_lazy_module_state: None
 ) -> None:
     harness = OfflineHarness(workspace=tmp_path)  # uses real GATES registry
@@ -119,13 +126,19 @@ def test_pipeline_all_three_gates_pass_with_aligned_candidate(
 
     trace = harness._run_gates(candidate, baseline)
 
-    assert len(trace) == 3, f"expected 3 gate results, got {len(trace)}: {trace}"
-    assert [r.verdict for r in trace] == ["pass", "pass", "pass"]
+    assert len(trace) == 5, f"expected 5 gate results, got {len(trace)}: {trace}"
+    assert [r.verdict for r in trace] == ["pass", "pass", "pass", "pass", "pass"]
     # Order MUST match the module-level GATES registry (§6.4.1).
-    assert [r.gate_name for r in trace] == ["1-test-pass", "2-size-cap", "3-cache-compat"]
+    assert [r.gate_name for r in trace] == [
+        "1-test-pass",
+        "2-size-cap",
+        "3-cache-compat",
+        "4-semantic-fidelity",
+        "5-human-review",
+    ]
 
 
-def test_pipeline_cache_mismatch_last_gate_fails(
+def test_pipeline_cache_mismatch_short_circuits_at_cache_gate(
     tmp_path: Path, clean_lazy_module_state: None
 ) -> None:
     # Diverge only on cache_key_hash. Gate-1 and gate-2 should still pass

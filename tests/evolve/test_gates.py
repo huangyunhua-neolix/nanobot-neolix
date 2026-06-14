@@ -120,13 +120,18 @@ def test_gateresult_validation_rejects_bad_verdict():
 
 
 def test_gates_execution_registry_populated_in_order():
-    """GATES is the execution registry; populated with the 3 M4 deterministic gates
-    in name-prefix order (1- → 2- → 3-) so the harness iterates in spec-prescribed
-    sequence. The §6.4.1 contract test (t-07) does the strict prefix/ordering check;
-    this invariant test guards the basic populated-and-ordered shape after t-08/09/10
-    landed and the orchestrator's coordinated registration commit wired them in."""
-    assert len(GATES) == 3
-    assert [g.name for g in GATES] == ["1-test-pass", "2-size-cap", "3-cache-compat"]
+    """GATES is the execution registry; populated with the M5 gates in
+    name-prefix order so the harness iterates in spec-prescribed sequence. The
+    §6.4.1 contract test does the strict prefix/ordering check; this invariant
+    test guards the basic populated-and-ordered shape after M5 gate registration."""
+    assert len(GATES) == 5
+    assert [g.name for g in GATES] == [
+        "1-test-pass",
+        "2-size-cap",
+        "3-cache-compat",
+        "4-semantic-fidelity",
+        "5-human-review",
+    ]
 
 
 def test_subclasses_registry_collects_subclasses():

@@ -6,8 +6,6 @@ from typing import TYPE_CHECKING, ClassVar
 
 from nanobot.evolve.gates import Gate, GateResult
 from nanobot.evolve.gates._constants import RUBRIC_PASS_THRESHOLD
-from nanobot.evolve.judges.calibration import CalibrationRecord
-from nanobot.evolve.judges.rubric import JudgeConfig, JudgePool
 
 if TYPE_CHECKING:
     from nanobot.evolve.schemas import Baseline, Candidate
@@ -21,6 +19,9 @@ class SemanticFidelityGate(Gate):
         return "4-semantic-fidelity"
 
     def evaluate(self, candidate: "Candidate", baseline: "Baseline") -> GateResult:
+        from nanobot.evolve.judges.calibration import CalibrationRecord
+        from nanobot.evolve.judges.rubric import JudgeConfig, JudgePool
+
         start = time.monotonic()
         pool = JudgePool(judges=[JudgeConfig(model="local/deterministic")])
         score = pool.score(
