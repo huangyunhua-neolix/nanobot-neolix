@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any, Literal
 
 from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.evolve.privacy.redact import redact
 from nanobot.evolve.schemas import (
     ToolContractSnapshot,
     ToolMetadataCandidate,
@@ -89,6 +90,10 @@ _BROAD_TOOL_REGRESSION_PATTERNS = (
         r"(?:narrower(?:\s+structured)?|structured)\s+tools?\b"
     ),
 )
+
+_MAX_REVIEW_TEXT_CHARS = 500
+_MAX_REVIEW_SNIPPET_CHARS = 240
+_HASH_PREFIX_LENGTH = 12
 
 
 def _compute_source_kind(tool_name: str) -> Literal["builtin", "mcp"]:
@@ -236,6 +241,11 @@ def _reject_result(
     )
 
 
+def _snapshot_schema(snapshot: ToolContractSnapshot) -> dict[str, Any]:
+    """Build flat schema from a contract snapshot."""
+    return _build_baseline_schema(snapshot)
+
+
 def validate_tool_metadata_candidate(
     candidate: ToolMetadataCandidate,
     snapshot: list[ToolContractSnapshot],
@@ -307,6 +317,109 @@ def validate_tool_metadata_candidate(
         verdict="accept",
         changed_paths=sorted(changed_paths),
     )
+
+
+def _review_text(value: object, *, max_chars: int = _MAX_REVIEW_TEXT_CHARS) -> str:
+    """Redact, escape, and bound text for review markdown."""
+    text = "<none>" if value is None else str(value)
+    redacted = redact(text).text.replace("```", "'''")
+    if len(redacted) <= max_chars:
+        return redacted
+    return redacted[: max_chars - 3] + "..."
+
+
+def _review_list(values: list[str]) -> str:
+    """Render a deterministic comma-separated code list."""
+    if not values:
+        return "<none>"
+    return ", ".join(f"`{_review_text(value)}`" for value in values)
+
+
+def _get_path_value(value: dict[str, Any], path: str) -> object:
+    """Return a flattened JSON path value or None when absent."""
+    return _flatten_json_paths(value).get(path)
+
+
+def render_tool_metadata_review(
+    snapshot: list[ToolContractSnapshot],
+    candidates: list[ToolMetadataCandidate],
+    validation_results: list[ToolMetadataValidationResult],
+) -> str:
+    """Render deterministic human-readable metadata review markdown.
+
+    The review is an artifact only: it does not apply tool metadata and does not
+    change runtime tool source.
+    """
+    snapshots_by_name = {item.tool_name: item for item in snapshot}
+    validation_by_tool = {item.tool_name: item for item in validation_results}
+    lines = [
+        "# Tool Metadata Review",
+        "",
+        "No runtime tool source changed.",
+        "",
+        "## Snapshot",
+    ]
+
+    if not snapshot:
+        lines.append("- <none>")
+    else:
+        for item in sorted(snapshot, key=lambda snap: (snap.source_kind, snap.tool_name)):
+            lines.append(
+                f"- `{_review_text(item.tool_name)}` ({item.source_kind}) "
+                f"hash `{_review_text(item.schema_hash[:_HASH_PREFIX_LENGTH])}`"
+            )
+
+    lines.extend(["", "## Candidates"])
+    if not candidates:
+        lines.append("<none>")
+        return "\n".join(lines) + "\n"
+
+    for candidate in sorted(candidates, key=lambda item: item.tool_name):
+        result = validation_by_tool.get(candidate.tool_name)
+        matching_snapshot = snapshots_by_name.get(candidate.tool_name)
+        baseline_schema = _snapshot_schema(matching_snapshot) if matching_snapshot is not None else {}
+        proposed_schema = canonical_tool_schema(candidate.model_dump()["proposed_schema"])
+        changed_paths = result.changed_paths if result is not None else _changed_paths(baseline_schema, proposed_schema)
+        reason = result.reason if result is not None and result.reason else "<none>"
+        verdict = result.verdict if result is not None else "missing-validation"
+        judge_evidence_path = result.judge_evidence_path if result is not None and result.judge_evidence_path else "<none>"
+        baseline_description = baseline_schema.get("description") if baseline_schema else "<missing snapshot>"
+        candidate_description = proposed_schema.get("description", "<missing description>")
+
+        lines.extend(
+            [
+                "",
+                f"### Tool: `{_review_text(candidate.tool_name)}`",
+                f"Tool: `{_review_text(candidate.tool_name)}`",
+                f"Baseline hash: `{_review_text(candidate.baseline_schema_hash[:_HASH_PREFIX_LENGTH])}`",
+                f"Verdict: `{_review_text(verdict)}`",
+                f"Redacted reason: {_review_text(reason)}",
+                f"judge evidence: `{_review_text(judge_evidence_path)}`",
+                f"Intended improvement: {_review_text(candidate.intended_improvement)}",
+                f"Risk assessment: {_review_text(candidate.risk_assessment)}",
+                f"Changed paths: {_review_list(changed_paths)}",
+                f"Baseline description: {_review_text(baseline_description)}",
+                f"Candidate description: {_review_text(candidate_description)}",
+            ]
+        )
+
+        parameter_paths = [
+            path
+            for path in changed_paths
+            if re.fullmatch(r"\$\.parameters\.properties\.[^.\[\]]+\.(?:description|title)", path)
+        ]
+        lines.append("Parameter note diffs:")
+        if not parameter_paths:
+            lines.append("- <none>")
+        else:
+            for path in sorted(parameter_paths):
+                baseline_value = _get_path_value(baseline_schema, path)
+                candidate_value = _get_path_value(proposed_schema, path)
+                lines.append(f"- `{_review_text(path)}`")
+                lines.append(f"  - baseline: {_review_text(baseline_value, max_chars=_MAX_REVIEW_SNIPPET_CHARS)}")
+                lines.append(f"  - candidate: {_review_text(candidate_value, max_chars=_MAX_REVIEW_SNIPPET_CHARS)}")
+
+    return "\n".join(lines) + "\n"
 
 
 def capture_tool_contract_snapshot(registry: ToolRegistry) -> list[ToolContractSnapshot]:

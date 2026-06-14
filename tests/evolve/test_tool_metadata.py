@@ -7,10 +7,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from nanobot.agent.tools.registry import ToolRegistry
-from nanobot.evolve.schemas import ToolContractSnapshot, ToolMetadataCandidate
+from nanobot.evolve.schemas import (
+    ToolContractSnapshot,
+    ToolMetadataCandidate,
+    ToolMetadataValidationResult,
+)
 from nanobot.evolve.tool_metadata import (
     canonical_tool_schema,
     capture_tool_contract_snapshot,
+    render_tool_metadata_review,
     schema_hash,
     validate_tool_metadata_candidate,
 )
@@ -508,6 +513,86 @@ class TestValidateToolMetadataCandidate:
 
         assert candidate == candidate_before
         assert snapshot == snapshot_before
+
+
+class TestRenderToolMetadataReview:
+    """Test human-readable tool metadata review markdown rendering."""
+
+    def test_render_includes_diff_and_non_application_language(self) -> None:
+        """Review markdown includes candidate diff and non-application wording."""
+        tool = _fake_read_tool()
+        snapshot = _snapshot_for_tool(tool)
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["description"] = "Clarifies explicit workspace-file scope for reviewers."
+        candidate = _candidate_for_tool(tool=tool, proposed_schema=proposed_schema)
+        validation_result = validate_tool_metadata_candidate(candidate, [snapshot])
+
+        review = render_tool_metadata_review([snapshot], [candidate], [validation_result])
+
+        assert review.endswith("\n")
+        assert "# Tool Metadata Review" in review
+        assert "No runtime tool source changed" in review
+        assert "Tool: `read_file`" in review
+        assert "Baseline hash:" in review
+        assert "Verdict: `accept`" in review
+        assert "Redacted reason: <none>" in review
+        assert "Baseline description:" in review
+        assert "Candidate description:" in review
+        assert "`$.description`" in review
+        assert "judge evidence: `<none>`" in review
+
+    def test_render_redacts_rejection_reason(self) -> None:
+        """Rejected reason text is redacted before rendering."""
+        tool = _fake_read_tool()
+        snapshot = _snapshot_for_tool(tool)
+        candidate = _candidate_for_tool(tool=tool)
+        validation_result = ToolMetadataValidationResult(
+            tool_name=tool.name,
+            baseline_schema_hash=snapshot.schema_hash,
+            verdict="reject",
+            reason_code="tool-permission-expansion",
+            reason="Secret at /Users/alice/private/sk-ant-abcdefghijklmnopqrstuvwxyzABCDEF.",
+            changed_paths=["$.description"],
+        )
+
+        review = render_tool_metadata_review([snapshot], [candidate], [validation_result])
+
+        assert "/Users/" not in review
+        assert "alice" not in review
+        assert "sk-ant-" not in review
+        assert "[REDACTED:APIKEY:ANTHROPIC]" in review
+
+    def test_render_includes_parameter_note_diff(self) -> None:
+        """Parameter description changes render baseline and candidate snippets."""
+        tool = _fake_read_tool()
+        snapshot = _snapshot_for_tool(tool)
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["parameters"]["properties"]["path"][
+            "description"
+        ] = "Workspace-relative file path for review."
+        candidate = _candidate_for_tool(tool=tool, proposed_schema=proposed_schema)
+        validation_result = validate_tool_metadata_candidate(candidate, [snapshot])
+
+        review = render_tool_metadata_review([snapshot], [candidate], [validation_result])
+
+        assert "Parameter note diffs:" in review
+        assert "`$.parameters.properties.path.description`" in review
+        assert "baseline: File path to read" in review
+        assert "candidate: Workspace-relative file path for review." in review
+
+    def test_render_escapes_code_fences_in_candidate_text(self) -> None:
+        """Rendered user/model text cannot introduce markdown code fences."""
+        tool = _fake_read_tool()
+        snapshot = _snapshot_for_tool(tool)
+        proposed_schema = tool.to_schema()
+        proposed_schema["function"]["description"] = "Clarifies ``` fenced text for reviewers."
+        candidate = _candidate_for_tool(tool=tool, proposed_schema=proposed_schema)
+        validation_result = validate_tool_metadata_candidate(candidate, [snapshot])
+
+        review = render_tool_metadata_review([snapshot], [candidate], [validation_result])
+
+        assert "```" not in review
+        assert "'''" in review
 
 
 class TestCaptureToolContractSnapshot:
