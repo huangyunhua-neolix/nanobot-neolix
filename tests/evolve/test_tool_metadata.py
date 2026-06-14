@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import pytest
-
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.evolve.schemas import ToolContractSnapshot
 from nanobot.evolve.tool_metadata import (

@@ -3,8 +3,9 @@
 import hashlib
 import json
 from copy import deepcopy
-from typing import Any
+from typing import Any, Literal
 
+from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.evolve.schemas import ToolContractSnapshot
 
 
@@ -24,6 +25,18 @@ def canonical_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
     if isinstance(fn, dict):
         return deepcopy(fn)
     return deepcopy(schema)
+
+
+def _compute_source_kind(tool_name: str) -> Literal["builtin", "mcp"]:
+    """Compute source kind based on tool name prefix.
+
+    Args:
+        tool_name: Name of the tool.
+
+    Returns:
+        "mcp" if tool_name starts with "mcp_", otherwise "builtin".
+    """
+    return "mcp" if tool_name.startswith("mcp_") else "builtin"
 
 
 def schema_hash(
@@ -54,14 +67,14 @@ def schema_hash(
     return hashlib.sha256(json_str.encode("utf-8")).hexdigest()
 
 
-def capture_tool_contract_snapshot(registry: Any) -> list[ToolContractSnapshot]:
+def capture_tool_contract_snapshot(registry: ToolRegistry) -> list[ToolContractSnapshot]:
     """Capture snapshot of tool contracts from registry.
 
     Iterate registry.get_definitions(), canonicalize each schema, extract
     tool metadata, and compute schema hashes. Sort results by (source_kind, tool_name).
 
     Args:
-        registry: Object with get_definitions() method (typically ToolRegistry).
+        registry: ToolRegistry instance containing tool definitions.
 
     Returns:
         List of ToolContractSnapshot ordered by (source_kind, tool_name).
@@ -86,7 +99,7 @@ def capture_tool_contract_snapshot(registry: Any) -> list[ToolContractSnapshot]:
             parameters_schema = {}
 
         # Determine source kind
-        source_kind = "mcp" if tool_name.startswith("mcp_") else "builtin"
+        source_kind = _compute_source_kind(tool_name)
 
         # Compute schema hash
         hash_value = schema_hash(
@@ -99,7 +112,7 @@ def capture_tool_contract_snapshot(registry: Any) -> list[ToolContractSnapshot]:
             tool_name=tool_name,
             description_text=description_text,
             parameters_schema=parameters_schema,
-            source_kind=source_kind,  # type: ignore[arg-type]
+            source_kind=source_kind,
             schema_hash=hash_value,
         )
         snapshots.append(snapshot)
