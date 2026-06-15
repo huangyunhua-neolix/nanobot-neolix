@@ -370,6 +370,120 @@ Path(args.output).write_text(json.dumps({
     assert "Judge evidence: `prompt_template_judge_evidence.jsonl`" in review
 
 
+def test_harness_isolates_prompt_judge_evidence_between_runs(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    accepted_script = tmp_path / "prompt_judge_first.py"
+    _write_optimizer_script(
+        accepted_script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+snapshot = payload['promptTemplateSnapshot'][0]
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'prompt-judge-first-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': {'code': 'no_improvement', 'message': 'No skill candidate improved.'},
+    'candidates': [],
+    'promptTemplateCandidates': [{
+        'skillName': snapshot['skillName'],
+        'baselineSnapshotHash': snapshot['snapshotHash'],
+        'proposedBody': snapshot['bodyText'].replace('concise', 'clear'),
+        'intendedImprovement': 'Accepted prompt candidate.',
+        'riskAssessment': 'Editable body-only change.',
+        'cacheImpactClaim': 'No frontmatter changed.'
+    }]
+}))
+""".lstrip(),
+    )
+    noop_script = tmp_path / "prompt_noop_second.py"
+    _write_optimizer_script(
+        noop_script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+snapshot = payload['promptTemplateSnapshot'][0]
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'prompt-noop-second-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': {'code': 'no_improvement', 'message': 'No skill candidate improved.'},
+    'candidates': [],
+    'promptTemplateCandidates': [{
+        'skillName': snapshot['skillName'],
+        'baselineSnapshotHash': snapshot['snapshotHash'],
+        'proposedBody': snapshot['bodyText'],
+        'intendedImprovement': 'No-op prompt candidate.',
+        'riskAssessment': 'No body change.',
+        'cacheImpactClaim': 'No frontmatter changed.'
+    }]
+}))
+""".lstrip(),
+    )
+    harness = OfflineHarness(workspace=tmp_path)
+    harness._capture_prompt_template_snapshot = lambda: [  # type: ignore[method-assign]
+        _synthetic_accepted_prompt_snapshot()
+    ]
+
+    first_manifest = harness.run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(accepted_script)],
+        tiers=["A", "C"],
+    )
+    first_run_dir = tmp_path / "evals" / "runs" / first_manifest.run_id
+    first_evidence_path = first_run_dir / "prompt_template_judge_evidence.jsonl"
+    first_evidence_content = first_evidence_path.read_text(encoding="utf-8").strip()
+    assert first_evidence_content
+
+    second_manifest = harness.run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(noop_script)],
+        tiers=["A", "C"],
+    )
+
+    second_run_dir = tmp_path / "evals" / "runs" / second_manifest.run_id
+    assert second_run_dir != first_run_dir
+    assert not (second_run_dir / "prompt_template_judge_evidence.jsonl").exists()
+    assert "prompt_template_judge_evidence" not in second_manifest.prompt_template_artifact_paths
+    assert "prompt_template_judge_evidence" not in second_manifest.artifact_paths
+    second_manifest_json = json.loads((second_run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert "prompt_template_judge_evidence" not in second_manifest_json["promptTemplateArtifactPaths"]
+    assert "prompt_template_judge_evidence" not in second_manifest_json["artifactPaths"]
+
+    forbidden_fragments = [
+        "prompt_template_judge_evidence.jsonl",
+        str(first_evidence_path),
+        first_evidence_path.relative_to(tmp_path).as_posix(),
+        first_evidence_content,
+    ]
+    second_artifacts = [
+        second_run_dir / "optimizer" / "optimizer_input.json",
+        second_run_dir / "optimizer" / "optimizer_output.json",
+        second_run_dir / "prompt_template_review.md",
+    ]
+    report_path = second_run_dir / "report.md"
+    if report_path.exists():
+        second_artifacts.append(report_path)
+    for artifact_path in second_artifacts:
+        artifact_text = artifact_path.read_text(encoding="utf-8")
+        for fragment in forbidden_fragments:
+            assert fragment not in artifact_text
+
+
 def test_harness_skips_judge_evidence_for_rejected_prompt_template_candidate(
     tmp_path: Path,
 ) -> None:
