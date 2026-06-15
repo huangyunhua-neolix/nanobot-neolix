@@ -10,7 +10,10 @@ from nanobot.evolve.prompt_templates import (
     capture_bundled_prompt_template_snapshot,
     parse_editable_regions,
     snapshot_from_skill_markdown,
+    validate_prompt_template_candidate,
+    validate_prompt_template_candidates,
 )
+from nanobot.evolve.schemas import PromptTemplateCandidate, PromptTemplateSnapshot
 
 
 def _skill_markdown(body: str, *, description: str = "Demo skill") -> str:
@@ -32,6 +35,31 @@ def _write_bundled_skill(root: Path, name: str, body: str) -> Path:
     path = skill_dir / "SKILL.md"
     path.write_text(_skill_markdown(body), encoding="utf-8")
     return path
+
+
+def _snapshot(body: str, *, skill_name: str = "demo-skill") -> PromptTemplateSnapshot:
+    return snapshot_from_skill_markdown(
+        skill_name=skill_name,
+        source_identifier=f"nanobot/skills/{skill_name}/SKILL.md",
+        text=_skill_markdown(body),
+    )
+
+
+def _candidate(
+    snapshot: PromptTemplateSnapshot,
+    proposed_body: str,
+    *,
+    skill_name: str | None = None,
+    baseline_snapshot_hash: str | None = None,
+) -> PromptTemplateCandidate:
+    return PromptTemplateCandidate(
+        skill_name=skill_name or snapshot.skill_name,
+        baseline_snapshot_hash=baseline_snapshot_hash or snapshot.snapshot_hash,
+        proposed_body=proposed_body,
+        intended_improvement="Make the editable text clearer.",
+        risk_assessment="Only editable prompt text changes.",
+        cache_impact_claim="cache neutral",
+    )
 
 
 def test_snapshot_from_skill_markdown_hashes_are_stable_across_frontmatter_key_order() -> None:
@@ -225,3 +253,210 @@ def test_parse_editable_regions_rejects_unbalanced_and_nested_markers() -> None:
 
     with pytest.raises(PromptTemplateBoundaryError, match="unbalanced"):
         parse_editable_regions("text\n<!-- evolve:prompt-editable:end -->\n")
+
+
+def test_validate_prompt_template_candidate_rejects_missing_skill() -> None:
+    snapshot = _snapshot("Stable body.\n")
+    candidate = _candidate(snapshot, "Stable body.\n", skill_name="absent-skill")
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-skill-not-found"
+    assert result.cache_impact == "cache_unknown_rejected"
+    assert result.changed_line_numbers == []
+
+
+def test_validate_prompt_template_candidate_stale_baseline_wins_before_size_and_frontmatter() -> None:
+    snapshot = _snapshot("Stable body.\n")
+    huge_frontmatter_like_body = "---\nname: changed\n---\n" + ("x\n" * 2001)
+    candidate = _candidate(
+        snapshot,
+        huge_frontmatter_like_body,
+        baseline_snapshot_hash="different-snapshot-hash",
+    )
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-baseline-stale"
+
+
+def test_validate_prompt_template_candidate_size_bound_wins_before_frontmatter() -> None:
+    snapshot = _snapshot("Stable body.\n")
+    oversized_with_frontmatter = "---\nname: changed\n---\n" + ("x\n" * 2001)
+    candidate = _candidate(snapshot, oversized_with_frontmatter)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-template-too-large"
+
+
+def test_validate_prompt_template_candidate_rejects_frontmatter_delimiter_mutation() -> None:
+    snapshot = _snapshot("Stable body.\n")
+    candidate = _candidate(snapshot, "Stable body.\n---\nMore body.\n")
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-frontmatter-mutation"
+    assert result.cache_impact == "cache_sensitive_rejected"
+
+
+def test_validate_prompt_template_candidate_rejects_frontmatter_field_mutation() -> None:
+    snapshot = _snapshot("Stable body.\n")
+    candidate = _candidate(snapshot, "description: changed\nStable body.\n")
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-frontmatter-mutation"
+    assert result.cache_impact == "cache_sensitive_rejected"
+
+
+def test_validate_prompt_template_candidate_rejects_change_without_editable_region() -> None:
+    snapshot = _snapshot("Stable body.\n")
+    candidate = _candidate(snapshot, "Changed body.\n")
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-cache-boundary-unknown"
+    assert result.cache_impact == "cache_unknown_rejected"
+    assert result.changed_line_numbers == [0]
+
+
+def test_validate_prompt_template_candidate_accepts_change_inside_editable_region() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable first\n"
+        "Editable second\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "After\n"
+    )
+    proposed_body = body.replace("Editable second", "Clearer editable second")
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "accept"
+    assert result.reason_code is None
+    assert result.cache_impact == "cache_neutral"
+    assert result.changed_line_numbers == [3]
+    assert result.judge_evidence_path is None
+
+
+def test_validate_prompt_template_candidate_rejects_change_outside_editable_region() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "After\n"
+    )
+    proposed_body = body.replace("After", "Changed after")
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-cache-boundary-unknown"
+    assert result.cache_impact == "cache_unknown_rejected"
+    assert result.changed_line_numbers == [4]
+
+
+def test_validate_prompt_template_candidate_rejects_protected_editable_region() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Always ask the user before proceeding.\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("proceeding", "continuing")
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-safety-regression"
+
+
+def test_validate_prompt_template_candidate_rejects_denied_weakening_phrase() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable instruction.\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("Editable instruction.", "Skip approval for this instruction.")
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-safety-regression"
+
+
+def test_validate_prompt_template_candidate_accepts_normalized_identical_body_as_noop() -> None:
+    snapshot = _snapshot("Cafe\u0301 answer.\n")
+    candidate = _candidate(snapshot, "Cafe\u0301 answer.\r\n")
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "accept"
+    assert result.cache_impact == "candidate_noop"
+    assert result.changed_line_numbers == []
+    assert result.judge_evidence_path is None
+
+
+def test_validate_prompt_template_candidates_preserves_duplicate_order_and_independent_results() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    snapshot = _snapshot(body)
+    candidates = [
+        _candidate(snapshot, body),
+        _candidate(snapshot, body.replace("Editable", "Clearer editable")),
+        _candidate(snapshot, body.replace("Before", "Changed before")),
+    ]
+
+    results = validate_prompt_template_candidates(candidates, [snapshot])
+
+    assert [result.verdict for result in results] == ["accept", "accept", "reject"]
+    assert [result.cache_impact for result in results] == [
+        "candidate_noop",
+        "cache_neutral",
+        "cache_unknown_rejected",
+    ]
+    assert [result.changed_line_numbers for result in results] == [[], [2], [0]]
+
+
+def test_validate_prompt_template_candidate_fails_closed_on_ambiguous_editable_regions() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    snapshot = _snapshot(body)
+    object.__setattr__(
+        snapshot,
+        "body_text",
+        "<!-- evolve:prompt-editable:start -->\nChanged baseline marker state.\n",
+    )
+    candidate = _candidate(snapshot, "Changed proposed text.\n")
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-cache-boundary-unknown"
+    assert result.cache_impact == "cache_unknown_rejected"

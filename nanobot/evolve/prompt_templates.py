@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import re
@@ -10,11 +11,69 @@ from typing import Any
 
 import yaml
 
-from nanobot.evolve.schemas import PromptTemplateSnapshot
+from nanobot.evolve.schemas import (
+    PromptTemplateCandidate,
+    PromptTemplateSnapshot,
+    PromptTemplateValidationResult,
+)
 
 _EDITABLE_START = "<!-- evolve:prompt-editable:start -->"
 _EDITABLE_END = "<!-- evolve:prompt-editable:end -->"
 _FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+_MAX_PROMPT_TEMPLATE_BODY_BYTES = 128 * 1024
+_MAX_PROMPT_TEMPLATE_BODY_LINES = 2_000
+_FRONTMATTER_FIELD_NAMES = frozenset(
+    {
+        "name",
+        "description",
+        "origin",
+        "created_by",
+        "created_at",
+        "evolved_from_run",
+        "evolved_at",
+        "parent_skill_hash",
+        "optimizer_name",
+        "optimizer_version",
+    }
+)
+_PROTECTED_SAFETY_PHRASES = (
+    "permission",
+    "approval",
+    "confirm",
+    "ask the user",
+    "human approval",
+    "sandbox",
+    "safe execution",
+    "do not execute",
+    "never execute",
+    "untrusted code",
+    "human review",
+    "review artifact",
+    "pr-only",
+    "pull request",
+    "do not apply",
+    "manual review",
+    "narrow tool",
+    "structured tool",
+    "prefer read",
+    "prefer search",
+    "avoid shell",
+    "avoid exec",
+    "do not modify",
+    "no runtime",
+    "not applied",
+    "do not write",
+    "live prompt",
+)
+_DENIED_WEAKENING_PHRASES = (
+    "skip approval",
+    "without asking",
+    "ignore sandbox",
+    "bypass review",
+    "apply automatically",
+    "use shell instead",
+    "hide from user",
+)
 _DEFAULT_BUNDLED_SKILLS_DIR = Path(__file__).resolve().parents[2] / "nanobot" / "skills"
 
 
@@ -80,6 +139,130 @@ def _line_count(text: str) -> int:
     if text == "":
         return 0
     return len(text.splitlines())
+
+
+def _body_too_large(body: str) -> bool:
+    return (
+        len(body.encode("utf-8")) > _MAX_PROMPT_TEMPLATE_BODY_BYTES
+        or _line_count(body) > _MAX_PROMPT_TEMPLATE_BODY_LINES
+    )
+
+
+def _has_frontmatter_mutation(body: str) -> bool:
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped == "---":
+            return True
+        field_name, separator, _field_value = stripped.partition(":")
+        if separator and field_name.strip() in _FRONTMATTER_FIELD_NAMES:
+            return True
+    return False
+
+
+def _reject_prompt_result(
+    *,
+    candidate: PromptTemplateCandidate,
+    reason_code: str,
+    reason: str,
+    cache_impact: str,
+    changed_line_numbers: list[int] | None = None,
+) -> PromptTemplateValidationResult:
+    return PromptTemplateValidationResult(
+        skill_name=candidate.skill_name,
+        baseline_snapshot_hash=candidate.baseline_snapshot_hash,
+        verdict="reject",
+        cache_impact=cache_impact,
+        reason_code=reason_code,
+        reason=reason,
+        changed_line_numbers=sorted(set(changed_line_numbers or [])),
+        judge_evidence_path=None,
+    )
+
+
+def _accept_prompt_result(
+    *,
+    candidate: PromptTemplateCandidate,
+    cache_impact: str,
+    changed_line_numbers: list[int] | None = None,
+) -> PromptTemplateValidationResult:
+    return PromptTemplateValidationResult(
+        skill_name=candidate.skill_name,
+        baseline_snapshot_hash=candidate.baseline_snapshot_hash,
+        verdict="accept",
+        cache_impact=cache_impact,
+        changed_line_numbers=sorted(set(changed_line_numbers or [])),
+        judge_evidence_path=None,
+    )
+
+
+def _changed_baseline_line_numbers(baseline_body: str, proposed_body: str) -> list[int]:
+    baseline_lines = baseline_body.splitlines()
+    proposed_lines = proposed_body.splitlines()
+    matcher = difflib.SequenceMatcher(
+        a=baseline_lines,
+        b=proposed_lines,
+        autojunk=False,
+    )
+    changed_lines: set[int] = set()
+    for tag, baseline_start, baseline_end, proposed_start, proposed_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        if baseline_start != baseline_end:
+            changed_lines.update(range(baseline_start, baseline_end))
+            continue
+        anchor_line = min(baseline_start, len(baseline_lines) - 1)
+        if anchor_line >= 0:
+            changed_lines.add(anchor_line)
+        elif proposed_start != proposed_end:
+            changed_lines.add(0)
+    return sorted(changed_lines)
+
+
+def _line_in_regions(line_number: int, regions: list[EditableRegion]) -> bool:
+    return any(region.start_line <= line_number <= region.end_line for region in regions)
+
+
+def _regions_touched_by_lines(
+    changed_line_numbers: list[int], regions: list[EditableRegion]
+) -> list[EditableRegion]:
+    return [
+        region
+        for region in regions
+        if any(region.start_line <= line_number <= region.end_line for line_number in changed_line_numbers)
+    ]
+
+
+def _normalize_safety_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFC", text).casefold()
+    return " ".join(normalized.split())
+
+
+def _contains_phrase(text: str, phrases: tuple[str, ...]) -> bool:
+    normalized = _normalize_safety_text(text)
+    return any(_normalize_safety_text(phrase) in normalized for phrase in phrases)
+
+
+def _region_text(body: str, region: EditableRegion) -> str:
+    lines = body.splitlines()
+    if region.end_line < region.start_line:
+        return ""
+    return "\n".join(lines[region.start_line : region.end_line + 1])
+
+
+def _proposed_changed_text(proposed_body: str, baseline_body: str) -> str:
+    baseline_lines = baseline_body.splitlines()
+    proposed_lines = proposed_body.splitlines()
+    matcher = difflib.SequenceMatcher(
+        a=baseline_lines,
+        b=proposed_lines,
+        autojunk=False,
+    )
+    changed_chunks: list[str] = []
+    for tag, _baseline_start, _baseline_end, proposed_start, proposed_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        changed_chunks.extend(proposed_lines[proposed_start:proposed_end])
+    return "\n".join(changed_chunks)
 
 
 def parse_editable_regions(body: str) -> list[EditableRegion]:
@@ -173,3 +356,101 @@ def capture_bundled_prompt_template_snapshot(
             )
         )
     return snapshots
+
+
+def validate_prompt_template_candidate(
+    candidate: PromptTemplateCandidate,
+    snapshot: list[PromptTemplateSnapshot],
+) -> PromptTemplateValidationResult:
+    baseline = next((item for item in snapshot if item.skill_name == candidate.skill_name), None)
+    if baseline is None:
+        return _reject_prompt_result(
+            candidate=candidate,
+            reason_code="prompt-skill-not-found",
+            reason="No prompt template snapshot exists for the candidate skill.",
+            cache_impact="cache_unknown_rejected",
+        )
+    if baseline.snapshot_hash != candidate.baseline_snapshot_hash:
+        return _reject_prompt_result(
+            candidate=candidate,
+            reason_code="prompt-baseline-stale",
+            reason="Candidate baseline snapshot hash does not match the current snapshot.",
+            cache_impact="cache_unknown_rejected",
+        )
+
+    proposed_body = _normalize_body_text(candidate.proposed_body)
+    if _body_too_large(proposed_body):
+        return _reject_prompt_result(
+            candidate=candidate,
+            reason_code="prompt-template-too-large",
+            reason="Proposed prompt template body exceeds the hard size bounds.",
+            cache_impact="cache_unknown_rejected",
+        )
+    if _has_frontmatter_mutation(proposed_body):
+        return _reject_prompt_result(
+            candidate=candidate,
+            reason_code="prompt-frontmatter-mutation",
+            reason="Proposed prompt template body includes frontmatter-like content.",
+            cache_impact="cache_sensitive_rejected",
+        )
+    baseline_body = baseline.body_text
+    if proposed_body == baseline_body:
+        return _accept_prompt_result(
+            candidate=candidate,
+            cache_impact="candidate_noop",
+        )
+
+    try:
+        changed_line_numbers = _changed_baseline_line_numbers(baseline_body, proposed_body)
+        editable_regions = parse_editable_regions(baseline_body)
+        if any(not _line_in_regions(line_number, editable_regions) for line_number in changed_line_numbers):
+            return _reject_prompt_result(
+                candidate=candidate,
+                reason_code="prompt-cache-boundary-unknown",
+                reason="Proposed prompt template changes a line outside explicit editable regions.",
+                cache_impact="cache_unknown_rejected",
+                changed_line_numbers=changed_line_numbers,
+            )
+        touched_regions = _regions_touched_by_lines(changed_line_numbers, editable_regions)
+        if any(
+            _contains_phrase(_region_text(baseline_body, region), _PROTECTED_SAFETY_PHRASES)
+            for region in touched_regions
+        ):
+            return _reject_prompt_result(
+                candidate=candidate,
+                reason_code="prompt-safety-regression",
+                reason="Proposed prompt template changes an editable region containing protected safety language.",
+                cache_impact="cache_neutral",
+                changed_line_numbers=changed_line_numbers,
+            )
+        if _contains_phrase(
+            _proposed_changed_text(proposed_body, baseline_body),
+            _DENIED_WEAKENING_PHRASES,
+        ):
+            return _reject_prompt_result(
+                candidate=candidate,
+                reason_code="prompt-safety-regression",
+                reason="Proposed prompt template introduces denied safety-weakening language.",
+                cache_impact="cache_neutral",
+                changed_line_numbers=changed_line_numbers,
+            )
+    except Exception:
+        return _reject_prompt_result(
+            candidate=candidate,
+            reason_code="prompt-cache-boundary-unknown",
+            reason="Prompt template editable-boundary validation failed closed.",
+            cache_impact="cache_unknown_rejected",
+        )
+
+    return _accept_prompt_result(
+        candidate=candidate,
+        cache_impact="cache_neutral",
+        changed_line_numbers=changed_line_numbers,
+    )
+
+
+def validate_prompt_template_candidates(
+    candidates: list[PromptTemplateCandidate],
+    snapshot: list[PromptTemplateSnapshot],
+) -> list[PromptTemplateValidationResult]:
+    return [validate_prompt_template_candidate(candidate, snapshot) for candidate in candidates]
