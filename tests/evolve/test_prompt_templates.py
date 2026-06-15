@@ -360,6 +360,34 @@ def test_validate_prompt_template_candidate_rejects_case_insensitive_frontmatter
     assert result.cache_impact == "cache_sensitive_rejected"
 
 
+@pytest.mark.parametrize(
+    "obfuscated_field",
+    [
+        "descrip\u200btion: changed",
+        "descrip\u00adtion: changed",
+        "descri\u0301ption: changed",
+    ],
+)
+def test_validate_prompt_template_candidate_rejects_obfuscated_frontmatter_field_mutation(
+    obfuscated_field: str,
+) -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("Editable", obfuscated_field)
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-frontmatter-mutation"
+    assert result.cache_impact == "cache_sensitive_rejected"
+
+
 def test_validate_prompt_template_candidate_rejects_change_without_editable_region() -> None:
     snapshot = _snapshot("Stable body.\n")
     candidate = _candidate(snapshot, "Changed body.\n")
@@ -552,6 +580,32 @@ def test_validate_prompt_template_candidate_rejects_denied_phrase_replaced_with_
 
     assert result.verdict == "reject"
     assert result.reason_code == "prompt-safety-regression"
+
+
+def test_validate_prompt_template_candidate_accepts_denied_phrase_tokens_in_separate_regions() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "First editable instruction.\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "Middle\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Second editable instruction.\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("First editable instruction.", "skip").replace(
+        "Second editable instruction.",
+        "approval",
+    )
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "accept"
+    assert result.reason_code is None
+    assert result.cache_impact == "cache_neutral"
+    assert result.changed_line_numbers == [2, 6]
 
 
 def test_validate_prompt_template_candidate_accepts_normalized_identical_body_as_noop() -> None:

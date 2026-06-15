@@ -154,7 +154,7 @@ def _has_frontmatter_mutation(body: str) -> bool:
         if stripped == "---":
             return True
         field_name, separator, _field_value = stripped.partition(":")
-        if separator and field_name.strip().casefold() in _FRONTMATTER_FIELD_NAMES:
+        if separator and _normalize_safety_text(field_name) in _FRONTMATTER_FIELD_NAMES:
             return True
     return False
 
@@ -543,19 +543,15 @@ def validate_prompt_template_candidate(
                 cache_impact="cache_neutral",
                 changed_line_numbers=changed_line_numbers,
             )
-        proposed_changed_text = _proposed_changed_text(proposed_body, baseline_body)
-        denied_phrase_texts = [
-            proposed_changed_text,
-            *_proposed_region_texts(
-                baseline_body=baseline_body,
-                proposed_body=proposed_body,
-                regions=touched_regions,
-            ),
-        ]
+        proposed_region_texts = _proposed_region_texts(
+            baseline_body=baseline_body,
+            proposed_body=proposed_body,
+            regions=touched_regions,
+        )
         if any(
             _contains_phrase(text, _DENIED_WEAKENING_PHRASES)
             or _contains_phrase_tokens_in_order(text, _DENIED_WEAKENING_PHRASES)
-            for text in denied_phrase_texts
+            for text in proposed_region_texts
         ):
             return _reject_prompt_result(
                 candidate=candidate,
