@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft approved for bundled-skills prompt/template artifact-only M8 scope.
+Draft under review; revised after scope, coherence, feasibility, safety, and testing review findings.
 
 ## Goal
 
@@ -10,73 +10,112 @@ Add a cache-safe prompt/template evolution lane for bundled skills that can prod
 
 ## Non-goals
 
-M8 does not edit bundled skill source files, hot-reload prompts, mutate system prompts, apply candidates to stable prompt cache segments, change tool permissions, alter sandbox behavior, change runtime skill loading, or use judge metrics as optimizer fitness. Prompt/template candidates remain PR-only review artifacts.
+M8 does not edit bundled skill source files during offline runs, hot-reload prompts, mutate system prompts, apply candidates to stable prompt cache inputs, change tool permissions, alter sandbox behavior, change runtime skill loading, or use judge metrics as optimizer fitness. Prompt/template candidates remain PR-only review artifacts.
 
 ## Background
 
 M1-M7 established offline skill evolution, semantic judge evidence, and a metadata-only tool evolution substrate. M7 intentionally used an artifact-first review path because tool contract changes can affect safety boundaries even when they look descriptive. Prompt/template evolution has similar risk: wording changes can invalidate cache assumptions, weaken safety instructions, or silently change how bundled skills invoke tools.
 
-The M8 first version narrows scope to bundled skills only. It reuses the M7 pattern: capture a deterministic baseline snapshot, allow the optimizer to emit inert candidates, validate them deterministically, write redacted review artifacts, and surface review state in reports and PR checklist text. It does not materialize patched skill files or apply changes.
+M8 first version covers bundled skills only. It reuses the M7 artifact-first pattern, but it must not copy M7's helper logic into a second divergent implementation. M8 includes a small shared artifact-lane extraction before adding prompt/template-specific snapshot, validation, and rendering code.
 
 ## Scope
 
 ### In scope
 
-- Capture deterministic snapshots for bundled skill prompt/template text at offline run start.
-- Pass the snapshot to the optimizer as context.
+- Extract shared M7/M8 artifact-lane scaffolding for deterministic artifact path planning, JSONL writing, redacted JSON artifact writing, and manifest path recording.
+- Enumerate bundled skill files from `nanobot/skills/*/SKILL.md` through a new read-only bundled-skill snapshot loader.
+- Capture deterministic snapshots for bundled skill frontmatter and body text at offline run start.
+- Pass the prompt/template snapshot to the optimizer as context.
 - Accept optional optimizer output for prompt/template candidates.
 - Validate that candidates target existing bundled skills and match current baseline hashes.
-- Validate that candidates do not change frontmatter identity, cache-sensitive regions, tool permission wording, sandbox wording, or human-review requirements.
+- Validate that candidates do not include or mutate frontmatter.
+- Validate that candidates change only explicitly editable body regions.
 - Produce JSON and Markdown artifacts for human review.
-- Produce explicit cache-impact artifacts that describe whether each candidate is cache-neutral, cache-sensitive, or rejected.
+- Report cache impact explicitly in the Markdown review artifact, run report, and PR checklist text.
 - Surface prompt/template artifact paths in run reports and PR checklist text without adding new top-level PR body sections.
 
 ### Out of scope
 
-- Editing bundled skill files.
+- Editing bundled skill files during an offline run.
 - Generating patch files that can be applied automatically.
 - Shadow materialization of full candidate skill files.
 - Runtime hot replacement of prompts or templates.
 - System prompt evolution outside bundled skill bodies.
 - Evolution of M6/M7 judge prompts, optimizer prompts, or harness-internal templates.
+- Adding editable markers to bundled skill source files as part of this milestone.
 - Changes to tool registry, MCP discovery, sandbox policy, permission prompts, or runtime skill loading.
+
+## Definitions
+
+### Bundled skill
+
+A bundled skill is a tracked repository skill at `nanobot/skills/<skill_name>/SKILL.md`. M8 does not use the offline harness's current single-skill workspace loader, because that loader reads `workspace/skills/agent/<skill_name>/SKILL.md` and does not enumerate bundled repository skills.
+
+M8 introduces a read-only bundled-skill enumerator that walks `nanobot/skills/*/SKILL.md`, parses each file into frontmatter and body, and returns deterministic records sorted by skill name. User-installed skills, runtime-generated skills, and workspace `skills/agent` fixtures are outside the bundled-skill snapshot.
+
+### Editable body region
+
+A body line is editable only when it is inside explicit baseline markers:
+
+```markdown
+<!-- evolve:prompt-editable:start -->
+...
+<!-- evolve:prompt-editable:end -->
+```
+
+M8 does not add these markers to bundled skills. If a bundled skill has no editable region markers, non-empty prompt/template changes for that skill must be rejected with `prompt-cache-boundary-unknown`. This fail-closed behavior is intentional: M8 establishes the safety substrate before any broad prompt mutation surface exists.
+
+Editable-region parsing is strict:
+
+- Markers must be balanced and non-overlapping.
+- Nested editable regions are invalid.
+- Markers inside fenced code blocks do not count.
+- Any parse exception or ambiguous marker state is `prompt-cache-boundary-unknown`.
+- Changed lines that cannot be mapped to an editable baseline region are `prompt-cache-boundary-unknown`.
+
+### Cache-sensitive surface
+
+The current evolve cache compatibility gate uses the skill frontmatter `description` as the cache key input. There is no existing body-level cache segmentation subsystem and no existing stable-cache marker syntax in bundled skill bodies.
+
+Therefore M8 V1 defines cache-sensitive surface as the full frontmatter block. Because candidates contain only `proposed_body`, any candidate that includes a frontmatter delimiter (`---`) or attempts to provide frontmatter fields is rejected with `prompt-frontmatter-mutation`. Accepted prompt/template candidates are cache-neutral by construction because they cannot alter frontmatter or cache-key input.
+
+If future work adds body-level cache markers, that belongs in M8.x and must update this spec before implementation.
 
 ## Architecture
 
 M8 adds a prompt/template artifact lane to the existing offline evolution flow.
 
+### Shared artifact-lane scaffolding
+
+Before implementing prompt/template-specific logic, M8 extracts shared helpers from the M7 lane where doing so reduces duplication without changing behavior:
+
+- Stable artifact path mapping.
+- JSONL writing with deterministic ordering.
+- Redacted JSON artifact writing.
+- Manifest artifact-path registration.
+- Markdown-safe review text helpers for redaction, bounding, and escaping.
+
+The extraction must preserve M7 behavior and tests. M8 then instantiates the same artifact-lane primitives for prompt/template artifacts. This prevents M7 and M8 from shipping two diverging artifact pipelines.
+
 ### Prompt/template snapshot
 
 A snapshot captures bundled skill prompt/template baselines once at run start. All candidates in the run compare against that snapshot. If the skill changes between runs, old candidates fail stale-baseline validation in the later run.
 
-Snapshot extraction is deterministic:
+Each snapshot record contains:
 
-1. Load bundled skills through the same read-only skill-loading path already used by the offline harness.
-2. Include only bundled skills, not user-installed or runtime-generated skills.
-3. For each bundled skill, capture:
-   - `skill_name`
-   - `source_kind`, fixed to `bundled` for M8 first version
-   - `source_identifier`, a redaction-safe stable identifier for the bundled skill path or loader location
-   - `frontmatter_hash`, computed from cache-relevant frontmatter fields
-   - `body_hash`, computed from the full body text
-   - `cache_sensitive_hash`, computed from cache-sensitive segments
-   - `template_hash`, computed from the canonical review body used for candidate comparison
-   - `body_line_count`
-4. Sort snapshots by `(source_kind, skill_name)`.
-5. Compute `snapshot_hash` from canonical JSON containing only stable review fields, serialized with sorted keys and compact separators.
+- `skill_name`
+- `source_kind`, fixed to `bundled`
+- `source_identifier`, the redaction-safe relative path `nanobot/skills/<skill_name>/SKILL.md`
+- `frontmatter_hash`, computed from the full parsed frontmatter mapping using sorted compact JSON
+- `body_hash`, computed from the exact body text after frontmatter parsing and line-ending normalization to `\n`
+- `cache_key_hash`, computed with the same current evolve rule as the cache gate: hash of frontmatter `description`
+- `editable_region_count`
+- `body_line_count`
+- `snapshot_hash`, computed from canonical JSON containing `skill_name`, `source_kind`, `source_identifier`, `frontmatter_hash`, `body_hash`, `cache_key_hash`, `editable_region_count`, and `body_line_count`
 
-Snapshots must be byte-stable for the same bundled skill contents. Snapshot generation is read-only.
+`body_hash` and `cache_key_hash` are review fields. `snapshot_hash` is the single baseline hash used for staleness validation.
 
-### Cache-sensitive segments
-
-M8 treats cache-sensitive segments as protected. A segment is cache-sensitive when it is one of these:
-
-- Frontmatter fields that participate in skill identity or cache keys.
-- Explicit stable-cache markers if present in the skill body.
-- Safety/tool-permission instructions that must remain stable for review and runtime behavior.
-- Prompt sections referenced by existing cache-key computation.
-
-The first M8 implementation must not infer broad edits as safe. If segment classification is ambiguous, the candidate is rejected with `prompt-cache-boundary-unknown` rather than accepted.
+Snapshots must be byte-stable for the same bundled skill contents. Snapshot generation is read-only and must not mutate parsed frontmatter or body data.
 
 ### Prompt/template candidate
 
@@ -89,9 +128,9 @@ The optimizer may emit prompt/template candidates as inert artifacts, not patche
 - `risk_assessment`
 - `cache_impact_claim`
 
-`proposed_body` is the single source of truth for the candidate text. The optimizer must not provide independent diff summaries as authoritative data; Markdown review rendering derives diffs from the baseline body and `proposed_body`.
+`proposed_body` is the single source of truth for the candidate text. The optimizer may include explanatory text, but M8 review rendering must derive diffs from the baseline body and `proposed_body`; optimizer-provided diff summaries are ignored for validation and review truth.
 
-A candidate may change only non-cache-sensitive body text. It must preserve frontmatter, skill identity, required review instructions, safety instructions, and tool permission instructions.
+A candidate may change only body text inside explicit editable regions. It must not include frontmatter delimiters or frontmatter fields.
 
 ### Validation and rejection codes
 
@@ -99,26 +138,58 @@ M8 validates prompt/template candidates deterministically before semantic judgin
 
 1. `prompt-skill-not-found`: target bundled skill is absent from the snapshot.
 2. `prompt-baseline-stale`: candidate baseline hash does not match the current snapshot.
-3. `prompt-frontmatter-mutation`: candidate attempts to change frontmatter or skill identity.
-4. `prompt-cache-boundary-unknown`: validator cannot prove the changed region is outside cache-sensitive segments.
-5. `prompt-cache-sensitive-mutation`: candidate changes cache-sensitive text.
-6. `prompt-safety-regression`: candidate weakens safety, permission, sandbox, review, or narrow-tool instructions.
-7. `prompt-template-too-large`: candidate exceeds configured size or line-count bounds for review artifacts.
+3. `prompt-frontmatter-mutation`: candidate includes frontmatter delimiters or attempts to provide frontmatter fields.
+4. `prompt-cache-boundary-unknown`: validator cannot prove every changed line maps to an explicit editable baseline region, or editable-region parsing fails.
+5. `prompt-safety-regression`: deterministic checks or reject-only semantic review detect weakening of protected safety wording.
+6. `prompt-template-too-large`: `proposed_body` exceeds 128 KiB or 2,000 lines. These are hard upper bounds and configuration cannot raise them.
 
-The safety regression check is conservative. It scans changed text and nearby context after whitespace normalization. It rejects wording that removes or weakens instructions requiring permission checks, sandbox respect, human approval, review-only artifacts, narrow tool preference, or non-application of candidates.
+M8 does not include `prompt-cache-sensitive-mutation` in V1 because the only current cache-sensitive surface is frontmatter, and frontmatter attempts are covered by `prompt-frontmatter-mutation`.
 
-Only candidates that pass deterministic validation can receive semantic judge evidence. Judge evidence is local review support only and must not feed optimizer input, optimizer output, or optimizer fitness.
+Validation precedence is deterministic:
 
-### Cache-impact artifact
+1. Missing skill.
+2. Stale baseline.
+3. Size bound.
+4. Frontmatter mutation.
+5. Editable-region parse failure or changed line outside editable regions.
+6. Safety regression.
+7. Accept.
 
-M8 writes a cache-impact artifact for every run with snapshots or prompt/template candidates. It contains one row per candidate and summary counts:
+Any exception during frontmatter parsing, editable-region parsing, diff mapping, or safety classification becomes `prompt-cache-boundary-unknown` unless an earlier rejection code already applies. Parser bugs fail closed.
 
-- `cache_neutral`: changed regions are outside protected segments.
-- `cache_sensitive`: changed regions touch protected segments and are rejected.
-- `cache_unknown`: validator cannot classify the region and rejects.
+### Safety regression checks
+
+M8 does not rely on a keyword-only allow/pass detector. Safety handling has two layers:
+
+1. Positive editable-region allowlist: accepted candidates can only change text inside explicit editable regions. Protected safety/tool/sandbox/review instructions must not be placed inside editable regions. If they are, implementation must treat the entire region as protected and reject changes touching it.
+2. Reject-only safety review: changed hunks are checked by deterministic deny patterns and optional M6 semantic judge evidence. This review can reject a candidate but can never override another rejection or turn an unsafe candidate into an accepted candidate.
+
+The canonical protected wording categories are:
+
+- Permission or approval requirements.
+- Sandbox or execution safety requirements.
+- Human review and PR-only artifact requirements.
+- Narrow-tool preference over broad shell/process execution.
+- Non-application of candidates to live files or runtime prompts.
+
+A candidate that removes, contradicts, or weakens these categories is `prompt-safety-regression`.
+
+### Judge and optimizer isolation
+
+Only candidates that pass deterministic validation can receive semantic judge evidence. Judge evidence is local review support only.
+
+The optimizer input and optimizer output artifacts must not contain judge evidence paths, judge scores, judge summaries, or previous prompt/template judge artifacts. The optimizer adapter must read only the current optimizer input path and must not be passed prompt/template judge evidence paths. A future run must not add prior judge evidence into optimizer context by reading review artifacts.
+
+### Cache-impact reporting
+
+M8 reports cache impact in `prompt_template_review.md`, `report.md`, and PR checklist text. It does not write a separate cache-impact JSON artifact in V1 because the summary is derived from validation results.
+
+The review summary includes deterministic counts:
+
+- `cache_neutral`: accepted candidates that changed only explicit editable body regions.
+- `cache_sensitive_rejected`: candidates rejected by `prompt-frontmatter-mutation`.
+- `cache_unknown_rejected`: candidates rejected by `prompt-cache-boundary-unknown`.
 - `candidate_absent`: no prompt/template candidates were emitted.
-
-The report and PR body must surface the cache-impact summary so reviewers can see whether prompt evolution would invalidate stable prompt assumptions before any manual follow-up.
 
 ### Review artifacts
 
@@ -127,80 +198,108 @@ When snapshots or candidates exist, the harness writes:
 - `prompt_template_snapshot.json`
 - `prompt_template_candidates.jsonl`
 - `prompt_template_review.md`
-- `prompt_template_cache_impact.json`
 - Optional `prompt_template_judge_evidence.jsonl` for accepted candidates
 
-Shareable JSON artifacts are redacted before writing. Markdown review rendering redacts, bounds, and escapes free text. Artifacts must use deterministic ordering and stable relative paths.
+Shareable JSON artifacts are redacted before writing using the same redaction pipeline used by M7 artifacts. Markdown review rendering must:
 
-### Report and PR surfaces
+- Render candidate-controlled text only inside fenced code blocks.
+- Escape or replace fence delimiters so candidate text cannot break out of the code fence.
+- Strip or neutralize HTML comments, raw HTML blocks, Markdown links/images, and checklist-looking lines from candidate-controlled prose outside code blocks.
+- Bound candidate-controlled text snippets to fixed limits.
+- Never render optimizer-controlled text as PR checklist items or headings.
 
-`render_run_report()` adds a prompt/template review section when prompt/template artifact paths exist. The section lists artifact paths and the cache-impact summary.
+Artifact writes must use temp-file plus atomic rename. The manifest must not record an artifact path until the artifact write succeeds. A failed artifact write aborts the run rather than leaving a partial artifact referenced by the manifest.
 
-`assemble_pr_body()` adds prompt/template review checklist items inside the existing human-review checklist. It must not add a new top-level PR body section or change the existing section invariant.
+### Manifest, report, and PR surfaces
+
+`RunManifest` gains `prompt_template_artifact_paths: dict[str, str]` with `default_factory=dict`, mirroring the M7 `tool_metadata_artifact_paths` compatibility pattern.
+
+`render_run_report()` adds a prompt/template review section when prompt/template artifact paths exist. The section lists artifact paths and cache-impact counts.
+
+`assemble_pr_body()` adds fixed prompt/template review checklist items inside the existing human-review checklist. It must not add a new top-level PR body section or change the existing section invariant. Checklist text is a compile-time template and must not include optimizer-controlled candidate text.
 
 Checklist items require reviewers to confirm:
 
 - Prompt/template diff artifacts were inspected.
 - No bundled skill source file changed automatically.
-- Cache-sensitive segments were not modified by accepted candidates.
+- Cache-sensitive frontmatter was not modified by accepted candidates.
 - Safety/tool/sandbox/review wording was not weakened.
+
+Tests must assert the exact checklist item count and the total PR body section count.
 
 ## Data flow
 
-1. `OfflineHarness.run()` starts and captures bundled skill prompt/template snapshots.
-2. The snapshot is included in optimizer input.
+1. `OfflineHarness.run()` starts and captures bundled skill prompt/template snapshots with the new bundled-skill enumerator.
+2. The snapshot is included in optimizer input as `promptTemplateSnapshot`.
 3. The optimizer may emit `promptTemplateCandidates`.
 4. The harness validates every candidate deterministically.
 5. Accepted candidates may receive deterministic local judge evidence.
-6. The harness writes redacted JSON, Markdown, cache-impact, and optional judge-evidence artifacts.
-7. The manifest records prompt/template artifact paths.
-8. Reports and PR body checklist text surface review state.
+6. The harness writes redacted JSON, Markdown, and optional judge-evidence artifacts.
+7. The manifest records prompt/template artifact paths only after successful artifact writes.
+8. Reports and PR body checklist text surface review state and cache-impact counts.
 9. No skill source file or runtime prompt cache is modified.
 
 ## Safety invariants
 
 - Bundled skill source files are read-only during M8 runs.
-- Runtime prompt cache is not mutated.
+- Runtime prompt cache input is not mutated.
 - Candidates are artifacts only.
-- Cache-sensitive text cannot be accepted.
+- Frontmatter cannot be changed by a candidate.
+- Non-editable body regions cannot be changed by an accepted candidate.
 - Stale-baseline candidates cannot be accepted.
 - Missing-skill candidates cannot be accepted.
 - Safety/tool/sandbox/review wording regressions cannot be accepted.
-- Judge evidence cannot influence optimizer fitness.
+- Judge evidence cannot influence optimizer input, optimizer output, or optimizer fitness.
 - Report and PR outputs must make manual review mandatory.
 
 ## Testing requirements
 
 Focused M8 tests must cover:
 
-- Snapshot determinism and hash stability.
-- Snapshot extraction does not mutate loaded skill data.
+- Shared artifact-lane extraction preserves M7 tool metadata artifact outputs.
+- Bundled-skill snapshot enumeration reads `nanobot/skills/*/SKILL.md`, excludes workspace/user skills, and is deterministic.
+- Snapshot hashing is stable across dict key order, locale, and CRLF/LF line endings.
+- Snapshot extraction does not mutate parsed skill data.
 - Optimizer input includes `promptTemplateSnapshot`.
 - Optimizer output accepts optional `promptTemplateCandidates` while preserving old JSON compatibility.
-- Validation rejects missing skill, stale baseline, frontmatter mutation, cache-sensitive mutation, unknown cache boundary, safety regression, and oversized candidates.
-- Accepted candidates generate JSON/Markdown/cache-impact artifacts.
-- Rejected candidates render clear reason codes and do not receive judge evidence.
-- Artifacts are redacted, bounded, and deterministic.
-- Report and PR body surfaces include prompt/template review state without changing PR body section count.
-- A harness run with prompt/template candidates does not modify bundled skill source files.
+- One negative validation test per rejection code: `prompt-skill-not-found`, `prompt-baseline-stale`, `prompt-frontmatter-mutation`, `prompt-cache-boundary-unknown`, `prompt-safety-regression`, and `prompt-template-too-large`.
+- Each rejection test asserts the exact reason code appears in JSON and Markdown artifacts.
+- Ambiguous editable-region parsing rejects fail-closed with `prompt-cache-boundary-unknown`.
+- Candidate text outside explicit editable regions is rejected.
+- Candidate text inside explicit editable regions can be accepted when all other checks pass.
+- Optimizer-provided diff summaries are ignored; review diffs are derived from baseline body and `proposed_body`.
+- Accepted candidates generate JSON/Markdown artifacts and optional judge evidence.
+- Rejected candidates do not receive judge evidence.
+- Judge evidence does not appear in optimizer input, optimizer output, or later optimizer context.
+- Artifact redaction covers secret-shaped strings in `proposed_body`, `intended_improvement`, and `risk_assessment`, including Anthropic/OpenAI/GitHub/AWS-like keys, bearer tokens, emails, and absolute home paths.
+- Markdown review rendering keeps candidate-controlled text inside escaped, bounded code fences and cannot render candidate-controlled checklist items.
+- Report and PR body surfaces include prompt/template review state without changing the numeric PR body section count.
+- PR checklist tests assert the exact fixed prompt/template checklist item count.
+- A harness run with accepted prompt/template candidates does not modify bundled skill source file content or mtimes.
+- A harness run with rejected prompt/template candidates does not modify bundled skill source file content or mtimes.
+- Duplicate candidates for the same skill have deterministic ordering and independent validation results.
+- Empty bundled-skill enumeration produces a well-formed empty snapshot and no prompt/template candidate artifacts.
+- Whitespace-only diffs are classified explicitly as no-op accepted or rejected; the implementation must pick one behavior and test it.
 - Full `tests/evolve` and `ruff check nanobot/evolve tests/evolve` pass.
 
 ## Acceptance criteria
 
 M8 is complete when:
 
-- Bundled skill prompt/template snapshots are captured deterministically.
+- M7/M8 shared artifact-lane helpers exist and M7 behavior remains unchanged.
+- Bundled skill prompt/template snapshots are captured deterministically from `nanobot/skills/*/SKILL.md`.
 - Optimizer contracts include optional prompt/template snapshot and candidate fields.
-- Candidate validation enforces cache and safety boundaries before judging.
-- Review artifacts and cache-impact artifacts are written for human review.
+- Candidate validation enforces frontmatter, editable-region, size, stale-baseline, and safety boundaries before judging.
+- Review artifacts are written for human review with cache-impact counts.
 - Reports and PR body checklist text surface prompt/template review state.
 - No runtime prompt/template application path exists.
-- No bundled skill file changes during a run.
+- No bundled skill file content or mtime changes during accepted or rejected runs.
 - The roadmap links this spec, its implementation plan, and its retro.
 
 ## Follow-ups
 
+- M8.x may add editable markers to selected bundled skills in a separate source-editing PR after the substrate exists.
 - M8.x may add shadow candidate materialization, but only with explicit proposed-vs-applied audit trails and no automatic source overwrite.
 - M8.x may extend the surface to harness-internal judge or optimizer prompts after bundled skill prompt safety is proven.
 - M9 may consume M8 artifacts as part of runtime/offline integration, but runtime must still only propose offline jobs and must not apply prompt candidates.
-- M10 should consider extracting shared artifact-lane helpers from M7/M8 to reduce harness and metadata module size.
+- M10 may further split shared artifact-lane helpers if M8 extraction exposes broader maintainability debt.
