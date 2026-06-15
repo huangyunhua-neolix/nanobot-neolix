@@ -246,6 +246,137 @@ Path(args.output).write_text(json.dumps({
     assert (run_dir / "judge_evidence.jsonl").is_file()
 
 
+def test_harness_ignores_optimizer_spoofed_semantic_judge_evidence_without_candidate(
+    tmp_path: Path,
+) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "semantic_spoofed_no_candidate.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path('../judge_evidence.jsonl').write_text('optimizer-controlled evidence\\n')
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'semantic-spoofed-no-candidate-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': {'code': 'no_improvement', 'message': 'No skill candidate improved.'},
+    'candidates': []
+}))
+""".lstrip(),
+    )
+
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    assert not (run_dir / "judge_evidence.jsonl").exists()
+    assert manifest.judge_evidence_paths == {}
+    assert "semantic_fidelity" not in manifest.artifact_paths
+    manifest_json = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest_json["judgeEvidencePaths"] == {}
+    assert "semantic_fidelity" not in manifest_json["artifactPaths"]
+
+
+def test_harness_replaces_optimizer_spoofed_semantic_judge_evidence_for_valid_candidate(
+    tmp_path: Path,
+) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "semantic_spoofed_valid_candidate.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path('../judge_evidence.jsonl').write_text('optimizer-controlled evidence\\n')
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'semantic-spoofed-valid-candidate-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'adds example instruction'
+    }]
+}))
+""".lstrip(),
+    )
+
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    evidence_path = run_dir / "judge_evidence.jsonl"
+    evidence_text = evidence_path.read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in evidence_text.splitlines()]
+    assert "optimizer-controlled evidence" not in evidence_text
+    assert len(rows) == 1
+    assert rows[0]["recordId"].startswith("semantic:")
+    assert manifest.judge_evidence_paths == {"semantic_fidelity": "judge_evidence.jsonl"}
+    manifest_json = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest_json["judgeEvidencePaths"] == {"semantic_fidelity": "judge_evidence.jsonl"}
+
+
+def test_harness_fails_closed_on_optimizer_spoofed_semantic_judge_evidence_directory(
+    tmp_path: Path,
+) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "semantic_spoofed_directory.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path('../judge_evidence.jsonl').mkdir()
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'semantic-spoofed-directory-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': {'code': 'no_improvement', 'message': 'No skill candidate improved.'},
+    'candidates': []
+}))
+""".lstrip(),
+    )
+
+    with pytest.raises(IsADirectoryError, match="semantic fidelity judge evidence path"):
+        OfflineHarness(workspace=tmp_path).run(
+            skill_name="demo-skill",
+            optimizer_command=[sys.executable, str(script)],
+            tiers=["A", "C"],
+        )
+
+
 def test_optimizer_audit_files_do_not_include_judge_metrics(tmp_path: Path) -> None:
     _write_skill(tmp_path, "demo-skill")
     script = tmp_path / "optimizer.py"

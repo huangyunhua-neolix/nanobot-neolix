@@ -117,6 +117,7 @@ _PROMPT_TEMPLATE_ARTIFACT_PATHS: dict[str, str] = {
     "prompt_template_review": "prompt_template_review.md",
 }
 _PROMPT_TEMPLATE_JUDGE_EVIDENCE_PATH = "prompt_template_judge_evidence.jsonl"
+_SEMANTIC_JUDGE_EVIDENCE_PATH = "judge_evidence.jsonl"
 
 
 def _review_artifact_plan() -> dict[str, str]:
@@ -703,6 +704,10 @@ class OfflineHarness:
         previous_gates = self._gates
         self._gates = self._gates_for_run(run_dir)
         optimizer_dir = run_dir / "optimizer"
+        _remove_untrusted_judge_evidence(
+            run_dir / _SEMANTIC_JUDGE_EVIDENCE_PATH,
+            evidence_name="semantic fidelity",
+        )
 
         try:
             return self._run(
@@ -756,6 +761,11 @@ class OfflineHarness:
             optimizer_input
         )
         subprocess_runtime_ms = int((time.perf_counter() - subprocess_start) * 1000)
+
+        _remove_untrusted_judge_evidence(
+            run_dir / _SEMANTIC_JUDGE_EVIDENCE_PATH,
+            evidence_name="semantic fidelity",
+        )
 
         validation_failures: list[ValidationFailure] = []
         valid_candidates: list[Candidate] = []
@@ -915,9 +925,24 @@ class OfflineHarness:
         diff_patch = self._build_diff_patch(baseline, promoted)
         diff_stats = _diff_stats_from_patch(diff_patch)
         judge_run_summary = _judge_summary_from_gate_results(gate_verdicts)
+        semantic_evidence_path = run_dir / _SEMANTIC_JUDGE_EVIDENCE_PATH
+        semantic_evidence_produced = any(
+            result.gate_name == "4-semantic-fidelity"
+            and result.evidence is not None
+            and result.evidence.get("judge_evidence_path") == _SEMANTIC_JUDGE_EVIDENCE_PATH
+            for result in gate_verdicts
+        )
+        if semantic_evidence_produced:
+            if not semantic_evidence_path.is_file():
+                semantic_evidence_produced = False
+        else:
+            _remove_untrusted_judge_evidence(
+                semantic_evidence_path,
+                evidence_name="semantic fidelity",
+            )
         judge_evidence_paths = (
-            {"semantic_fidelity": "judge_evidence.jsonl"}
-            if (run_dir / "judge_evidence.jsonl").is_file()
+            {"semantic_fidelity": _SEMANTIC_JUDGE_EVIDENCE_PATH}
+            if semantic_evidence_produced
             else {}
         )
         finished_at = datetime.now(timezone.utc)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import stat
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -114,6 +115,14 @@ class SemanticFidelityGate(Gate):
             return None
         self._evidence_dir.mkdir(parents=True, exist_ok=True)
         path = self._evidence_dir / "judge_evidence.jsonl"
-        with path.open("a", encoding="utf-8") as fh:
+        try:
+            mode_bits = path.lstat().st_mode
+        except FileNotFoundError:
+            mode = "x"
+        else:
+            if not stat.S_ISREG(mode_bits):
+                raise OSError(f"semantic judge evidence path is not a regular file: {path}")
+            mode = "a"
+        with path.open(mode, encoding="utf-8") as fh:
             fh.write(evidence.model_dump_json(by_alias=True) + "\n")
         return path.name
