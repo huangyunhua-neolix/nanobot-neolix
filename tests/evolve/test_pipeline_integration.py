@@ -204,9 +204,9 @@ def test_evolve_modules_stay_decoupled_from_runtime_lane() -> None:
         "gepa",
     )
     allowed_runtime_bridge_imports = {
-        ("tool_metadata.py", "nanobot.agent.tools.context"),
-        ("tool_metadata.py", "nanobot.agent.tools.loader"),
-        ("tool_metadata.py", "nanobot.agent.tools.registry"),
+        (Path("tool_metadata.py"), "nanobot.agent.tools.context"),
+        (Path("tool_metadata.py"), "nanobot.agent.tools.loader"),
+        (Path("tool_metadata.py"), "nanobot.agent.tools.registry"),
     }
     root = Path(__file__).resolve().parents[2] / "nanobot" / "evolve"
     assert root.is_dir(), f"evolve scan root must exist: {root}"
@@ -225,7 +225,7 @@ def test_evolve_modules_stay_decoupled_from_runtime_lane() -> None:
                         module == prefix or module.startswith(f"{prefix}.")
                         for prefix in forbidden_prefixes
                     ):
-                        if (path.name, module) not in allowed_runtime_bridge_imports:
+                        if (path.relative_to(root), module) not in allowed_runtime_bridge_imports:
                             offenders.append(f"{path}:{module}")
             elif isinstance(node, ast.ImportFrom) and node.module:
                 module = node.module
@@ -233,6 +233,6 @@ def test_evolve_modules_stay_decoupled_from_runtime_lane() -> None:
                     module == prefix or module.startswith(f"{prefix}.")
                     for prefix in forbidden_prefixes
                 ):
-                    if (path.name, module) not in allowed_runtime_bridge_imports:
+                    if (path.relative_to(root), module) not in allowed_runtime_bridge_imports:
                         offenders.append(f"{path}:{module}")
     assert offenders == []

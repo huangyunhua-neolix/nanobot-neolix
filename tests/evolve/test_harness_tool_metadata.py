@@ -300,6 +300,7 @@ Path(args.output).write_text(json.dumps({
     run_dir = tmp_path / "evals" / "runs" / manifest.run_id
     assert manifest.final_status == "rejected_by_validation"
     assert manifest.validation_failures[0].candidate_index == 0
+    assert manifest.validation_failures[0].candidate_hash.startswith("tool-metadata:")
     assert manifest.validation_failures[0].reason_code == "tool-permission-expansion"
     assert manifest.candidate_hashes == []
     review = (run_dir / "tool_metadata_review.md").read_text(encoding="utf-8")

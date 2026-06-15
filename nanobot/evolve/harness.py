@@ -219,6 +219,11 @@ def _metadata_rejection_reason(result: ToolMetadataValidationResult) -> str:
     return _safe_single_line_reason(reason)
 
 
+def _tool_metadata_candidate_hash(candidate: ToolMetadataCandidate) -> str:
+    """Return validation-failure hash in the tool metadata namespace."""
+    return f"tool-metadata:{candidate.baseline_schema_hash}"
+
+
 def _review_validation_results(
     results: list[ToolMetadataValidationResult],
 ) -> list[ToolMetadataValidationResult]:
@@ -651,7 +656,7 @@ class OfflineHarness:
                 validation_failures.append(
                     ValidationFailure(
                         candidate_index=index,
-                        candidate_hash=metadata_candidate.baseline_schema_hash,
+                        candidate_hash=_tool_metadata_candidate_hash(metadata_candidate),
                         reason_code=validation_result.reason_code or "tool-metadata-rejected",
                         reason=_metadata_rejection_reason(validation_result),
                     )

@@ -476,10 +476,15 @@ def render_tool_metadata_review(
         matching_snapshot = snapshots_by_name.get(candidate.tool_name)
         baseline_schema = _snapshot_schema(matching_snapshot) if matching_snapshot is not None else {}
         proposed_schema = canonical_tool_schema(candidate.model_dump()["proposed_schema"])
-        changed_paths = result.changed_paths if result is not None else _changed_paths(baseline_schema, proposed_schema)
-        reason = result.reason if result is not None and result.reason else "<none>"
         if validation_mismatch:
+            changed_paths: list[str] = []
             reason = "Validation result does not match candidate tool name or baseline hash."
+        elif result is not None:
+            changed_paths = result.changed_paths
+            reason = result.reason if result.reason else "<none>"
+        else:
+            changed_paths = _changed_paths(baseline_schema, proposed_schema)
+            reason = "Validation result is missing for this candidate."
         verdict = result.verdict if result is not None else "missing-validation"
         judge_evidence_path = result.judge_evidence_path if result is not None and result.judge_evidence_path else "<none>"
         baseline_description = baseline_schema.get("description") if baseline_schema else "<missing snapshot>"

@@ -669,6 +669,7 @@ class TestRenderToolMetadataReview:
         review = render_tool_metadata_review([snapshot], [candidate], [])
 
         assert "Verdict: `missing-validation`" in review
+        assert "Validation result is missing for this candidate." in review
 
     def test_render_ignores_validation_result_for_different_baseline_hash(self) -> None:
         """Validation results for stale baseline hashes do not apply to candidates."""
@@ -694,6 +695,8 @@ class TestRenderToolMetadataReview:
 
         assert "Verdict: `missing-validation`" in review
         assert "Validation result does not match candidate tool name or baseline hash." in review
+        assert "Changed paths: <none>" in review
+        assert "Parameter note diffs:\n- <none>" in review
         assert "Verdict: `reject`" not in review
         assert "Stale validation result must not be rendered." not in review
         assert "`$.parameters.properties.path.type`" not in review
