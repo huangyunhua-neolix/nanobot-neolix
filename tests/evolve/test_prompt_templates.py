@@ -1228,6 +1228,7 @@ def test_validate_prompt_template_candidate_accepts_edit_when_duplicate_line_exi
         "Users should prefer concise examples.",
         "Use short user-facing examples.",
         "Review shared user-facing context.",
+        "Use a clear process.",
     ],
 )
 def test_validate_prompt_template_candidate_accepts_benign_prompt_improvements(
@@ -1276,6 +1277,27 @@ def test_validate_prompt_template_candidate_accepts_benign_edits_in_separate_reg
     assert result.reason_code is None
     assert result.cache_impact == "cache_neutral"
     assert result.changed_line_numbers == [2, 6]
+
+
+def test_validate_prompt_template_candidate_accepts_benign_edit_with_protected_unchanged_region() -> None:
+    body = (
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Always ask the user before proceeding.\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Second editable instruction.\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("Second editable instruction.", "Use clearer wording.")
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "accept"
+    assert result.reason_code is None
+    assert result.cache_impact == "cache_neutral"
+    assert result.changed_line_numbers == [4]
 
 
 @pytest.mark.parametrize(

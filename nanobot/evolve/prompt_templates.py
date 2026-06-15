@@ -721,7 +721,6 @@ def _contains_tool_enablement(normalized: str) -> bool:
         "terminal",
         "subprocess",
         "subprocesses",
-        "process",
         "exec",
     }
     tool_predicate_tokens = {
@@ -744,6 +743,19 @@ def _contains_tool_enablement(normalized: str) -> bool:
         "tool",
         "calls",
     }
+    process_predicate_tokens = {
+        "run",
+        "execute",
+        "call",
+        "invoke",
+        "open",
+        "spawn",
+        "launch",
+        "directly",
+        "commands",
+        "tool",
+        "calls",
+    }
     subject_found = (
         bool(token_set & tool_subject_tokens)
         or "/bin/sh" in normalized
@@ -753,7 +765,10 @@ def _contains_tool_enablement(normalized: str) -> bool:
     predicate_found = bool(token_set & tool_predicate_tokens) or any(
         phrase in normalized for phrase in ("may be used", "can be used")
     )
-    return subject_found and predicate_found
+    process_enablement_found = "process" in token_set and bool(
+        token_set & process_predicate_tokens
+    )
+    return (subject_found and predicate_found) or process_enablement_found
 
 
 def _contains_safety_control_weakening(normalized: str) -> bool:
@@ -1192,9 +1207,9 @@ def validate_prompt_template_candidate(
             proposed_body=proposed_body,
             regions=editable_regions,
         )
+        joined_all_proposed_regions = "\n".join(all_proposed_region_texts)
         proposed_safety_texts = [
             *proposed_region_texts,
-            "\n".join(all_proposed_region_texts),
             *_changed_text_contexts(proposed_body, proposed_changed_line_numbers),
         ]
         if any(_has_frontmatter_mutation(text) for text in proposed_region_texts):
@@ -1205,22 +1220,32 @@ def validate_prompt_template_candidate(
                 cache_impact="cache_sensitive_rejected",
                 changed_line_numbers=changed_line_numbers,
             )
-        if _contains_non_ascii_letter_or_symbol(proposed_changed_text) or any(
-            _contains_non_ascii_letter_or_symbol(text)
-            or _contains_phrase(text, _PROPOSED_PROTECTED_SAFETY_PHRASES, map_confusables=True)
+        if (
+            _contains_non_ascii_letter_or_symbol(proposed_changed_text)
+            or _contains_weakening_pattern(joined_all_proposed_regions)
+            or _contains_phrase(joined_all_proposed_regions, _DENIED_WEAKENING_PHRASES, map_confusables=True)
             or _contains_phrase_tokens_in_order(
-                text,
-                _PROPOSED_PROTECTED_SAFETY_PHRASES,
-                map_confusables=True,
-            )
-            or _contains_weakening_pattern(text)
-            or _contains_phrase(text, _DENIED_WEAKENING_PHRASES, map_confusables=True)
-            or _contains_phrase_tokens_in_order(
-                text,
+                joined_all_proposed_regions,
                 _DENIED_WEAKENING_PHRASES,
                 map_confusables=True,
             )
-            for text in proposed_safety_texts
+            or any(
+                _contains_non_ascii_letter_or_symbol(text)
+                or _contains_phrase(text, _PROPOSED_PROTECTED_SAFETY_PHRASES, map_confusables=True)
+                or _contains_phrase_tokens_in_order(
+                    text,
+                    _PROPOSED_PROTECTED_SAFETY_PHRASES,
+                    map_confusables=True,
+                )
+                or _contains_weakening_pattern(text)
+                or _contains_phrase(text, _DENIED_WEAKENING_PHRASES, map_confusables=True)
+                or _contains_phrase_tokens_in_order(
+                    text,
+                    _DENIED_WEAKENING_PHRASES,
+                    map_confusables=True,
+                )
+                for text in proposed_safety_texts
+            )
         ):
             return _reject_prompt_result(
                 candidate=candidate,
