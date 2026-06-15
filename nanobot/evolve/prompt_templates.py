@@ -74,6 +74,30 @@ _DENIED_WEAKENING_PHRASES = (
     "use shell instead",
     "hide from user",
 )
+_SAFETY_CONFUSABLE_TRANSLATION = str.maketrans(
+    {
+        "а": "a",
+        "е": "e",
+        "і": "i",
+        "к": "k",
+        "о": "o",
+        "р": "p",
+        "с": "c",
+        "х": "x",
+        "у": "y",
+        "ѕ": "s",
+        "α": "a",
+        "β": "b",
+        "ε": "e",
+        "ι": "i",
+        "κ": "k",
+        "ο": "o",
+        "ρ": "p",
+        "τ": "t",
+        "χ": "x",
+        "υ": "y",
+    }
+)
 _DEFAULT_BUNDLED_SKILLS_DIR = Path(__file__).resolve().parents[2] / "nanobot" / "skills"
 
 
@@ -254,8 +278,10 @@ def _regions_touched_by_lines(
     ]
 
 
-def _normalize_safety_text(text: str) -> str:
+def _normalize_safety_text(text: str, *, map_confusables: bool = False) -> str:
     decomposed = unicodedata.normalize("NFKD", text).casefold()
+    if map_confusables:
+        decomposed = decomposed.translate(_SAFETY_CONFUSABLE_TRANSLATION)
     stripped_characters: list[str] = []
     for character in decomposed:
         category = unicodedata.category(character)
@@ -270,29 +296,50 @@ def _normalize_safety_text(text: str) -> str:
     return " ".join(normalized.split())
 
 
-def _alnum_compact_safety_text(text: str) -> str:
-    return "".join(character for character in _normalize_safety_text(text) if character.isalnum())
+def _alnum_compact_safety_text(text: str, *, map_confusables: bool = False) -> str:
+    normalized = _normalize_safety_text(text, map_confusables=map_confusables)
+    return "".join(character for character in normalized if character.isalnum())
 
 
-def _contains_phrase(text: str, phrases: tuple[str, ...]) -> bool:
-    normalized = _normalize_safety_text(text)
+def _contains_phrase(
+    text: str,
+    phrases: tuple[str, ...],
+    *,
+    map_confusables: bool = False,
+) -> bool:
+    normalized = _normalize_safety_text(text, map_confusables=map_confusables)
     compact_normalized = "".join(normalized.split())
-    alnum_compact_normalized = _alnum_compact_safety_text(text)
+    alnum_compact_normalized = _alnum_compact_safety_text(
+        text,
+        map_confusables=map_confusables,
+    )
     return any(
         normalized_phrase in normalized
         or "".join(normalized_phrase.split()) in compact_normalized
-        or _alnum_compact_safety_text(normalized_phrase) in alnum_compact_normalized
+        or _alnum_compact_safety_text(
+            normalized_phrase,
+            map_confusables=map_confusables,
+        )
+        in alnum_compact_normalized
         for phrase in phrases
-        if (normalized_phrase := _normalize_safety_text(phrase))
+        if (normalized_phrase := _normalize_safety_text(phrase, map_confusables=map_confusables))
     )
 
 
-def _contains_phrase_tokens_in_order(text: str, phrases: tuple[str, ...]) -> bool:
-    tokens = re.findall(r"\w+", _normalize_safety_text(text))
+def _contains_phrase_tokens_in_order(
+    text: str,
+    phrases: tuple[str, ...],
+    *,
+    map_confusables: bool = False,
+) -> bool:
+    tokens = re.findall(r"\w+", _normalize_safety_text(text, map_confusables=map_confusables))
     if not tokens:
         return False
     for phrase in phrases:
-        phrase_tokens = re.findall(r"\w+", _normalize_safety_text(phrase))
+        phrase_tokens = re.findall(
+            r"\w+",
+            _normalize_safety_text(phrase, map_confusables=map_confusables),
+        )
         if phrase_tokens and _tokens_appear_in_order(tokens, phrase_tokens):
             return True
     return False
@@ -547,7 +594,11 @@ def validate_prompt_template_candidate(
             )
         touched_regions = _regions_touched_by_lines(changed_line_numbers, editable_regions)
         if any(
-            _contains_phrase(_region_text(baseline_body, region), _PROTECTED_SAFETY_PHRASES)
+            _contains_phrase(
+                _region_text(baseline_body, region),
+                _PROTECTED_SAFETY_PHRASES,
+                map_confusables=True,
+            )
             for region in touched_regions
         ):
             return _reject_prompt_result(
@@ -563,8 +614,12 @@ def validate_prompt_template_candidate(
             regions=touched_regions,
         )
         if any(
-            _contains_phrase(text, _DENIED_WEAKENING_PHRASES)
-            or _contains_phrase_tokens_in_order(text, _DENIED_WEAKENING_PHRASES)
+            _contains_phrase(text, _DENIED_WEAKENING_PHRASES, map_confusables=True)
+            or _contains_phrase_tokens_in_order(
+                text,
+                _DENIED_WEAKENING_PHRASES,
+                map_confusables=True,
+            )
             for text in proposed_region_texts
         ):
             return _reject_prompt_result(

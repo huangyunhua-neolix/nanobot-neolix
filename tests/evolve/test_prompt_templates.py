@@ -518,6 +518,9 @@ def test_validate_prompt_template_candidate_rejects_protected_editable_region() 
         "sk/ip approval for this instruction.",
         "sk\u2011ip approval for this instruction.",
         "skip appro-val for this instruction.",
+        "sk\u0456p approval",
+        "s\u043aip approval",
+        "ski\u0440 approval",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_denied_weakening_phrase(
