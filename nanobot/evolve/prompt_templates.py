@@ -87,10 +87,13 @@ _PROTECTED_WEAKENING_SUBJECTS = (
     "permission",
     "permission checks",
     "ask the user",
+    "tool safety",
+    "tool safety controls",
 )
 _WEAKENING_PREDICATES = (
     "does not need to",
     "do not need to",
+    "do not require",
     "need not",
     "not required",
     "not necessary",
@@ -103,6 +106,26 @@ _WEAKENING_PREDICATES = (
     "may be ignored",
     "can be ignored",
     "no need for",
+)
+_SAFETY_CONTROL_FIELD_KEY_TOKENS = (
+    "approval",
+    "permission",
+    "permissions",
+    "review",
+    "sandbox",
+    "sandboxing",
+    "tool_safety",
+    "shell",
+    "bash",
+)
+_SAFETY_CONTROL_FIELD_VALUE_TOKENS = (
+    "false",
+    "disabled",
+    "optional",
+    "not required",
+    "not_required",
+    "unnecessary",
+    "true",
 )
 _DENIED_WEAKENING_PHRASES = (
     "skip approval",
@@ -327,14 +350,15 @@ def _has_frontmatter_mutation(body: str) -> bool:
         normalized_delimiter_line = _normalize_safety_text(stripped)
         if re.match(r"^(?:---|\.\.\.)(?:\s|#|$)", normalized_delimiter_line):
             return True
-        field_name, separator, _field_value = stripped.partition(":")
+        field_name, separator, field_value = stripped.partition(":")
         if not separator:
             continue
-        normalized_field_name = _normalize_safety_text(field_name, map_confusables=True)
+        normalized_field_name = _normalize_field_name(field_name)
         normalized_key = re.sub(r"[\s-]+", "_", normalized_field_name)
         if (
             normalized_field_name in _FRONTMATTER_FIELD_NAMES
             or normalized_key in _SAFETY_CONTROL_FIELD_NAMES
+            or _is_safety_control_field(normalized_key, field_value)
             or _contains_non_ascii_letter_or_symbol(field_name)
         ):
             return True
@@ -522,8 +546,30 @@ def _contains_marker_like_editable_boundary(text: str) -> bool:
     )
 
 
+def _normalize_field_name(field_name: str) -> str:
+    normalized = _normalize_safety_text(field_name, map_confusables=True).strip()
+    while normalized[:1] in {"-", "?"}:
+        normalized = normalized[1:].strip()
+    return normalized
+
+
+def _is_safety_control_field(normalized_key: str, field_value: str) -> bool:
+    key_has_safety_control = any(
+        token in normalized_key for token in _SAFETY_CONTROL_FIELD_KEY_TOKENS
+    )
+    if not key_has_safety_control:
+        return False
+    normalized_value = _normalize_safety_text(field_value, map_confusables=True)
+    normalized_value_key = re.sub(r"[\s-]+", "_", normalized_value)
+    return any(
+        token in normalized_value or token in normalized_value_key
+        for token in _SAFETY_CONTROL_FIELD_VALUE_TOKENS
+    )
+
+
 def _contains_weakening_pattern(text: str) -> bool:
     normalized = _normalize_safety_text(text, map_confusables=True)
+    normalized = normalized.replace(" isn't ", " is not ").replace(" aren't ", " are not ")
     for subject in _PROTECTED_WEAKENING_SUBJECTS:
         normalized_subject = _normalize_safety_text(subject, map_confusables=True)
         if normalized_subject not in normalized:
