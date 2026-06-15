@@ -24,7 +24,7 @@ def redact_json_value(value: Any) -> Any:
     if isinstance(value, str):
         return redact(value).text
     if isinstance(value, Mapping):
-        return {str(key): redact_json_value(child) for key, child in value.items()}
+        return {redact(str(key)).text: redact_json_value(child) for key, child in value.items()}
     if isinstance(value, list):
         return [redact_json_value(child) for child in value]
     if isinstance(value, tuple):

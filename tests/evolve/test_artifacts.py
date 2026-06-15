@@ -52,6 +52,24 @@ def test_write_redacted_json_artifact_recursively_redacts_nested_strings(tmp_pat
     assert text.endswith("\n")
 
 
+def test_write_redacted_json_artifact_redacts_secret_shaped_mapping_keys(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "artifact.json"
+    value = {
+        _SECRET_EMAIL: "email key value",
+        _SECRET_PATH: "path key value",
+    }
+
+    write_redacted_json_artifact(path, value)
+
+    text = path.read_text(encoding="utf-8")
+    assert _SECRET_EMAIL not in text
+    assert _SECRET_PATH not in text
+    assert "[REDACTED:EMAIL]" in text
+    assert "/<REDACTED_HOME>/" in text
+
+
 def test_write_jsonl_artifact_preserves_row_order_and_redacts_strings(tmp_path: Path) -> None:
     path = tmp_path / "artifact.jsonl"
     rows = [
