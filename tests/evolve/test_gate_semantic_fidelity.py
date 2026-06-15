@@ -105,6 +105,28 @@ def test_semantic_fidelity_gate_replaces_preexisting_regular_evidence_on_first_w
     assert all(row["recordId"].startswith("semantic:") for row in rows)
 
 
+def test_semantic_fidelity_gate_fails_closed_when_evidence_path_is_directory(
+    tmp_path: Path,
+) -> None:
+    gate = SemanticFidelityGate(evidence_dir=tmp_path)
+    result = gate.evaluate(
+        _candidate("Use concise answers. Include one concrete example."),
+        _baseline(),
+    )
+    evidence_path = tmp_path / "judge_evidence.jsonl"
+    evidence_path.mkdir()
+
+    assert result.evidence is not None
+    assert result.evidence["judge_evidence_path"] == "judge_evidence.jsonl"
+    try:
+        gate.publish_evidence()
+    except OSError as exc:
+        assert "semantic judge evidence path" in str(exc)
+    else:
+        raise AssertionError("publish_evidence() should fail closed on a directory target")
+    assert evidence_path.is_dir()
+
+
 def test_semantic_fidelity_gate_external_required_fails_without_provider() -> None:
     result = SemanticFidelityGate(require_external=True).evaluate(
         _candidate("Use concise answers. Include one concrete example."),

@@ -680,6 +680,76 @@ Path(args.output).write_text(json.dumps({
     ]
 
 
+def test_harness_fails_closed_when_semantic_evidence_target_becomes_directory_before_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "semantic_directory_before_publish.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'semantic-directory-before-publish-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'valid candidate should pass'
+    }]
+}))
+""".lstrip(),
+    )
+
+    original_build_diff_patch = OfflineHarness._build_diff_patch
+
+    def replace_evidence_target_before_publish(self, baseline, promoted):  # type: ignore[no-untyped-def]
+        run_dirs = [path for path in (self._workspace / "evals" / "runs").iterdir() if path.is_dir()]
+        assert len(run_dirs) == 1
+        evidence_recorders = [gate for gate in self._gates if hasattr(gate, "_evidence_rows")]
+        assert any(getattr(gate, "_evidence_rows") for gate in evidence_recorders)
+        evidence_path = run_dirs[0] / "judge_evidence.jsonl"
+        evidence_path.mkdir()
+        return original_build_diff_patch(self, baseline, promoted)
+
+    monkeypatch.setattr(
+        OfflineHarness,
+        "_build_diff_patch",
+        replace_evidence_target_before_publish,
+    )
+    with pytest.raises(OSError, match="semantic judge evidence path"):
+        OfflineHarness(workspace=tmp_path).run(
+            skill_name="demo-skill",
+            optimizer_command=[sys.executable, str(script)],
+            tiers=["A", "C"],
+        )
+
+    run_dirs = [path for path in (tmp_path / "evals" / "runs").iterdir() if path.is_dir()]
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+    assert (run_dir / "judge_evidence.jsonl").is_dir()
+    assert not (run_dir / "manifest.json").exists()
+    assert not any(
+        json.loads(line)["recordId"].startswith("semantic:")
+        for evidence_path in run_dir.rglob("*.jsonl")
+        if evidence_path.is_file()
+        for line in evidence_path.read_text(encoding="utf-8").splitlines()
+    )
+
+
 def test_harness_fails_closed_on_optimizer_spoofed_semantic_judge_evidence_directory(
     tmp_path: Path,
 ) -> None:
