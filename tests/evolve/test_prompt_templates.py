@@ -366,6 +366,8 @@ def test_validate_prompt_template_candidate_rejects_case_insensitive_frontmatter
         "descrip\u200btion: changed",
         "descrip\u00adtion: changed",
         "descri\u0301ption: changed",
+        "descript\u0456on: changed",
+        "n\u0430me: changed",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_obfuscated_frontmatter_field_mutation(
@@ -521,6 +523,7 @@ def test_validate_prompt_template_candidate_rejects_protected_editable_region() 
         "sk\u0456p approval",
         "s\u043aip approval",
         "ski\u0440 approval",
+        "skip appr\u03bf\u03bdal",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_denied_weakening_phrase(

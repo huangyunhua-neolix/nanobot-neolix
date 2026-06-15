@@ -255,7 +255,11 @@ def _has_frontmatter_mutation(body: str) -> bool:
         if stripped == "---":
             return True
         field_name, separator, _field_value = stripped.partition(":")
-        if separator and _normalize_safety_text(field_name) in _FRONTMATTER_FIELD_NAMES:
+        if (
+            separator
+            and _normalize_safety_text(field_name, map_confusables=True)
+            in _FRONTMATTER_FIELD_NAMES
+        ):
             return True
     return False
 
