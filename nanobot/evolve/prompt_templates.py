@@ -89,6 +89,9 @@ _PROTECTED_WEAKENING_SUBJECTS = (
     "ask the user",
     "tool safety",
     "tool safety controls",
+    "bash",
+    "shell",
+    "exec",
 )
 _WEAKENING_PREDICATES = (
     "does not need to",
@@ -106,6 +109,13 @@ _WEAKENING_PREDICATES = (
     "may be ignored",
     "can be ignored",
     "no need for",
+    "instead",
+    "rather than",
+    "directly",
+    "prefer",
+    "allowed",
+    "bypass",
+    "via",
 )
 _SAFETY_CONTROL_FIELD_KEY_TOKENS = (
     "approval",
@@ -476,6 +486,33 @@ def _regions_touched_by_lines(
         for region in regions
         if any(_line_allowed_by_regions(line_number, [region]) for line_number in changed_line_numbers)
     ]
+
+
+def _has_region_span_bypass(
+    baseline_regions: list[EditableRegion],
+    proposed_regions: list[EditableRegion],
+    baseline_body: str,
+    proposed_body: str,
+) -> bool:
+    proposed_lines = proposed_body.splitlines()
+    for baseline_region, proposed_region in zip(baseline_regions, proposed_regions, strict=True):
+        proposed_region_lines = set(_region_line_numbers(proposed_region, len(proposed_lines)))
+        proposed_region_text = _region_text(proposed_body, proposed_region).splitlines()
+        for baseline_line in _region_text(baseline_body, baseline_region).splitlines():
+            if not baseline_line or baseline_line in proposed_region_text:
+                continue
+            if any(
+                line == baseline_line and line_number not in proposed_region_lines
+                for line_number, line in enumerate(proposed_lines)
+            ):
+                return True
+    return False
+
+
+def _region_line_numbers(region: EditableRegion, line_count: int) -> list[int]:
+    if region.end_line < region.start_line:
+        return []
+    return list(range(region.start_line, min(region.end_line + 1, line_count)))
 
 
 def _normalize_safety_text(text: str, *, map_confusables: bool = False) -> str:
@@ -877,6 +914,14 @@ def validate_prompt_template_candidate(
                 candidate=candidate,
                 reason_code="prompt-cache-boundary-unknown",
                 reason="Proposed prompt template places changed text outside explicit editable regions.",
+                cache_impact="cache_unknown_rejected",
+                changed_line_numbers=changed_line_numbers,
+            )
+        if _has_region_span_bypass(editable_regions, proposed_regions, baseline_body, proposed_body):
+            return _reject_prompt_result(
+                candidate=candidate,
+                reason_code="prompt-cache-boundary-unknown",
+                reason="Proposed prompt template changes editable region spans.",
                 cache_impact="cache_unknown_rejected",
                 changed_line_numbers=changed_line_numbers,
             )
