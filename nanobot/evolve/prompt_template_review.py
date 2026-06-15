@@ -18,6 +18,7 @@ _MAX_REVIEW_TEXT_CHARS = 500
 _MAX_REVIEW_BODY_CHARS = 4_000
 _MARKDOWN_LINK_TARGET_RE = re.compile(r"\]\(([^)]*)\)")
 _BARE_URI_RE = re.compile(r"\b(?:https?|mailto)://\S+", re.IGNORECASE)
+_BARE_WWW_RE = re.compile(r"(?<![\w/])www\.[^\s<>()\[\]`]+", re.IGNORECASE)
 
 
 def _hash_text(value: str) -> str:
@@ -42,7 +43,8 @@ def _review_scalar(value: object, *, max_chars: int = _MAX_REVIEW_TEXT_CHARS) ->
     text = text.replace("<", "&lt;").replace(">", "&gt;")
     text = text.replace("[", "\\[").replace("]", "\\]")
     text = _MARKDOWN_LINK_TARGET_RE.sub("](redacted-link)", text)
-    return _BARE_URI_RE.sub("redacted-uri", text)
+    text = _BARE_URI_RE.sub("redacted-uri", text)
+    return _BARE_WWW_RE.sub("www[.]redacted", text)
 
 
 def _review_list(values: list[int]) -> str:
