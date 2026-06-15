@@ -36,7 +36,10 @@ from nanobot.evolve.judges.rubric import JudgeConfig, JudgePool
 from nanobot.evolve.optimizer.adapter import OptimizerAdapter
 from nanobot.evolve.optimizer.schemas import OptimizerCandidate, OptimizerInput, OptimizerResult
 from nanobot.evolve.privacy.redact import redact
-from nanobot.evolve.prompt_template_review import render_prompt_template_review
+from nanobot.evolve.prompt_template_review import (
+    build_prompt_template_judge_record,
+    render_prompt_template_review,
+)
 from nanobot.evolve.prompt_templates import (
     capture_bundled_prompt_template_snapshot,
     validate_prompt_template_candidates,
@@ -90,9 +93,7 @@ _PATH_CLAIM_RE = re.compile(
 )
 _RUN_ID_SUFFIX_LIMIT = 10_000
 _SAFE_REASON_MAX_CHARS = 300
-_PR_BODY_FORBIDDEN_REASON_CHARS = frozenset(
-    {"\n", "\r", "\u2028", "\u2029", "\u0085", "\x00"}
-)
+_PR_BODY_FORBIDDEN_REASON_CHARS = frozenset({"\n", "\r", "\u2028", "\u2029", "\u0085", "\x00"})
 _REVIEW_ARTIFACT_PATHS: dict[str, str] = {
     "manifest": "manifest.json",
     "report": "report.md",
@@ -114,6 +115,7 @@ _PROMPT_TEMPLATE_ARTIFACT_PATHS: dict[str, str] = {
     "prompt_template_candidates": "prompt_template_candidates.jsonl",
     "prompt_template_review": "prompt_template_review.md",
 }
+_PROMPT_TEMPLATE_JUDGE_EVIDENCE_PATH = "prompt_template_judge_evidence.jsonl"
 
 
 def _review_artifact_plan() -> dict[str, str]:
@@ -214,9 +216,7 @@ def _safe_single_line_reason(text: str, *, max_chars: int = _SAFE_REASON_MAX_CHA
     """Return a redacted, bounded one-line reason safe for markdown fields."""
     redacted = redact(text).text
     sanitized = "".join(
-        " "
-        if ch in _PR_BODY_FORBIDDEN_REASON_CHARS or ord(ch) < 0x20 or ord(ch) == 0x7F
-        else ch
+        " " if ch in _PR_BODY_FORBIDDEN_REASON_CHARS or ord(ch) < 0x20 or ord(ch) == 0x7F else ch
         for ch in redacted
     )
     sanitized = re.sub(r"\s+", " ", sanitized).replace("```", "'''").strip()
@@ -288,6 +288,22 @@ def _matching_tool_snapshot(
             for item in snapshot
             if item.tool_name == candidate.tool_name
             and item.schema_hash == candidate.baseline_schema_hash
+        ),
+        None,
+    )
+
+
+def _matching_prompt_template_snapshot(
+    candidate: PromptTemplateCandidate,
+    snapshot: list[PromptTemplateSnapshot],
+) -> PromptTemplateSnapshot | None:
+    """Return the baseline snapshot matching a prompt/template candidate."""
+    return next(
+        (
+            item
+            for item in snapshot
+            if item.skill_name == candidate.skill_name
+            and item.snapshot_hash == candidate.baseline_snapshot_hash
         ),
         None,
     )
@@ -380,7 +396,9 @@ class OfflineHarness:
 
     def _load_eval_records(self, skill_name: str, tiers: list[str], run_id: str) -> Path:
         """Write a minimal redacted optimizer eval bundle for ``tiers``."""
-        bundle_path = self._workspace / "evals" / "runs" / run_id / "optimizer" / "eval_bundle.ndjson"
+        bundle_path = (
+            self._workspace / "evals" / "runs" / run_id / "optimizer" / "eval_bundle.ndjson"
+        )
         bundle_path.parent.mkdir(parents=True, exist_ok=True)
 
         lines: list[str] = []
@@ -416,9 +434,7 @@ class OfflineHarness:
             **baseline.frontmatter.model_dump(mode="json", exclude_none=True),
             **frontmatter_values,
             "name": frontmatter_values.get("name", optimizer_candidate.skill_name),
-            "description": frontmatter_values.get(
-                "description", baseline.frontmatter.description
-            ),
+            "description": frontmatter_values.get("description", baseline.frontmatter.description),
             "origin": "agent",
             "created_by": "external:optimizer",
             "created_at": frontmatter_values.get(
@@ -585,6 +601,36 @@ class OfflineHarness:
         )
         return artifact_paths
 
+    def _write_prompt_template_judge_evidence(
+        self,
+        run_dir: Path,
+        snapshot: list[PromptTemplateSnapshot],
+        candidates: list[PromptTemplateCandidate],
+        validation_results: list[PromptTemplateValidationResult],
+    ) -> list[PromptTemplateValidationResult]:
+        """Write deterministic judge evidence for accepted non-noop prompt candidates."""
+        evidence_path = run_dir / _PROMPT_TEMPLATE_JUDGE_EVIDENCE_PATH
+        judge_pool = JudgePool(judges=[JudgeConfig(model="local/deterministic")])
+        updated_results = list(validation_results)
+        lines: list[str] = []
+        for index, (candidate, result) in enumerate(zip(candidates, validation_results)):
+            if result.verdict != "accept" or result.cache_impact == "candidate_noop":
+                continue
+            baseline = _matching_prompt_template_snapshot(candidate, snapshot)
+            if baseline is None:
+                continue
+            evidence = judge_pool.score_with_evidence(
+                build_prompt_template_judge_record(candidate, baseline)
+            )
+            lines.append(evidence.model_dump_json(by_alias=True))
+            updated_results[index] = result.model_copy(
+                update={"judge_evidence_path": _PROMPT_TEMPLATE_JUDGE_EVIDENCE_PATH}
+            )
+
+        if lines:
+            atomic_write_text(evidence_path, "\n".join(lines) + "\n")
+        return updated_results
+
     def _write_prompt_template_artifacts(
         self,
         run_dir: Path,
@@ -597,6 +643,8 @@ class OfflineHarness:
             return {}
 
         artifact_paths = _prompt_template_artifact_plan()
+        if (run_dir / _PROMPT_TEMPLATE_JUDGE_EVIDENCE_PATH).is_file():
+            artifact_paths["prompt_template_judge_evidence"] = _PROMPT_TEMPLATE_JUDGE_EVIDENCE_PATH
         write_redacted_json_artifact(
             run_dir / artifact_paths["prompt_template_snapshot"],
             [item.model_dump(mode="json", by_alias=True) for item in snapshot],
@@ -734,6 +782,12 @@ class OfflineHarness:
                         reason=_prompt_template_rejection_reason(prompt_result),
                     )
                 )
+        prompt_template_validation_results = self._write_prompt_template_judge_evidence(
+            run_dir,
+            prompt_template_snapshot,
+            optimizer_result.prompt_template_candidates,
+            prompt_template_validation_results,
+        )
 
         if not (optimizer_result.error and optimizer_result.error.code == "no_improvement"):
             for index, optimizer_candidate in enumerate(
