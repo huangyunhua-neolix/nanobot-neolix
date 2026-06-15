@@ -1197,6 +1197,14 @@ def validate_prompt_template_candidate(
             "\n".join(all_proposed_region_texts),
             *_changed_text_contexts(proposed_body, proposed_changed_line_numbers),
         ]
+        if any(_has_frontmatter_mutation(text) for text in proposed_region_texts):
+            return _reject_prompt_result(
+                candidate=candidate,
+                reason_code="prompt-frontmatter-mutation",
+                reason="Proposed prompt template body includes frontmatter-like content.",
+                cache_impact="cache_sensitive_rejected",
+                changed_line_numbers=changed_line_numbers,
+            )
         if _contains_non_ascii_letter_or_symbol(proposed_changed_text) or any(
             _contains_non_ascii_letter_or_symbol(text)
             or _contains_phrase(text, _PROPOSED_PROTECTED_SAFETY_PHRASES, map_confusables=True)

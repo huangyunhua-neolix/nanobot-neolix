@@ -501,6 +501,27 @@ def test_validate_prompt_template_candidate_rejects_case_insensitive_frontmatter
     assert result.cache_impact == "cache_sensitive_rejected"
 
 
+def test_validate_prompt_template_candidate_rejects_multiline_safety_control_value_insert() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "review_required:\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace(
+        "review_required:\n<!--",
+        "review_required:\n  no\n<!--",
+    )
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-frontmatter-mutation"
+    assert result.cache_impact == "cache_sensitive_rejected"
+
+
 @pytest.mark.parametrize(
     "obfuscated_field",
     [
