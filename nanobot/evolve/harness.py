@@ -36,6 +36,11 @@ from nanobot.evolve.judges.rubric import JudgeConfig, JudgePool
 from nanobot.evolve.optimizer.adapter import OptimizerAdapter
 from nanobot.evolve.optimizer.schemas import OptimizerCandidate, OptimizerInput, OptimizerResult
 from nanobot.evolve.privacy.redact import redact
+from nanobot.evolve.prompt_template_review import render_prompt_template_review
+from nanobot.evolve.prompt_templates import (
+    capture_bundled_prompt_template_snapshot,
+    validate_prompt_template_candidates,
+)
 from nanobot.evolve.report import render_run_report
 from nanobot.evolve.schemas import (
     Baseline,
@@ -43,6 +48,9 @@ from nanobot.evolve.schemas import (
     DiffStats,
     JudgeRunSummary,
     JudgeSummary,
+    PromptTemplateCandidate,
+    PromptTemplateSnapshot,
+    PromptTemplateValidationResult,
     ReviewReadiness,
     RunManifest,
     SkillContent,
@@ -99,6 +107,11 @@ _TOOL_METADATA_ARTIFACT_PATHS: dict[str, str] = {
     "tool_metadata_review": "tool_metadata_review.md",
 }
 _TOOL_METADATA_JUDGE_EVIDENCE_PATH = "tool_metadata_judge_evidence.jsonl"
+_PROMPT_TEMPLATE_ARTIFACT_PATHS: dict[str, str] = {
+    "prompt_template_snapshot": "prompt_template_snapshot.json",
+    "prompt_template_candidates": "prompt_template_candidates.jsonl",
+    "prompt_template_review": "prompt_template_review.md",
+}
 
 
 def _review_artifact_plan() -> dict[str, str]:
@@ -227,6 +240,17 @@ def _metadata_rejection_reason(result: ToolMetadataValidationResult) -> str:
 def _tool_metadata_candidate_hash(candidate: ToolMetadataCandidate) -> str:
     """Return validation-failure hash in the tool metadata namespace."""
     return f"tool-metadata:{candidate.baseline_schema_hash}"
+
+
+def _prompt_template_candidate_hash(candidate: PromptTemplateCandidate) -> str:
+    """Return validation-failure hash in the prompt/template namespace."""
+    return f"prompt-template:{candidate.baseline_snapshot_hash}"
+
+
+def _prompt_template_rejection_reason(result: PromptTemplateValidationResult) -> str:
+    reason_code = result.reason_code or "prompt-template-rejected"
+    reason = result.reason or reason_code
+    return _safe_single_line_reason(reason)
 
 
 def _review_validation_results(
@@ -487,6 +511,10 @@ class OfflineHarness:
         """Capture tool contracts using the same loader path as runtime startup."""
         return capture_loaded_tool_contract_snapshot(workspace=str(self._workspace))
 
+    def _capture_prompt_template_snapshot(self) -> list[PromptTemplateSnapshot]:
+        """Capture bundled prompt templates for inert optimizer context."""
+        return capture_bundled_prompt_template_snapshot()
+
     def _write_tool_metadata_judge_evidence(
         self,
         run_dir: Path,
@@ -551,6 +579,32 @@ class OfflineHarness:
         )
         return artifact_paths
 
+    def _write_prompt_template_artifacts(
+        self,
+        run_dir: Path,
+        snapshot: list[PromptTemplateSnapshot],
+        candidates: list[PromptTemplateCandidate],
+        validation_results: list[PromptTemplateValidationResult],
+    ) -> dict[str, str]:
+        """Write inert prompt/template snapshot, candidate, and review artifacts."""
+        if not snapshot and not candidates:
+            return {}
+
+        artifact_paths = dict(_PROMPT_TEMPLATE_ARTIFACT_PATHS)
+        write_redacted_json_artifact(
+            run_dir / artifact_paths["prompt_template_snapshot"],
+            [item.model_dump(mode="json", by_alias=True) for item in snapshot],
+        )
+        write_jsonl_artifact(
+            run_dir / artifact_paths["prompt_template_candidates"],
+            [candidate.model_dump(mode="json", by_alias=True) for candidate in candidates],
+        )
+        atomic_write_text(
+            run_dir / artifact_paths["prompt_template_review"],
+            render_prompt_template_review(snapshot, candidates, validation_results),
+        )
+        return artifact_paths
+
     def _nanobot_version(self) -> str:
         """Return the installed nanobot-ai version, or 0.0.0 in editable test runs."""
         try:
@@ -606,6 +660,7 @@ class OfflineHarness:
     ) -> RunManifest:
         baseline = self._load_baseline_skill(skill_name)
         tool_contract_snapshot = self._capture_tool_contract_snapshot()
+        prompt_template_snapshot = self._capture_prompt_template_snapshot()
         eval_bundle = self._load_eval_records(skill_name, tiers, run_id)
         record_count_per_tier = _count_eval_bundle_records(eval_bundle)
         optimizer_input = OptimizerInput(
@@ -619,6 +674,7 @@ class OfflineHarness:
             timeout_seconds=optimizer_timeout_seconds,
             seed=123456789,
             tool_contract_snapshot=tool_contract_snapshot,
+            prompt_template_snapshot=prompt_template_snapshot,
         )
 
         subprocess_start = time.perf_counter()
@@ -652,6 +708,22 @@ class OfflineHarness:
             optimizer_result.tool_metadata_candidates,
             tool_metadata_validation_results,
         )
+
+        prompt_template_validation_results = validate_prompt_template_candidates(
+            optimizer_result.prompt_template_candidates,
+            prompt_template_snapshot,
+        )
+        for index, prompt_result in enumerate(prompt_template_validation_results):
+            if prompt_result.verdict == "reject":
+                prompt_candidate = optimizer_result.prompt_template_candidates[index]
+                validation_failures.append(
+                    ValidationFailure(
+                        candidate_index=index,
+                        candidate_hash=_prompt_template_candidate_hash(prompt_candidate),
+                        reason_code=prompt_result.reason_code or "prompt-template-rejected",
+                        reason=_prompt_template_rejection_reason(prompt_result),
+                    )
+                )
 
         if not (optimizer_result.error and optimizer_result.error.code == "no_improvement"):
             for index, optimizer_candidate in enumerate(
@@ -701,7 +773,7 @@ class OfflineHarness:
 
         metadata_rejections_exist = any(
             result.verdict == "reject" for result in tool_metadata_validation_results
-        )
+        ) or any(result.verdict == "reject" for result in prompt_template_validation_results)
         if optimizer_result.error and optimizer_result.error.code == "no_improvement":
             if metadata_rejections_exist and not valid_candidates:
                 final_status = "rejected_by_validation"
@@ -727,12 +799,19 @@ class OfflineHarness:
             optimizer_result.tool_metadata_candidates,
             tool_metadata_validation_results,
         )
+        prompt_template_artifact_paths = self._write_prompt_template_artifacts(
+            run_dir,
+            prompt_template_snapshot,
+            optimizer_result.prompt_template_candidates,
+            prompt_template_validation_results,
+        )
         artifact_paths = {
             **_review_artifact_plan(),
             "eval_bundle": "optimizer/eval_bundle.ndjson",
             "optimizer_stderr": "optimizer/stderr.txt",
             "optimizer_stdout": "optimizer/stdout.txt",
             **tool_metadata_artifact_paths,
+            **prompt_template_artifact_paths,
         }
         gate_verdicts = [
             result
@@ -775,6 +854,7 @@ class OfflineHarness:
             judge_run_summary=judge_run_summary,
             judge_evidence_paths=judge_evidence_paths,
             tool_metadata_artifact_paths=tool_metadata_artifact_paths,
+            prompt_template_artifact_paths=prompt_template_artifact_paths,
         )
 
         (run_dir / "diff.patch").write_text(diff_patch, encoding="utf-8")

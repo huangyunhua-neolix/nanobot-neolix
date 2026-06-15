@@ -140,6 +140,9 @@ Path(args.output).write_text(json.dumps({
         "tool_contract_snapshot": "tool_contract_snapshot.json",
         "tool_metadata_candidates": "tool_metadata_candidates.jsonl",
         "tool_metadata_review": "tool_metadata_review.md",
+        "prompt_template_snapshot": "prompt_template_snapshot.json",
+        "prompt_template_candidates": "prompt_template_candidates.jsonl",
+        "prompt_template_review": "prompt_template_review.md",
     }
     assert manifest.evolve_extra_version == {"optimizer": "transform-wrapper"}
     assert manifest.requires_human_approval is True

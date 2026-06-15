@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from yaml import YAMLError
 
 from nanobot.evolve.prompt_template_boundaries import (
     PromptTemplateBoundaryError,
@@ -59,10 +60,24 @@ def parse_skill_markdown(text: str) -> tuple[dict[str, Any], str]:
         return {}, normalized
     frontmatter_text = normalized[4:end]
     body = normalized[end + 5 :]
-    parsed = yaml.safe_load(frontmatter_text) or {}
+    try:
+        parsed = yaml.safe_load(frontmatter_text) or {}
+    except YAMLError:
+        parsed = _parse_lenient_frontmatter(frontmatter_text)
     if not isinstance(parsed, dict):
         raise PromptTemplateBoundaryError("frontmatter must be a YAML mapping")
     return parsed, body
+
+
+def _parse_lenient_frontmatter(frontmatter_text: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in frontmatter_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        values[key.strip()] = value.strip()
+    return values
 
 
 def line_count(text: str) -> int:
