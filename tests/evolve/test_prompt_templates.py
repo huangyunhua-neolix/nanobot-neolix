@@ -542,6 +542,36 @@ def test_validate_prompt_template_candidate_rejects_denied_weakening_phrase(
     assert result.reason_code == "prompt-safety-regression"
 
 
+@pytest.mark.parametrize(
+    "confusable_phrase",
+    [
+        "sk\u0131p approval",
+        "sk\U0001d6a4p approval",
+        "ski\u1d18 approval",
+        "sk\u026ap approval",
+        "s\u1d0bip approval",
+        "skip approva\u029f",
+    ],
+)
+def test_validate_prompt_template_candidate_rejects_denied_phrase_with_latin_confusables(
+    confusable_phrase: str,
+) -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable instruction.\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("Editable instruction.", confusable_phrase)
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-safety-regression"
+
+
 def test_validate_prompt_template_candidate_rejects_contextual_denied_weakening_phrase() -> None:
     body = (
         "Before\n"
