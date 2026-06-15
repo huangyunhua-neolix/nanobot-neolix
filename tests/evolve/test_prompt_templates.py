@@ -381,6 +381,10 @@ def test_validate_prompt_template_candidate_rejects_raw_body_over_128_kib_before
         "--- # frontmatter start",
         "---\t# frontmatter start",
         "...",
+        "---\u200b",
+        "\u200b---",
+        "-\u200b--",
+        "...\u200b",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_frontmatter_delimiter_mutation(
@@ -665,6 +669,31 @@ def test_validate_prompt_template_candidate_rejects_proposed_editable_region_cou
         f"{body}"
         "<!-- evolve:prompt-editable:start -->\n"
         "Extra editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-cache-boundary-unknown"
+    assert result.cache_impact == "cache_unknown_rejected"
+
+
+def test_validate_prompt_template_candidate_rejects_proposed_editable_region_span_change() -> None:
+    body = (
+        "<!-- evolve:prompt-editable:start -->\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = (
+        "<!-- evolve:prompt-editable:start -->\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "Editable\n"
+        "<!-- evolve:prompt-editable:start -->\n"
         "<!-- evolve:prompt-editable:end -->\n"
     )
     snapshot = _snapshot(body)

@@ -299,7 +299,8 @@ def _body_too_large(body: str) -> bool:
 def _has_frontmatter_mutation(body: str) -> bool:
     for line in body.splitlines():
         stripped = line.strip()
-        if re.match(r"^(?:---|\.\.\.)(?:\s|#|$)", stripped):
+        normalized_delimiter_line = _normalize_safety_text(stripped)
+        if re.match(r"^(?:---|\.\.\.)(?:\s|#|$)", normalized_delimiter_line):
             return True
         field_name, separator, _field_value = stripped.partition(":")
         if not separator:
@@ -583,6 +584,12 @@ def _proposed_region_texts(
 
 
 def _proposed_changed_text(proposed_body: str, baseline_body: str) -> str:
+    proposed_lines = proposed_body.splitlines()
+    changed_lines = _changed_proposed_line_numbers(baseline_body, proposed_body)
+    return "\n".join(proposed_lines[line_number] for line_number in changed_lines)
+
+
+def _changed_proposed_line_numbers(baseline_body: str, proposed_body: str) -> list[int]:
     baseline_lines = baseline_body.splitlines()
     proposed_lines = proposed_body.splitlines()
     matcher = difflib.SequenceMatcher(
@@ -590,12 +597,12 @@ def _proposed_changed_text(proposed_body: str, baseline_body: str) -> str:
         b=proposed_lines,
         autojunk=False,
     )
-    changed_chunks: list[str] = []
+    changed_lines: set[int] = set()
     for tag, _baseline_start, _baseline_end, proposed_start, proposed_end in matcher.get_opcodes():
         if tag == "equal":
             continue
-        changed_chunks.extend(proposed_lines[proposed_start:proposed_end])
-    return "\n".join(changed_chunks)
+        changed_lines.update(range(proposed_start, proposed_end))
+    return sorted(changed_lines)
 
 
 def parse_editable_regions(body: str) -> list[EditableRegion]:
@@ -750,6 +757,8 @@ def validate_prompt_template_candidate(
                 cache_impact="cache_unknown_rejected",
             )
 
+        proposed_changed_line_numbers = _changed_proposed_line_numbers(baseline_body, proposed_body)
+
         if _contains_marker_like_editable_boundary(proposed_changed_text):
             return _reject_prompt_result(
                 candidate=candidate,
@@ -775,6 +784,14 @@ def validate_prompt_template_candidate(
                 candidate=candidate,
                 reason_code="prompt-cache-boundary-unknown",
                 reason="Proposed prompt template changes a line outside explicit editable regions.",
+                cache_impact="cache_unknown_rejected",
+                changed_line_numbers=changed_line_numbers,
+            )
+        if any(not _line_allowed_by_regions(line_number, proposed_regions) for line_number in proposed_changed_line_numbers):
+            return _reject_prompt_result(
+                candidate=candidate,
+                reason_code="prompt-cache-boundary-unknown",
+                reason="Proposed prompt template places changed text outside explicit editable regions.",
                 cache_impact="cache_unknown_rejected",
                 changed_line_numbers=changed_line_numbers,
             )
