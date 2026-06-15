@@ -308,6 +308,52 @@ def test_render_run_report_redacts_artifact_path_values() -> None:
     assert "sk-ant-" not in report
 
 
+def test_render_run_report_includes_prompt_template_review_artifacts() -> None:
+    report = render_run_report(
+        _manifest(
+            prompt_template_artifact_paths={
+                "prompt_template_snapshot": "runs/1/prompt_template_snapshot.json",
+                "prompt_template_candidates": "runs/1/prompt_template_candidates.jsonl",
+                "prompt_template_review": "runs/1/prompt_template_review.md",
+                "prompt_template_judge_evidence": "runs/1/prompt_template_judge_evidence.jsonl",
+            }
+        ),
+        {},
+        _optimizer_result(),
+        [],
+    )
+
+    assert report.index("## Review state") < report.index("## Prompt template review")
+    assert report.index("## Prompt template review") < report.index("## Validation failures")
+    assert "No bundled skill source changed" in report
+    assert "Cache-sensitive frontmatter was not modified by accepted candidates." in report
+    assert "Snapshot: `runs/1/prompt_template_snapshot.json`" in report
+    assert "Candidates: `runs/1/prompt_template_candidates.jsonl`" in report
+    assert "Review: `runs/1/prompt_template_review.md`" in report
+    assert "Judge evidence: `runs/1/prompt_template_judge_evidence.jsonl`" in report
+
+
+def test_render_run_report_redacts_prompt_template_artifact_paths() -> None:
+    report = render_run_report(
+        _manifest(
+            prompt_template_artifact_paths={
+                "prompt_template_snapshot": (
+                    "/Users/alice/private/sk-ant-1234567890abcdefghijklmnop/"
+                    "prompt_template_snapshot.json"
+                )
+            }
+        ),
+        {},
+        _optimizer_result(),
+        [],
+    )
+
+    assert "[REDACTED:APIKEY:ANTHROPIC]" in report
+    assert "/Users/" not in report
+    assert "alice" not in report
+    assert "sk-ant-" not in report
+
+
 def test_render_run_report_sorts_candidates_and_artifacts_and_none_promotion() -> None:
     report = render_run_report(
         _manifest(
