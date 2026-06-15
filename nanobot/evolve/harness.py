@@ -260,14 +260,14 @@ def _prompt_template_rejection_reason(result: PromptTemplateValidationResult) ->
     return _safe_single_line_reason(reason)
 
 
-def _remove_untrusted_prompt_template_judge_evidence(path: Path) -> None:
+def _remove_untrusted_judge_evidence(path: Path, *, evidence_name: str) -> None:
     """Remove any optimizer-created evidence target before harness ownership."""
     try:
         mode = path.lstat().st_mode
     except FileNotFoundError:
         return
     if stat.S_ISDIR(mode):
-        raise IsADirectoryError(f"prompt template judge evidence path is a directory: {path}")
+        raise IsADirectoryError(f"{evidence_name} judge evidence path is a directory: {path}")
     path.unlink()
 
 
@@ -555,9 +555,10 @@ class OfflineHarness:
         snapshot: list[ToolContractSnapshot],
         candidates: list[ToolMetadataCandidate],
         validation_results: list[ToolMetadataValidationResult],
-    ) -> list[ToolMetadataValidationResult]:
+    ) -> tuple[list[ToolMetadataValidationResult], str | None]:
         """Write deterministic judge evidence for accepted metadata candidates."""
         evidence_path = run_dir / _TOOL_METADATA_JUDGE_EVIDENCE_PATH
+        _remove_untrusted_judge_evidence(evidence_path, evidence_name="tool metadata")
         # One local judge keeps JudgePool's odd-size quorum invariant without tuning.
         judge_pool = JudgePool(judges=[JudgeConfig(model="local/deterministic")])
         updated_results = list(validation_results)
@@ -576,9 +577,11 @@ class OfflineHarness:
                 update={"judge_evidence_path": _TOOL_METADATA_JUDGE_EVIDENCE_PATH}
             )
 
-        if lines:
-            evidence_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return updated_results
+        if not lines:
+            return updated_results, None
+
+        atomic_write_text(evidence_path, "\n".join(lines) + "\n")
+        return updated_results, _TOOL_METADATA_JUDGE_EVIDENCE_PATH
 
     def _write_tool_metadata_artifacts(
         self,
@@ -586,14 +589,15 @@ class OfflineHarness:
         snapshot: list[ToolContractSnapshot],
         candidates: list[ToolMetadataCandidate],
         validation_results: list[ToolMetadataValidationResult],
+        judge_evidence_path: str | None,
     ) -> dict[str, str]:
         """Write metadata artifacts after optional judge evidence has been written."""
         if not snapshot and not candidates:
             return {}
 
         artifact_paths = _tool_metadata_artifact_plan()
-        if (run_dir / _TOOL_METADATA_JUDGE_EVIDENCE_PATH).is_file():
-            artifact_paths["tool_metadata_judge_evidence"] = _TOOL_METADATA_JUDGE_EVIDENCE_PATH
+        if judge_evidence_path is not None:
+            artifact_paths["tool_metadata_judge_evidence"] = judge_evidence_path
         write_redacted_json_artifact(
             run_dir / artifact_paths["tool_contract_snapshot"],
             [item.model_dump(mode="json", by_alias=True) for item in snapshot],
@@ -622,7 +626,7 @@ class OfflineHarness:
     ) -> tuple[list[PromptTemplateValidationResult], str | None]:
         """Write deterministic judge evidence for accepted non-noop prompt candidates."""
         evidence_path = run_dir / _PROMPT_TEMPLATE_JUDGE_EVIDENCE_PATH
-        _remove_untrusted_prompt_template_judge_evidence(evidence_path)
+        _remove_untrusted_judge_evidence(evidence_path, evidence_name="prompt template")
         judge_pool = JudgePool(judges=[JudgeConfig(model="local/deterministic")])
         updated_results = list(validation_results)
         lines: list[str] = []
@@ -774,7 +778,10 @@ class OfflineHarness:
                     )
                 )
 
-        tool_metadata_validation_results = self._write_tool_metadata_judge_evidence(
+        (
+            tool_metadata_validation_results,
+            tool_metadata_judge_evidence_path,
+        ) = self._write_tool_metadata_judge_evidence(
             run_dir,
             tool_contract_snapshot,
             optimizer_result.tool_metadata_candidates,
@@ -883,6 +890,7 @@ class OfflineHarness:
             tool_contract_snapshot,
             optimizer_result.tool_metadata_candidates,
             tool_metadata_validation_results,
+            tool_metadata_judge_evidence_path,
         )
         prompt_template_artifact_paths = self._write_prompt_template_artifacts(
             run_dir,

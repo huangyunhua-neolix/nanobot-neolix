@@ -356,8 +356,16 @@ Path(args.output).write_text(json.dumps({
     assert rows[0]["recordId"].startswith("prompt-template:demo-skill:")
     assert rows[0]["judgeMode"] == "local_fallback"
     assert manifest.prompt_template_artifact_paths == _PROMPT_JUDGE_ARTIFACT_PATHS
+    assert (
+        manifest.artifact_paths["prompt_template_judge_evidence"]
+        == "prompt_template_judge_evidence.jsonl"
+    )
     manifest_json = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest_json["promptTemplateArtifactPaths"] == _PROMPT_JUDGE_ARTIFACT_PATHS
+    assert (
+        manifest_json["artifactPaths"]["prompt_template_judge_evidence"]
+        == "prompt_template_judge_evidence.jsonl"
+    )
     review = (run_dir / "prompt_template_review.md").read_text(encoding="utf-8")
     assert "Judge evidence: `prompt_template_judge_evidence.jsonl`" in review
 
@@ -501,6 +509,61 @@ Path(args.output).write_text(json.dumps({
 
     run_dir = tmp_path / "evals" / "runs" / manifest.run_id
     assert not (run_dir / "prompt_template_judge_evidence.jsonl").exists()
+    assert "prompt_template_judge_evidence" not in manifest.prompt_template_artifact_paths
+    assert "prompt_template_judge_evidence" not in manifest.artifact_paths
+    manifest_json = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert "prompt_template_judge_evidence" not in manifest_json["promptTemplateArtifactPaths"]
+    assert "prompt_template_judge_evidence" not in manifest_json["artifactPaths"]
+
+
+def test_harness_removes_precreated_prompt_judge_evidence_symlink_for_noop_candidate(
+    tmp_path: Path,
+) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    target_path = tmp_path / "optimizer_controlled_prompt_evidence_target.jsonl"
+    target_path.write_text("preexisting target content\n", encoding="utf-8")
+    script = tmp_path / "prompt_symlinked_noop_judge.py"
+    _write_optimizer_script(
+        script,
+        f"""
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+snapshot = payload['promptTemplateSnapshot'][0]
+Path('../prompt_template_judge_evidence.jsonl').symlink_to({str(target_path)!r})
+Path(args.output).write_text(json.dumps({{
+    'schemaVersion': '1',
+    'optimizerName': 'prompt-symlinked-noop-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': {{'code': 'no_improvement', 'message': 'No skill candidate improved.'}},
+    'candidates': [],
+    'promptTemplateCandidates': [{{
+        'skillName': snapshot['skillName'],
+        'baselineSnapshotHash': snapshot['snapshotHash'],
+        'proposedBody': snapshot['bodyText'],
+        'intendedImprovement': 'No-op candidate.',
+        'riskAssessment': 'No change.',
+        'cacheImpactClaim': 'No frontmatter changed.'
+    }}]
+}}))
+""".lstrip(),
+    )
+
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    assert not (run_dir / "prompt_template_judge_evidence.jsonl").exists()
+    assert target_path.read_text(encoding="utf-8") == "preexisting target content\n"
     assert "prompt_template_judge_evidence" not in manifest.prompt_template_artifact_paths
     assert "prompt_template_judge_evidence" not in manifest.artifact_paths
     manifest_json = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
