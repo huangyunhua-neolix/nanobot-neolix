@@ -259,7 +259,7 @@ def _normalize_safety_text(text: str) -> str:
     stripped_characters: list[str] = []
     for character in decomposed:
         category = unicodedata.category(character)
-        if character == "\u00ad" or category in {"Cf", "Mn"}:
+        if character == "\u00ad" or category == "Cf" or category.startswith("M"):
             continue
         if category == "Cc":
             if character.isspace():
