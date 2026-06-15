@@ -14,7 +14,7 @@ from nanobot.evolve.schemas import PromptTemplateSnapshot
 
 _EDITABLE_START = "<!-- evolve:prompt-editable:start -->"
 _EDITABLE_END = "<!-- evolve:prompt-editable:end -->"
-_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 _DEFAULT_BUNDLED_SKILLS_DIR = Path(__file__).resolve().parents[2] / "nanobot" / "skills"
 
 
@@ -84,14 +84,23 @@ def _line_count(text: str) -> int:
 
 def parse_editable_regions(body: str) -> list[EditableRegion]:
     lines = body.splitlines()
-    in_fence = False
+    fence_marker: str | None = None
+    fence_length = 0
     active_start: int | None = None
     regions: list[EditableRegion] = []
     for index, line in enumerate(lines):
-        if _FENCE_RE.match(line):
-            in_fence = not in_fence
-            continue
-        if in_fence:
+        fence_match = _FENCE_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if fence_marker is None:
+                fence_marker = marker[0]
+                fence_length = len(marker)
+                continue
+            if marker[0] == fence_marker and len(marker) >= fence_length:
+                fence_marker = None
+                fence_length = 0
+                continue
+        if fence_marker is not None:
             continue
         stripped = line.strip()
         if stripped == _EDITABLE_START:

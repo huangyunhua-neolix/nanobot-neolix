@@ -191,6 +191,24 @@ def test_parse_editable_regions_ignores_markers_inside_indented_tilde_fences() -
     assert parse_editable_regions(body) == []
 
 
+def test_parse_editable_regions_ignores_backtick_fences_inside_tilde_fences() -> None:
+    body = (
+        "~~~markdown\n"
+        "```\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "ignored\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "~~~\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "real\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+
+    regions = parse_editable_regions(body)
+
+    assert [(region.start_line, region.end_line) for region in regions] == [(7, 7)]
+
+
 def test_parse_editable_regions_rejects_unbalanced_and_nested_markers() -> None:
     with pytest.raises(PromptTemplateBoundaryError, match="unbalanced"):
         parse_editable_regions("<!-- evolve:prompt-editable:start -->\ntext\n")
