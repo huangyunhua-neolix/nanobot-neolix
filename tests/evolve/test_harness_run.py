@@ -284,12 +284,8 @@ Path(args.output).write_text(json.dumps({
     )
     run_dir = tmp_path / "evals" / "runs" / manifest.run_id
 
-    optimizer_input = (run_dir / "optimizer" / "optimizer_input.json").read_text(
-        encoding="utf-8"
-    )
-    optimizer_output = (run_dir / "optimizer" / "optimizer_output.json").read_text(
-        encoding="utf-8"
-    )
+    optimizer_input = (run_dir / "optimizer" / "optimizer_input.json").read_text(encoding="utf-8")
+    optimizer_output = (run_dir / "optimizer" / "optimizer_output.json").read_text(encoding="utf-8")
 
     assert "semantic_aggregate" not in optimizer_input
     assert "semantic_aggregate" not in optimizer_output
@@ -475,8 +471,9 @@ Path(args.output).write_text(json.dumps({
     )
 
     optimizer_input = json.loads(
-        (tmp_path / "evals" / "runs" / manifest.run_id / "optimizer" / "optimizer_input.json")
-        .read_text(encoding="utf-8")
+        (
+            tmp_path / "evals" / "runs" / manifest.run_id / "optimizer" / "optimizer_input.json"
+        ).read_text(encoding="utf-8")
     )
     assert optimizer_input["timeoutSeconds"] == 600
 
@@ -669,7 +666,6 @@ Path(args.output).write_text(json.dumps({
     assert manifest.promoted_candidate_hash is None
 
 
-
 def test_harness_run_records_malformed_frontmatter_validation_failure(tmp_path: Path) -> None:
     _write_skill(tmp_path, "demo-skill")
     script = tmp_path / "malformed_frontmatter.py"
@@ -747,8 +743,13 @@ def test_load_baseline_skill_parses_frontmatter_and_hashes(tmp_path: Path) -> No
 
     assert baseline.skill_name == "demo-skill"
     assert baseline.frontmatter.name == "demo-skill"
-    assert baseline.content_hash == "9cb272a6b6ecb80dd92c8a2a5db7565ee74d8fc7a4d4572337e8b2d0cdd0f1d5"
-    assert baseline.cache_key_hash == "cb1b3a49f70a3bf5ced215c8f87875a9219ee622b6c7ef6ca4656003e9941e7e"
+    assert (
+        baseline.content_hash == "9cb272a6b6ecb80dd92c8a2a5db7565ee74d8fc7a4d4572337e8b2d0cdd0f1d5"
+    )
+    assert (
+        baseline.cache_key_hash
+        == "cb1b3a49f70a3bf5ced215c8f87875a9219ee622b6c7ef6ca4656003e9941e7e"
+    )
     assert baseline.size_metrics["lines"] == len(raw.splitlines())
     assert baseline.loaded_from.endswith("skills/agent/demo-skill/SKILL.md")
 
@@ -788,7 +789,9 @@ def test_candidate_from_optimizer_injects_provenance(tmp_path: Path) -> None:
     )
     optimizer_result = _optimizer_result(candidate_input)
 
-    candidate = harness._candidate_from_optimizer(candidate_input, baseline, "run-1", optimizer_result)
+    candidate = harness._candidate_from_optimizer(
+        candidate_input, baseline, "run-1", optimizer_result
+    )
 
     assert candidate.frontmatter.created_by == "external:optimizer"
     assert candidate.frontmatter.evolved_from_run == "run-1"
@@ -821,7 +824,9 @@ def test_candidate_from_optimizer_defaults_missing_frontmatter_name(tmp_path: Pa
     )
     optimizer_result = _optimizer_result(candidate_input)
 
-    candidate = harness._candidate_from_optimizer(candidate_input, baseline, "run-1", optimizer_result)
+    candidate = harness._candidate_from_optimizer(
+        candidate_input, baseline, "run-1", optimizer_result
+    )
 
     assert candidate.frontmatter.name == "demo-skill"
 
@@ -835,7 +840,9 @@ def test_candidate_from_optimizer_preserves_frontmatter_name_mismatch(tmp_path: 
     )
     optimizer_result = _optimizer_result(candidate_input)
 
-    candidate = harness._candidate_from_optimizer(candidate_input, baseline, "run-1", optimizer_result)
+    candidate = harness._candidate_from_optimizer(
+        candidate_input, baseline, "run-1", optimizer_result
+    )
     reason = harness._validate_candidate(candidate, baseline, seen_hashes=set())
 
     assert candidate.frontmatter.name == "wrong-skill"
@@ -859,7 +866,9 @@ def test_validate_candidate_rejects_empty_content(tmp_path: Path) -> None:
     baseline = harness._load_baseline_skill("demo-skill")
     candidate_input = _optimizer_candidate("---\nname: demo-skill\n---\n   \n")
     optimizer_result = _optimizer_result(candidate_input)
-    candidate = harness._candidate_from_optimizer(candidate_input, baseline, "run-1", optimizer_result)
+    candidate = harness._candidate_from_optimizer(
+        candidate_input, baseline, "run-1", optimizer_result
+    )
 
     reason = harness._validate_candidate(candidate, baseline, seen_hashes=set())
 
@@ -883,7 +892,9 @@ def test_validate_candidate_rejects_parent_baseline_mismatch(tmp_path: Path) -> 
     baseline = harness._load_baseline_skill("demo-skill")
     candidate_input = _optimizer_candidate(_skill_markdown("demo-skill", "Use clearer answers."))
     optimizer_result = _optimizer_result(candidate_input)
-    candidate = harness._candidate_from_optimizer(candidate_input, baseline, "run-1", optimizer_result)
+    candidate = harness._candidate_from_optimizer(
+        candidate_input, baseline, "run-1", optimizer_result
+    )
     candidate = candidate.model_copy(update={"parent_baseline_hash": "wrong-parent"})
 
     reason = harness._validate_candidate(candidate, baseline, seen_hashes=set())
@@ -905,9 +916,13 @@ def test_validate_candidate_rejects_private_path_claims(tmp_path: Path, path_cla
     _write_skill(tmp_path, "demo-skill")
     harness = OfflineHarness(workspace=tmp_path)
     baseline = harness._load_baseline_skill("demo-skill")
-    candidate_input = _optimizer_candidate(_skill_markdown("demo-skill", f"Do not mention {path_claim}"))
+    candidate_input = _optimizer_candidate(
+        _skill_markdown("demo-skill", f"Do not mention {path_claim}")
+    )
     optimizer_result = _optimizer_result(candidate_input)
-    candidate = harness._candidate_from_optimizer(candidate_input, baseline, "run-1", optimizer_result)
+    candidate = harness._candidate_from_optimizer(
+        candidate_input, baseline, "run-1", optimizer_result
+    )
 
     reason = harness._validate_candidate(candidate, baseline, seen_hashes=set())
 
@@ -948,9 +963,15 @@ def test_rank_candidates_uses_score_iteration_hash(tmp_path: Path) -> None:
         optimizer_name="external-wrapper",
         error=None,
         candidates=[
-            OptimizerCandidate(skill_name="demo-skill", skill_md_content="b", score=0.5, iteration=2, rationale="b"),
-            OptimizerCandidate(skill_name="demo-skill", skill_md_content="a", score=0.9, iteration=2, rationale="a"),
-            OptimizerCandidate(skill_name="demo-skill", skill_md_content="c", score=0.9, iteration=1, rationale="c"),
+            OptimizerCandidate(
+                skill_name="demo-skill", skill_md_content="b", score=0.5, iteration=2, rationale="b"
+            ),
+            OptimizerCandidate(
+                skill_name="demo-skill", skill_md_content="a", score=0.9, iteration=2, rationale="a"
+            ),
+            OptimizerCandidate(
+                skill_name="demo-skill", skill_md_content="c", score=0.9, iteration=1, rationale="c"
+            ),
         ],
     )
 

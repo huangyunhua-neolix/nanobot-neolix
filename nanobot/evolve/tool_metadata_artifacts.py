@@ -135,7 +135,9 @@ def write_tool_metadata_artifacts(
     atomic_write_text(
         run_dir / artifact_paths["tool_metadata_review"],
         render_tool_metadata_review(
-            snapshot, candidates, review_validation_results(validation_results, safe_single_line_reason)
+            snapshot,
+            candidates,
+            review_validation_results(validation_results, safe_single_line_reason),
         ),
     )
     return artifact_paths

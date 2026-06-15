@@ -499,10 +499,7 @@ Path(args.output).write_text(json.dumps({
             for gate in self._gates
             if isinstance(gate, SemanticEvidenceRecorder | SemanticFidelityGate)
         ]
-        assert any(
-            gate._writer is not None and gate._writer._rows
-            for gate in evidence_gates
-        )
+        assert any(gate._writer is not None and gate._writer._rows for gate in evidence_gates)
         evidence_path = run_dirs[0] / "judge_evidence.jsonl"
         evidence_path.mkdir()
         return original_build_diff_patch(self, baseline, promoted)
