@@ -79,6 +79,14 @@ _DENIED_WEAKENING_PHRASES = (
     "no human approval required",
     "disable sandbox",
     "execute untrusted code",
+    "human approval is not required",
+    "approval is not required",
+    "human review is not required",
+    "sandbox can be ignored",
+    "sandbox is optional",
+    "approval can be skipped",
+    "review can be bypassed",
+    "do not request approval from the user",
 )
 # Local skeleton mapping for safety phrase matching only; this is not a full
 # Unicode confusables implementation.
