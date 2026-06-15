@@ -195,7 +195,11 @@ def _accept_prompt_result(
     )
 
 
-def _changed_baseline_line_numbers(baseline_body: str, proposed_body: str) -> list[int]:
+def _changed_baseline_line_numbers(
+    baseline_body: str,
+    proposed_body: str,
+    editable_regions: list[EditableRegion] | None = None,
+) -> list[int]:
     baseline_lines = baseline_body.splitlines()
     proposed_lines = proposed_body.splitlines()
     matcher = difflib.SequenceMatcher(
@@ -210,12 +214,30 @@ def _changed_baseline_line_numbers(baseline_body: str, proposed_body: str) -> li
         if baseline_start != baseline_end:
             changed_lines.update(range(baseline_start, baseline_end))
             continue
-        anchor_line = min(baseline_start, len(baseline_lines) - 1)
-        if anchor_line >= 0:
-            changed_lines.add(anchor_line)
+        anchor_lines = _insertion_anchor_lines(baseline_start, len(baseline_lines))
+        if editable_regions is not None:
+            editable_anchor_lines = [
+                line_number
+                for line_number in anchor_lines
+                if _line_in_regions(line_number, editable_regions)
+            ]
+            if editable_anchor_lines:
+                changed_lines.update(editable_anchor_lines)
+                continue
+        if anchor_lines:
+            changed_lines.add(anchor_lines[0])
         elif proposed_start != proposed_end:
             changed_lines.add(0)
     return sorted(changed_lines)
+
+
+def _insertion_anchor_lines(baseline_start: int, baseline_line_count: int) -> list[int]:
+    anchor_lines: list[int] = []
+    if baseline_start < baseline_line_count:
+        anchor_lines.append(baseline_start)
+    if baseline_start > 0:
+        anchor_lines.append(baseline_start - 1)
+    return anchor_lines
 
 
 def _line_in_regions(line_number: int, regions: list[EditableRegion]) -> bool:
@@ -233,13 +255,24 @@ def _regions_touched_by_lines(
 
 
 def _normalize_safety_text(text: str) -> str:
-    normalized = unicodedata.normalize("NFC", text).casefold()
-    return " ".join(normalized.split())
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    stripped = "".join(
+        character
+        for character in normalized
+        if character != "\u00ad" and unicodedata.category(character) not in {"Cc", "Cf"}
+    )
+    return " ".join(stripped.split())
 
 
 def _contains_phrase(text: str, phrases: tuple[str, ...]) -> bool:
     normalized = _normalize_safety_text(text)
-    return any(_normalize_safety_text(phrase) in normalized for phrase in phrases)
+    compact_normalized = "".join(normalized.split())
+    return any(
+        normalized_phrase in normalized
+        or "".join(normalized_phrase.split()) in compact_normalized
+        for phrase in phrases
+        if (normalized_phrase := _normalize_safety_text(phrase))
+    )
 
 
 def _region_text(body: str, region: EditableRegion) -> str:
@@ -386,6 +419,12 @@ def validate_prompt_template_candidate(
             reason="Proposed prompt template body exceeds the hard size bounds.",
             cache_impact="cache_unknown_rejected",
         )
+    baseline_body = baseline.body_text
+    if proposed_body == baseline_body:
+        return _accept_prompt_result(
+            candidate=candidate,
+            cache_impact="candidate_noop",
+        )
     if _has_frontmatter_mutation(proposed_body):
         return _reject_prompt_result(
             candidate=candidate,
@@ -393,15 +432,14 @@ def validate_prompt_template_candidate(
             reason="Proposed prompt template body includes frontmatter-like content.",
             cache_impact="cache_sensitive_rejected",
         )
-    baseline_body = baseline.body_text
-    if proposed_body == baseline_body:
-        return _accept_prompt_result(
-            candidate=candidate,
-            cache_impact="candidate_noop",
-        )
 
     try:
-        changed_line_numbers = _changed_baseline_line_numbers(baseline_body, proposed_body)
+        editable_regions = parse_editable_regions(baseline_body)
+        changed_line_numbers = _changed_baseline_line_numbers(
+            baseline_body,
+            proposed_body,
+            editable_regions,
+        )
         if not changed_line_numbers:
             return _reject_prompt_result(
                 candidate=candidate,
@@ -409,7 +447,6 @@ def validate_prompt_template_candidate(
                 reason="Proposed prompt template changes could not be mapped to baseline lines.",
                 cache_impact="cache_unknown_rejected",
             )
-        editable_regions = parse_editable_regions(baseline_body)
         if any(not _line_in_regions(line_number, editable_regions) for line_number in changed_line_numbers):
             return _reject_prompt_result(
                 candidate=candidate,
