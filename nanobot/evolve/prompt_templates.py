@@ -661,24 +661,34 @@ def validate_prompt_template_candidate(
             candidate=candidate,
             cache_impact="candidate_noop",
         )
-    proposed_changed_text = _proposed_changed_text(proposed_body, baseline_body)
-    if _has_frontmatter_mutation(proposed_changed_text):
-        return _reject_prompt_result(
-            candidate=candidate,
-            reason_code="prompt-frontmatter-mutation",
-            reason="Proposed prompt template body includes frontmatter-like content.",
-            cache_impact="cache_sensitive_rejected",
-        )
-    if _contains_marker_like_editable_boundary(proposed_changed_text):
-        return _reject_prompt_result(
-            candidate=candidate,
-            reason_code="prompt-cache-boundary-unknown",
-            reason="Proposed prompt template changes editable region markers.",
-            cache_impact="cache_unknown_rejected",
-        )
 
     try:
         editable_regions = parse_editable_regions(baseline_body)
+        proposed_regions = parse_editable_regions(proposed_body)
+        if len(proposed_regions) != len(editable_regions):
+            return _reject_prompt_result(
+                candidate=candidate,
+                reason_code="prompt-cache-boundary-unknown",
+                reason="Proposed prompt template changes editable region markers.",
+                cache_impact="cache_unknown_rejected",
+            )
+
+        proposed_changed_text = _proposed_changed_text(proposed_body, baseline_body)
+        if _has_frontmatter_mutation(proposed_changed_text):
+            return _reject_prompt_result(
+                candidate=candidate,
+                reason_code="prompt-frontmatter-mutation",
+                reason="Proposed prompt template body includes frontmatter-like content.",
+                cache_impact="cache_sensitive_rejected",
+            )
+        if _contains_marker_like_editable_boundary(proposed_changed_text):
+            return _reject_prompt_result(
+                candidate=candidate,
+                reason_code="prompt-cache-boundary-unknown",
+                reason="Proposed prompt template changes editable region markers.",
+                cache_impact="cache_unknown_rejected",
+            )
+
         changed_line_numbers = _changed_baseline_line_numbers(
             baseline_body,
             proposed_body,

@@ -480,6 +480,49 @@ def test_validate_prompt_template_candidate_accepts_insert_at_editable_region_en
     assert result.cache_impact == "cache_neutral"
 
 
+def test_validate_prompt_template_candidate_rejects_unclosed_fence_hiding_proposed_end_marker() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "After\n"
+    )
+    proposed_body = body.replace("Editable\n<!--", "Editable\n```\n<!--")
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-cache-boundary-unknown"
+    assert result.cache_impact == "cache_unknown_rejected"
+
+
+def test_validate_prompt_template_candidate_rejects_proposed_editable_region_count_change() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "After\n"
+    )
+    proposed_body = (
+        f"{body}"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Extra editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-cache-boundary-unknown"
+    assert result.cache_impact == "cache_unknown_rejected"
+
+
 def test_validate_prompt_template_candidate_rejects_change_outside_editable_region() -> None:
     body = (
         "Before\n"
