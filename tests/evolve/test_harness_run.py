@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar
 
@@ -71,6 +72,55 @@ class _ExplodingGate(Gate):
 
     def evaluate(self, candidate, baseline):  # type: ignore[override]
         raise RuntimeError(self._message)
+
+
+class _PassingSemanticGate(Gate):
+    NONDETERMINISTIC: ClassVar[bool] = False
+
+    @property
+    def name(self) -> str:
+        return "4-semantic-fidelity"
+
+    def evaluate(self, candidate, baseline):  # type: ignore[override]
+        return self._result(candidate, baseline, "pass", 0.95)
+
+    def _result(self, candidate, baseline, verdict: str, aggregate: float):  # type: ignore[no-untyped-def]
+        from nanobot.evolve.gates import GateResult
+
+        return GateResult(
+            gate_name=self.name,
+            candidate_hash=candidate.content_hash,
+            baseline_hash=baseline.content_hash,
+            verdict=verdict,
+            metrics={
+                "semantic_process": aggregate,
+                "semantic_output": aggregate,
+                "semantic_token": aggregate,
+                "semantic_aggregate": aggregate,
+            },
+            evidence={
+                "judge_model": "local/deterministic",
+                "judge_mode": "local_fallback",
+                "calibrated": "false",
+                "judge_evidence_path": "judge_evidence.jsonl",
+            },
+            failure_reason=None if verdict == "pass" else "semantic-fidelity-below-threshold",
+            timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            duration_ms=1,
+        )
+
+
+class _FirstCandidateFailingSemanticGate(_PassingSemanticGate):
+    NONDETERMINISTIC: ClassVar[bool] = False
+
+    def __init__(self) -> None:
+        self._call_count = 0
+
+    def evaluate(self, candidate, baseline):  # type: ignore[override]
+        self._call_count += 1
+        if self._call_count == 1:
+            return self._result(candidate, baseline, "fail", 0.0)
+        return self._result(candidate, baseline, "pass", 0.95)
 
 
 def test_harness_run_promotes_candidate_and_writes_artifacts(tmp_path: Path) -> None:
@@ -407,6 +457,227 @@ Path(args.output).write_text(json.dumps({
     assert len(rows) == 1
     assert rows[0]["recordId"].startswith("semantic:")
     assert manifest.judge_evidence_paths == {"semantic_fidelity": "judge_evidence.jsonl"}
+
+
+def test_harness_rewrites_semantic_evidence_tampered_after_gate_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "semantic_spoofed_after_gate.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'semantic-spoofed-after-gate-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'adds example instruction'
+    }]
+}))
+""".lstrip(),
+    )
+
+    original_run_gates = OfflineHarness._run_gates
+
+    def tamper_after_gate_write(self: OfflineHarness, candidate, baseline):  # type: ignore[no-untyped-def]
+        trace = original_run_gates(self, candidate, baseline)
+        runs_dir = self._workspace / "evals" / "runs"
+        run_dirs = [path for path in runs_dir.iterdir() if path.is_dir()]
+        assert len(run_dirs) == 1
+        evidence_path = run_dirs[0] / "judge_evidence.jsonl"
+        with evidence_path.open("a", encoding="utf-8") as evidence_file:
+            evidence_file.write(
+                json.dumps(
+                    {
+                        "recordId": "semantic:optimizer-spoof",
+                        "judgeMode": "local_fallback",
+                        "score": {
+                            "process": 1.0,
+                            "output": 1.0,
+                            "token": 1.0,
+                            "aggregate": 1.0,
+                        },
+                        "calibrated": False,
+                    }
+                )
+                + "\n"
+            )
+        return trace
+
+    monkeypatch.setattr(OfflineHarness, "_run_gates", tamper_after_gate_write)
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    evidence_path = run_dir / "judge_evidence.jsonl"
+    evidence_text = evidence_path.read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in evidence_text.splitlines()]
+    assert "optimizer-spoof" not in evidence_text
+    assert len(rows) == 1
+    assert rows[0]["recordId"].startswith("semantic:")
+    assert manifest.judge_evidence_paths == {"semantic_fidelity": "judge_evidence.jsonl"}
+
+
+def test_harness_publishes_trusted_semantic_evidence_for_gate_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "trusted_semantic_gate_results.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'trusted-semantic-gate-results-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'adds example instruction'
+    }]
+}))
+""".lstrip(),
+    )
+
+    original_run_gates = OfflineHarness._run_gates
+
+    def append_gate_result_spoof(self: OfflineHarness, candidate, baseline):  # type: ignore[no-untyped-def]
+        trace = original_run_gates(self, candidate, baseline)
+        runs_dir = self._workspace / "evals" / "runs"
+        run_dirs = [path for path in runs_dir.iterdir() if path.is_dir()]
+        assert len(run_dirs) == 1
+        evidence_path = run_dirs[0] / "judge_evidence.jsonl"
+        with evidence_path.open("a", encoding="utf-8") as evidence_file:
+            evidence_file.write(
+                json.dumps(
+                    {
+                        "recordId": f"semantic:{candidate.content_hash}:spoof",
+                        "judgeMode": "local_fallback",
+                        "score": {
+                            "process": 1.0,
+                            "output": 1.0,
+                            "token": 1.0,
+                            "aggregate": 1.0,
+                        },
+                        "calibrated": False,
+                    }
+                )
+                + "\n"
+            )
+        return trace
+
+    monkeypatch.setattr(OfflineHarness, "_run_gates", append_gate_result_spoof)
+    manifest = OfflineHarness(workspace=tmp_path, gates=[_PassingSemanticGate()]).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    evidence_text = (run_dir / "judge_evidence.jsonl").read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in evidence_text.splitlines()]
+    assert "spoof" not in evidence_text
+    assert [row["recordId"] for row in rows] == [
+        f"semantic:{manifest.gate_verdicts[0].candidate_hash}"
+    ]
+    assert manifest.judge_evidence_paths == {"semantic_fidelity": "judge_evidence.jsonl"}
+
+
+def test_harness_preserves_multiple_trusted_semantic_evidence_rows(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "multiple_semantic_candidates.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'multiple-semantic-candidates-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [
+        {
+            'skillName': payload['skillName'],
+            'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse verbose answers. Remove required detail.\\n',
+            'score': 0.95,
+            'iteration': 1,
+            'rationale': 'semantic gate should reject this candidate'
+        },
+        {
+            'skillName': payload['skillName'],
+            'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+            'score': 0.9,
+            'iteration': 2,
+            'rationale': 'valid candidate should pass'
+        }
+    ]
+}))
+""".lstrip(),
+    )
+
+    manifest = OfflineHarness(
+        workspace=tmp_path,
+        gates=[_FirstCandidateFailingSemanticGate()],
+    ).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "judge_evidence.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    semantic_results = [
+        result for result in manifest.gate_verdicts if result.gate_name == "4-semantic-fidelity"
+    ]
+    assert manifest.final_status == "promoted_to_pr"
+    assert len(semantic_results) == 2
+    assert len(rows) == 2
+    assert [row["recordId"] for row in rows] == [
+        f"semantic:{result.candidate_hash}" for result in semantic_results
+    ]
 
 
 def test_harness_fails_closed_on_optimizer_spoofed_semantic_judge_evidence_directory(

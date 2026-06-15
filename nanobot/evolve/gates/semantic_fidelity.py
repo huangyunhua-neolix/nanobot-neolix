@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import os
 import stat
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
+from nanobot.evolve.artifacts import atomic_write_text
 from nanobot.evolve.gates import Gate, GateResult
 from nanobot.evolve.gates._constants import RUBRIC_PASS_THRESHOLD
 
@@ -15,7 +15,63 @@ if TYPE_CHECKING:
     from nanobot.evolve.schemas import Baseline, Candidate, JudgeEvidence
 
 
-class SemanticFidelityGate(Gate):
+class SemanticEvidenceRecorder(Gate):
+    NONDETERMINISTIC: ClassVar[bool] = True
+
+    def __init__(self, gate: Gate, *, evidence_dir: Path | None = None) -> None:
+        self._gate = gate
+        self._evidence_dir = evidence_dir
+        self._evidence_rows: list[str] = []
+
+    @property
+    def name(self) -> str:
+        return self._gate.name
+
+    def evaluate(self, candidate: "Candidate", baseline: "Baseline") -> GateResult:
+        result = self._gate.evaluate(candidate, baseline)
+        if (
+            result.gate_name == "4-semantic-fidelity"
+            and result.evidence is not None
+            and result.evidence.get("judge_evidence_path") == "judge_evidence.jsonl"
+        ):
+            self._record_result_evidence(result)
+        return result
+
+    def cleanup_after_timeout(self) -> None:
+        self._gate.cleanup_after_timeout()
+
+    def publish_evidence(self) -> str | None:
+        if self._evidence_dir is None or not self._evidence_rows:
+            return None
+        path = self._evidence_dir / "judge_evidence.jsonl"
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISREG(mode):
+                raise OSError(f"semantic judge evidence path is not a regular file: {path}")
+        atomic_write_text(path, "\n".join(self._evidence_rows) + "\n")
+        return path.name
+
+    def _record_result_evidence(self, result: GateResult) -> None:
+        from nanobot.evolve.schemas import JudgeEvidence, RubricScore
+
+        evidence = JudgeEvidence(
+            record_id=f"semantic:{result.candidate_hash}",
+            judge_mode=result.evidence.get("judge_mode", "local_fallback"),  # type: ignore[arg-type]
+            score=RubricScore(
+                process=float(result.metrics.get("semantic_process", 0.0)),
+                output=float(result.metrics.get("semantic_output", 0.0)),
+                token=float(result.metrics.get("semantic_token", 0.0)),
+                aggregate=float(result.metrics.get("semantic_aggregate", 0.0)),
+            ),
+            calibrated=result.evidence.get("calibrated") == "true",
+        )
+        self._evidence_rows.append(evidence.model_dump_json(by_alias=True))
+
+
+class SemanticFidelityGate(SemanticEvidenceRecorder):
     NONDETERMINISTIC: ClassVar[bool] = True
 
     def __init__(
@@ -25,14 +81,16 @@ class SemanticFidelityGate(Gate):
         require_external: bool = False,
         aux_client: "AuxJudgeClient | None" = None,
     ) -> None:
-        self._evidence_dir = evidence_dir
+        super().__init__(self, evidence_dir=evidence_dir)
         self._require_external = require_external
         self._aux_client = aux_client
-        self._evidence_initialized = False
 
     @property
     def name(self) -> str:
         return "4-semantic-fidelity"
+
+    def cleanup_after_timeout(self) -> None:
+        pass
 
     def evaluate(self, candidate: "Candidate", baseline: "Baseline") -> GateResult:
         from nanobot.evolve.judges.calibration import CalibrationRecord
@@ -115,31 +173,5 @@ class SemanticFidelityGate(Gate):
     def _write_evidence(self, evidence: JudgeEvidence) -> str | None:
         if self._evidence_dir is None:
             return None
-        self._evidence_dir.mkdir(parents=True, exist_ok=True)
-        path = self._evidence_dir / "judge_evidence.jsonl"
-        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
-        if not self._evidence_initialized:
-            flags |= os.O_TRUNC | os.O_EXCL
-        fd: int | None = None
-        try:
-            try:
-                fd = os.open(path, flags, 0o600)
-            except FileExistsError:
-                mode_bits = path.lstat().st_mode
-                if not stat.S_ISREG(mode_bits):
-                    raise OSError(
-                        f"semantic judge evidence path is not a regular file: {path}"
-                    ) from None
-                if self._evidence_initialized:
-                    fd = os.open(path, os.O_WRONLY | os.O_APPEND)
-                else:
-                    path.unlink()
-                    fd = os.open(path, flags, 0o600)
-            with os.fdopen(fd, "a", encoding="utf-8") as fh:
-                fd = None
-                fh.write(evidence.model_dump_json(by_alias=True) + "\n")
-        finally:
-            if fd is not None:
-                os.close(fd)
-        self._evidence_initialized = True
-        return path.name
+        self._evidence_rows.append(evidence.model_dump_json(by_alias=True))
+        return "judge_evidence.jsonl"

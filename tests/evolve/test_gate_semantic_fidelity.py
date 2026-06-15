@@ -58,7 +58,8 @@ def test_semantic_fidelity_gate_passes_candidate_above_threshold() -> None:
 
 
 def test_semantic_fidelity_gate_records_local_fallback_evidence_path(tmp_path: Path) -> None:
-    result = SemanticFidelityGate(evidence_dir=tmp_path).evaluate(
+    gate = SemanticFidelityGate(evidence_dir=tmp_path)
+    result = gate.evaluate(
         _candidate("Use concise answers. Include one concrete example."),
         _baseline(),
     )
@@ -70,6 +71,7 @@ def test_semantic_fidelity_gate_records_local_fallback_evidence_path(tmp_path: P
     assert result.evidence["judge_evidence_path"] == "judge_evidence.jsonl"
 
     evidence_path = tmp_path / "judge_evidence.jsonl"
+    gate.publish_evidence()
     rows = [json.loads(line) for line in evidence_path.read_text(encoding="utf-8").splitlines()]
     assert rows[0]["judgeMode"] == "local_fallback"
     assert rows[0]["score"]["aggregate"] >= 0.8
@@ -91,6 +93,7 @@ def test_semantic_fidelity_gate_replaces_preexisting_regular_evidence_on_first_w
         _baseline(),
     )
 
+    gate.publish_evidence()
     evidence_text = evidence_path.read_text(encoding="utf-8")
     rows = [json.loads(line) for line in evidence_text.splitlines()]
     assert "optimizer-controlled evidence" not in evidence_text

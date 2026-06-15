@@ -32,7 +32,7 @@ from nanobot.evolve.artifacts import (
 from nanobot.evolve.deploy import assemble_pr_body
 from nanobot.evolve.exceptions import ConfigError
 from nanobot.evolve.gates import GATES, Gate, GateResult
-from nanobot.evolve.gates.semantic_fidelity import SemanticFidelityGate
+from nanobot.evolve.gates.semantic_fidelity import SemanticEvidenceRecorder, SemanticFidelityGate
 from nanobot.evolve.judges.rubric import JudgeConfig, JudgePool
 from nanobot.evolve.optimizer.adapter import OptimizerAdapter
 from nanobot.evolve.optimizer.schemas import OptimizerCandidate, OptimizerInput, OptimizerResult
@@ -362,6 +362,8 @@ class OfflineHarness:
         for gate in self._gates:
             if isinstance(gate, SemanticFidelityGate):
                 gates.append(SemanticFidelityGate(evidence_dir=run_dir))
+            elif gate.name == "4-semantic-fidelity":
+                gates.append(SemanticEvidenceRecorder(gate, evidence_dir=run_dir))
             else:
                 gates.append(gate)
         return gates
@@ -933,6 +935,10 @@ class OfflineHarness:
             for result in gate_verdicts
         )
         if semantic_evidence_produced:
+            for gate in self._gates:
+                if isinstance(gate, SemanticEvidenceRecorder | SemanticFidelityGate):
+                    gate.publish_evidence()
+                    break
             if not semantic_evidence_path.is_file():
                 semantic_evidence_produced = False
         else:
