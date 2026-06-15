@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from nanobot.evolve.artifacts import (
+    OwnedJsonlEvidenceWriter,
     atomic_write_text,
     markdown_review_text,
     redact_json_value,
@@ -169,3 +171,83 @@ def test_atomic_write_text_removes_temp_file_when_replace_fails(
 
     assert not path.exists()
     assert list(tmp_path.glob("artifact.md.*.tmp")) == []
+
+
+def test_owned_jsonl_evidence_writer_removes_regular_file_and_symlink(tmp_path: Path) -> None:
+    path = tmp_path / "judge_evidence.jsonl"
+    path.write_text("optimizer-controlled\n", encoding="utf-8")
+    writer = OwnedJsonlEvidenceWriter(path, evidence_name="semantic")
+
+    writer.remove_untrusted()
+
+    assert not path.exists()
+
+    target = tmp_path / "outside.jsonl"
+    target.write_text("do not overwrite\n", encoding="utf-8")
+    path.symlink_to(target)
+
+    writer.remove_untrusted()
+
+    assert not path.exists()
+    assert target.read_text(encoding="utf-8") == "do not overwrite\n"
+
+
+def test_owned_jsonl_evidence_writer_fails_closed_on_directory_target(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "judge_evidence.jsonl"
+    path.mkdir()
+    writer = OwnedJsonlEvidenceWriter(path, evidence_name="semantic")
+
+    with pytest.raises(IsADirectoryError, match="semantic judge evidence path"):
+        writer.remove_untrusted()
+
+    assert path.is_dir()
+
+
+def test_owned_jsonl_evidence_writer_fails_closed_on_fifo_target(tmp_path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("mkfifo is unavailable on this platform")
+    path = tmp_path / "judge_evidence.jsonl"
+    os.mkfifo(path)
+    writer = OwnedJsonlEvidenceWriter(path, evidence_name="semantic")
+
+    with pytest.raises(OSError, match="semantic judge evidence path"):
+        writer.remove_untrusted()
+
+    assert path.exists()
+
+
+def test_owned_jsonl_evidence_writer_publish_returns_none_without_rows(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "judge_evidence.jsonl"
+    writer = OwnedJsonlEvidenceWriter(path, evidence_name="semantic")
+
+    assert writer.publish() is None
+    assert not path.exists()
+
+
+def test_owned_jsonl_evidence_writer_publishes_buffered_rows(tmp_path: Path) -> None:
+    path = tmp_path / "judge_evidence.jsonl"
+    writer = OwnedJsonlEvidenceWriter(path, evidence_name="semantic")
+    writer.buffer('{"recordId":"one"}')
+    writer.buffer('{"recordId":"two"}')
+
+    assert writer.publish() == "judge_evidence.jsonl"
+
+    assert path.read_text(encoding="utf-8") == '{"recordId":"one"}\n{"recordId":"two"}\n'
+
+
+def test_owned_jsonl_evidence_writer_publish_fails_closed_on_directory_target(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "judge_evidence.jsonl"
+    path.mkdir()
+    writer = OwnedJsonlEvidenceWriter(path, evidence_name="semantic")
+    writer.buffer('{"recordId":"one"}')
+
+    with pytest.raises(OSError, match="semantic judge evidence path"):
+        writer.publish()
+
+    assert path.is_dir()
