@@ -1310,13 +1310,40 @@ def _normalized_cache_impact(cache_impact: object) -> str:
     return "candidate_absent"
 
 
+def _increment_cache_impact_count(
+    counts: PromptTemplateCacheImpactCounts,
+    cache_impact: object,
+) -> None:
+    impact = _normalized_cache_impact(cache_impact)
+    setattr(counts, impact, getattr(counts, impact) + 1)
+
+
 def summarize_prompt_template_cache_impact(
     validation_results: list[PromptTemplateValidationResult],
 ) -> PromptTemplateCacheImpactCounts:
     counts = PromptTemplateCacheImpactCounts()
+    if not validation_results:
+        counts.candidate_absent = 1
+        return counts
     for result in validation_results:
-        impact = _normalized_cache_impact(getattr(result, "cache_impact", None))
-        setattr(counts, impact, getattr(counts, impact) + 1)
+        _increment_cache_impact_count(counts, getattr(result, "cache_impact", None))
+    return counts
+
+
+def _summarize_prompt_template_candidate_cache_impact(
+    candidates: list[PromptTemplateCandidate],
+    validation_results: list[PromptTemplateValidationResult],
+) -> PromptTemplateCacheImpactCounts:
+    counts = PromptTemplateCacheImpactCounts()
+    for index, candidate in enumerate(candidates):
+        result = validation_results[index] if index < len(validation_results) else None
+        if result is None or (
+            result.skill_name != candidate.skill_name
+            or result.baseline_snapshot_hash != candidate.baseline_snapshot_hash
+        ):
+            _increment_cache_impact_count(counts, "candidate_absent")
+            continue
+        _increment_cache_impact_count(counts, result.cache_impact)
     return counts
 
 
@@ -1360,7 +1387,7 @@ def render_prompt_template_review(
     validation_results: list[PromptTemplateValidationResult],
 ) -> str:
     snapshots_by_name = {snapshot.skill_name: snapshot for snapshot in snapshots}
-    cache_counts = summarize_prompt_template_cache_impact(validation_results)
+    cache_counts = _summarize_prompt_template_candidate_cache_impact(candidates, validation_results)
     lines = [
         "# Prompt Template Review",
         "",

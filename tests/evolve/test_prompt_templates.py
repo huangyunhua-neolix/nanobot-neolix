@@ -117,6 +117,33 @@ def test_prompt_template_cache_impact_counts_include_absent_and_noop() -> None:
     assert counts.candidate_noop == 1
 
 
+def test_prompt_template_cache_impact_empty_summary_counts_absent_candidate() -> None:
+    counts = summarize_prompt_template_cache_impact([])
+
+    assert counts.cache_neutral == 0
+    assert counts.cache_sensitive_rejected == 0
+    assert counts.cache_unknown_rejected == 0
+    assert counts.candidate_absent == 1
+    assert counts.candidate_noop == 0
+
+
+def test_render_prompt_template_review_counts_missing_validation_as_absent_candidate() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable text.\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, body.replace("Editable text.", "Clearer text."))
+
+    review = render_prompt_template_review([snapshot], [candidate], [])
+
+    assert "- candidate_absent: 1" in review
+    assert "Cache impact: `candidate_absent`" in review
+    assert "Verdict: `missing-validation`" in review
+
+
 def test_render_prompt_template_review_includes_reason_codes_and_cache_counts() -> None:
     body = (
         "Before\n"
