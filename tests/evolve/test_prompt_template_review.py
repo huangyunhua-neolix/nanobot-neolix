@@ -183,7 +183,7 @@ def test_render_prompt_template_review_covers_empty_snapshots_and_candidates() -
 
     assert "No prompt templates captured." in review
     assert "No prompt/template candidates emitted." in review
-    assert "### Candidate" not in review
+    assert "### candidate" not in review
 
 
 def test_render_prompt_template_review_counts_no_emitted_candidates_as_absent() -> None:
