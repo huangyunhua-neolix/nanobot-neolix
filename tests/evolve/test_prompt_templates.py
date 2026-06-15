@@ -207,6 +207,42 @@ def test_parse_editable_regions_ignores_markers_inside_fenced_code() -> None:
     assert [(region.start_line, region.end_line) for region in regions] == [(6, 6)]
 
 
+def test_parse_editable_regions_requires_strict_backtick_fence_closer() -> None:
+    body = (
+        "```markdown\n"
+        "```not a closing fence\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "ignored\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "```\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "real\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+
+    regions = parse_editable_regions(body)
+
+    assert [(region.start_line, region.end_line) for region in regions] == [(7, 7)]
+
+
+def test_parse_editable_regions_requires_strict_tilde_fence_closer() -> None:
+    body = (
+        "~~~markdown\n"
+        "~~~not a closing fence\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "ignored\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "~~~\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "real\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+
+    regions = parse_editable_regions(body)
+
+    assert [(region.start_line, region.end_line) for region in regions] == [(7, 7)]
+
+
 def test_parse_editable_regions_ignores_markers_inside_indented_tilde_fences() -> None:
     body = (
         "  ~~~markdown\n"

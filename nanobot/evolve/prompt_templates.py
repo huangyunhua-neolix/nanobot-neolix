@@ -544,7 +544,11 @@ def parse_editable_regions(body: str) -> list[EditableRegion]:
                 fence_marker = marker[0]
                 fence_length = len(marker)
                 continue
-            if marker[0] == fence_marker and len(marker) >= fence_length:
+            if (
+                marker[0] == fence_marker
+                and len(marker) >= fence_length
+                and line[fence_match.end() :].strip(" \t") == ""
+            ):
                 fence_marker = None
                 fence_length = 0
                 continue
