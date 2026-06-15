@@ -729,6 +729,7 @@ def _contains_tool_enablement(normalized: str) -> bool:
         "execute",
         "call",
         "invoke",
+        "invocation",
         "open",
         "spawn",
         "launch",
@@ -748,9 +749,14 @@ def _contains_tool_enablement(normalized: str) -> bool:
         "execute",
         "call",
         "invoke",
+        "invocation",
         "open",
         "spawn",
         "launch",
+        "enable",
+        "enabled",
+        "allow",
+        "allowed",
         "directly",
         "commands",
         "tool",
@@ -765,8 +771,10 @@ def _contains_tool_enablement(normalized: str) -> bool:
     predicate_found = bool(token_set & tool_predicate_tokens) or any(
         phrase in normalized for phrase in ("may be used", "can be used")
     )
-    process_enablement_found = "process" in token_set and bool(
-        token_set & process_predicate_tokens
+    process_enablement_found = "process" in token_set and (
+        bool(token_set & process_predicate_tokens)
+        or "may be used" in normalized
+        or "can be used" in normalized
     )
     return (subject_found and predicate_found) or process_enablement_found
 
