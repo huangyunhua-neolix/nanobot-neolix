@@ -107,6 +107,8 @@ _TOOL_METADATA_ARTIFACT_PATHS: dict[str, str] = {
     "tool_metadata_review": "tool_metadata_review.md",
 }
 _TOOL_METADATA_JUDGE_EVIDENCE_PATH = "tool_metadata_judge_evidence.jsonl"
+_TOOL_METADATA_DEFAULT_REASON_CODE = "tool-metadata-rejected"
+_PROMPT_TEMPLATE_DEFAULT_REASON_CODE = "prompt-template-rejected"
 _PROMPT_TEMPLATE_ARTIFACT_PATHS: dict[str, str] = {
     "prompt_template_snapshot": "prompt_template_snapshot.json",
     "prompt_template_candidates": "prompt_template_candidates.jsonl",
@@ -231,8 +233,12 @@ def _tool_metadata_artifact_plan() -> dict[str, str]:
     return dict(_TOOL_METADATA_ARTIFACT_PATHS)
 
 
+def _prompt_template_artifact_plan() -> dict[str, str]:
+    return dict(_PROMPT_TEMPLATE_ARTIFACT_PATHS)
+
+
 def _metadata_rejection_reason(result: ToolMetadataValidationResult) -> str:
-    reason_code = result.reason_code or "tool-metadata-rejected"
+    reason_code = result.reason_code or _TOOL_METADATA_DEFAULT_REASON_CODE
     reason = result.reason or reason_code
     return _safe_single_line_reason(reason)
 
@@ -248,7 +254,7 @@ def _prompt_template_candidate_hash(candidate: PromptTemplateCandidate) -> str:
 
 
 def _prompt_template_rejection_reason(result: PromptTemplateValidationResult) -> str:
-    reason_code = result.reason_code or "prompt-template-rejected"
+    reason_code = result.reason_code or _PROMPT_TEMPLATE_DEFAULT_REASON_CODE
     reason = result.reason or reason_code
     return _safe_single_line_reason(reason)
 
@@ -590,7 +596,7 @@ class OfflineHarness:
         if not snapshot and not candidates:
             return {}
 
-        artifact_paths = dict(_PROMPT_TEMPLATE_ARTIFACT_PATHS)
+        artifact_paths = _prompt_template_artifact_plan()
         write_redacted_json_artifact(
             run_dir / artifact_paths["prompt_template_snapshot"],
             [item.model_dump(mode="json", by_alias=True) for item in snapshot],
@@ -697,7 +703,9 @@ class OfflineHarness:
                     ValidationFailure(
                         candidate_index=index,
                         candidate_hash=_tool_metadata_candidate_hash(metadata_candidate),
-                        reason_code=validation_result.reason_code or "tool-metadata-rejected",
+                        reason_code=(
+                            validation_result.reason_code or _TOOL_METADATA_DEFAULT_REASON_CODE
+                        ),
                         reason=_metadata_rejection_reason(validation_result),
                     )
                 )
@@ -720,7 +728,9 @@ class OfflineHarness:
                     ValidationFailure(
                         candidate_index=index,
                         candidate_hash=_prompt_template_candidate_hash(prompt_candidate),
-                        reason_code=prompt_result.reason_code or "prompt-template-rejected",
+                        reason_code=(
+                            prompt_result.reason_code or _PROMPT_TEMPLATE_DEFAULT_REASON_CODE
+                        ),
                         reason=_prompt_template_rejection_reason(prompt_result),
                     )
                 )
@@ -771,11 +781,13 @@ class OfflineHarness:
                 promoted = candidate
                 break
 
-        metadata_rejections_exist = any(
+        # TODO: If a third artifact candidate domain is added, extract the duplicated
+        # capture/validate/write/reject glue into a CandidateDomainPipeline.
+        domain_rejections_exist = any(
             result.verdict == "reject" for result in tool_metadata_validation_results
         ) or any(result.verdict == "reject" for result in prompt_template_validation_results)
         if optimizer_result.error and optimizer_result.error.code == "no_improvement":
-            if metadata_rejections_exist and not valid_candidates:
+            if domain_rejections_exist and not valid_candidates:
                 final_status = "rejected_by_validation"
             else:
                 final_status = "no_improvement"
