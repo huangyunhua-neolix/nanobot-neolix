@@ -282,6 +282,54 @@ def _region_text(body: str, region: EditableRegion) -> str:
     return "\n".join(lines[region.start_line : region.end_line + 1])
 
 
+def _proposed_region_texts(
+    *,
+    baseline_body: str,
+    proposed_body: str,
+    regions: list[EditableRegion],
+) -> list[str]:
+    baseline_lines = baseline_body.splitlines()
+    proposed_lines = proposed_body.splitlines()
+    matcher = difflib.SequenceMatcher(
+        a=baseline_lines,
+        b=proposed_lines,
+        autojunk=False,
+    )
+    region_indices = range(len(regions))
+    proposed_region_lines: dict[int, list[str]] = {index: [] for index in region_indices}
+    for tag, baseline_start, baseline_end, proposed_start, proposed_end in matcher.get_opcodes():
+        if tag == "equal":
+            line_pairs = zip(
+                range(baseline_start, baseline_end),
+                proposed_lines[proposed_start:proposed_end],
+                strict=True,
+            )
+            for baseline_line_number, line in line_pairs:
+                for index, region in enumerate(regions):
+                    if region.start_line <= baseline_line_number <= region.end_line:
+                        proposed_region_lines[index].append(line)
+            continue
+        anchored_regions = {
+            index
+            for index, region in enumerate(regions)
+            if baseline_start <= region.end_line and baseline_end > region.start_line
+        }
+        if not anchored_regions and baseline_start == baseline_end:
+            anchor_lines = _insertion_anchor_lines(baseline_start, len(baseline_lines))
+            anchored_regions = {
+                index
+                for index, region in enumerate(regions)
+                if any(region.start_line <= line_number <= region.end_line for line_number in anchor_lines)
+            }
+        for index in anchored_regions:
+            proposed_region_lines[index].extend(proposed_lines[proposed_start:proposed_end])
+    return [
+        "\n".join(proposed_region_lines[index])
+        for index in region_indices
+        if proposed_region_lines[index]
+    ]
+
+
 def _proposed_changed_text(proposed_body: str, baseline_body: str) -> str:
     baseline_lines = baseline_body.splitlines()
     proposed_lines = proposed_body.splitlines()
@@ -467,9 +515,18 @@ def validate_prompt_template_candidate(
                 cache_impact="cache_neutral",
                 changed_line_numbers=changed_line_numbers,
             )
-        if _contains_phrase(
-            _proposed_changed_text(proposed_body, baseline_body),
-            _DENIED_WEAKENING_PHRASES,
+        proposed_changed_text = _proposed_changed_text(proposed_body, baseline_body)
+        denied_phrase_texts = [
+            proposed_changed_text,
+            *_proposed_region_texts(
+                baseline_body=baseline_body,
+                proposed_body=proposed_body,
+                regions=touched_regions,
+            ),
+        ]
+        if any(
+            _contains_phrase(text, _DENIED_WEAKENING_PHRASES)
+            for text in denied_phrase_texts
         ):
             return _reject_prompt_result(
                 candidate=candidate,
