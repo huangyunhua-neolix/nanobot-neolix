@@ -126,6 +126,14 @@ _WEAKENING_PREDICATES = (
     "may be ignored",
     "can be ignored",
     "no need for",
+    "may be waived",
+    "waived",
+    "discretionary",
+    "may be used",
+    "use",
+    "commands",
+    "tool",
+    "calls",
     "instead",
     "rather than",
     "directly",
@@ -386,13 +394,20 @@ def _body_too_large(body: str) -> bool:
 
 
 def _has_frontmatter_mutation(body: str) -> bool:
+    pending_yaml_key: str | None = None
     for line in body.splitlines():
         stripped = line.strip()
         normalized_delimiter_line = _normalize_safety_text(stripped)
         if re.match(r"^(?:---|\.\.\.)(?:\s|#|$)", normalized_delimiter_line):
             return True
+        if pending_yaml_key is not None and stripped.startswith(":"):
+            return _is_safety_control_field(pending_yaml_key, stripped[1:])
+        pending_yaml_key = None
         field_name, separator, field_value = stripped.partition(":")
         if not separator:
+            normalized_standalone_key = re.sub(r"[\s-]+", "_", _normalize_field_name(stripped))
+            if any(token in normalized_standalone_key for token in _SAFETY_CONTROL_FIELD_KEY_TOKENS):
+                pending_yaml_key = normalized_standalone_key
             continue
         normalized_field_name = _normalize_field_name(field_name)
         normalized_key = re.sub(r"[\s-]+", "_", normalized_field_name)
@@ -644,6 +659,8 @@ def _is_safety_control_field(normalized_key: str, field_value: str) -> bool:
     if not key_has_safety_control:
         return False
     normalized_value = _normalize_safety_text(field_value, map_confusables=True)
+    if not normalized_value:
+        return True
     normalized_value_key = re.sub(r"[\s-]+", "_", normalized_value)
     return any(
         token in normalized_value or token in normalized_value_key
@@ -654,10 +671,14 @@ def _is_safety_control_field(normalized_key: str, field_value: str) -> bool:
 def _contains_weakening_pattern(text: str) -> bool:
     normalized = _normalize_safety_text(text, map_confusables=True)
     normalized = (
-        normalized.replace(" isn't ", " is not ")
+        normalized.replace("’", "'")
+        .replace("`", "'")
+        .replace("´", "'")
+        .replace(" isn't ", " is not ")
         .replace(" aren't ", " are not ")
         .replace(" doesn't ", " does not ")
         .replace(" don't ", " do not ")
+        .replace(" needn't ", " need not ")
         .replace(" should not be ", " not ")
         .replace(" must not be ", " not ")
         .replace(" will not be ", " not ")
@@ -1021,6 +1042,7 @@ def validate_prompt_template_candidate(
         )
         proposed_safety_texts = [
             *proposed_region_texts,
+            "\n".join(proposed_region_texts),
             *_changed_text_contexts(proposed_body, proposed_changed_line_numbers),
         ]
         if _contains_non_ascii_letter_or_symbol(proposed_changed_text) or any(

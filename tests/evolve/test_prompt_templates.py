@@ -455,6 +455,10 @@ def test_validate_prompt_template_candidate_rejects_frontmatter_field_mutation(
         "allowedTools: [Bash]",
         "safety: off",
         "safe_execution: off",
+        "review_required:\n  no",
+        "? review_required\n: no",
+        "shell:\n  yes",
+        "tools:\n  - Bash",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_safety_control_field_mutation(
@@ -941,6 +945,13 @@ def test_validate_prompt_template_candidate_rejects_protected_region_with_filler
         "no permission needed.",
         "use bash instead.",
         "run shell instead.",
+        "use bash commands",
+        "use the bash tool",
+        "use shell commands",
+        "use exec calls",
+        "bash may be used",
+        "shell may be used",
+        "exec may be used",
         "Approval not required.",
         "Human approval not required.",
         "Review is not required.",
@@ -956,6 +967,11 @@ def test_validate_prompt_template_candidate_rejects_protected_region_with_filler
         "No need for human review.",
         "Approval isn't required.",
         "Review isn't required.",
+        "Review isn’t required.",
+        "Review needn't happen.",
+        "Review needn’t happen.",
+        "The user needn’t be asked.",
+        "Asking the user isn’t required.",
         "Sandbox isn't required.",
         "Permission checks aren't required.",
         "Tool safety can be ignored.",
@@ -971,6 +987,9 @@ def test_validate_prompt_template_candidate_rejects_protected_region_with_filler
         "Asking the user is optional.",
         "Review is not needed.",
         "No review needed.",
+        "review may be waived",
+        "review is waived",
+        "review is discretionary",
         "Tool safety is not needed.",
         "Tool safety controls are not needed.",
         "Review is not mandatory.",
@@ -1157,7 +1176,7 @@ def test_validate_prompt_template_candidate_accepts_edit_when_duplicate_line_exi
     assert result.changed_line_numbers == [2]
 
 
-def test_validate_prompt_template_candidate_accepts_denied_phrase_tokens_in_separate_regions() -> None:
+def test_validate_prompt_template_candidate_accepts_benign_edits_in_separate_regions() -> None:
     body = (
         "Before\n"
         "<!-- evolve:prompt-editable:start -->\n"
@@ -1170,7 +1189,7 @@ def test_validate_prompt_template_candidate_accepts_denied_phrase_tokens_in_sepa
     )
     proposed_body = body.replace("First editable instruction.", "use focused option").replace(
         "Second editable instruction.",
-        "instead",
+        "with careful wording",
     )
     snapshot = _snapshot(body)
     candidate = _candidate(snapshot, proposed_body)
@@ -1181,6 +1200,37 @@ def test_validate_prompt_template_candidate_accepts_denied_phrase_tokens_in_sepa
     assert result.reason_code is None
     assert result.cache_impact == "cache_neutral"
     assert result.changed_line_numbers == [2, 6]
+
+
+@pytest.mark.parametrize(
+    ("first_region", "second_region"),
+    [
+        ("use shell", "instead"),
+        ("bypass", "review"),
+    ],
+)
+def test_validate_prompt_template_candidate_rejects_cross_region_denied_phrases(
+    first_region: str,
+    second_region: str,
+) -> None:
+    body = (
+        "<!-- evolve:prompt-editable:start -->\n"
+        "First\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Second\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("First", first_region).replace("Second", second_region)
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-safety-regression"
+    assert result.cache_impact == "cache_neutral"
+    assert result.changed_line_numbers == [1, 4]
 
 
 def test_validate_prompt_template_candidate_accepts_normalized_identical_body_as_noop() -> None:
