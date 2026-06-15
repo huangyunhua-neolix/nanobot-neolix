@@ -331,6 +331,9 @@ def _changed_baseline_line_numbers(
             if editable_anchor_lines:
                 changed_lines.update(editable_anchor_lines)
                 continue
+            if _insertion_in_empty_region(baseline_start, editable_regions):
+                changed_lines.add(baseline_start)
+                continue
         if anchor_lines:
             changed_lines.add(anchor_lines[0])
         elif proposed_start != proposed_end:
@@ -348,7 +351,18 @@ def _insertion_anchor_lines(baseline_start: int, baseline_line_count: int) -> li
 
 
 def _line_in_regions(line_number: int, regions: list[EditableRegion]) -> bool:
-    return any(region.start_line <= line_number <= region.end_line for region in regions)
+    return any(
+        region.start_line <= line_number <= region.end_line
+        or (region.start_line > region.end_line and line_number == region.start_line)
+        for region in regions
+    )
+
+
+def _insertion_in_empty_region(baseline_start: int, regions: list[EditableRegion]) -> bool:
+    return any(
+        region.start_line > region.end_line and baseline_start == region.start_line
+        for region in regions
+    )
 
 
 def _regions_touched_by_lines(
@@ -357,7 +371,11 @@ def _regions_touched_by_lines(
     return [
         region
         for region in regions
-        if any(region.start_line <= line_number <= region.end_line for line_number in changed_line_numbers)
+        if any(
+            region.start_line <= line_number <= region.end_line
+            or (region.start_line > region.end_line and line_number == region.start_line)
+            for line_number in changed_line_numbers
+        )
     ]
 
 
@@ -662,6 +680,15 @@ def validate_prompt_template_candidate(
             cache_impact="candidate_noop",
         )
 
+    proposed_changed_text = _proposed_changed_text(proposed_body, baseline_body)
+    if _has_frontmatter_mutation(proposed_changed_text):
+        return _reject_prompt_result(
+            candidate=candidate,
+            reason_code="prompt-frontmatter-mutation",
+            reason="Proposed prompt template body includes frontmatter-like content.",
+            cache_impact="cache_sensitive_rejected",
+        )
+
     try:
         editable_regions = parse_editable_regions(baseline_body)
         proposed_regions = parse_editable_regions(proposed_body)
@@ -673,14 +700,6 @@ def validate_prompt_template_candidate(
                 cache_impact="cache_unknown_rejected",
             )
 
-        proposed_changed_text = _proposed_changed_text(proposed_body, baseline_body)
-        if _has_frontmatter_mutation(proposed_changed_text):
-            return _reject_prompt_result(
-                candidate=candidate,
-                reason_code="prompt-frontmatter-mutation",
-                reason="Proposed prompt template body includes frontmatter-like content.",
-                cache_impact="cache_sensitive_rejected",
-            )
         if _contains_marker_like_editable_boundary(proposed_changed_text):
             return _reject_prompt_result(
                 candidate=candidate,

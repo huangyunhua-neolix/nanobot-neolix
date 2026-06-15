@@ -480,6 +480,48 @@ def test_validate_prompt_template_candidate_accepts_insert_at_editable_region_en
     assert result.cache_impact == "cache_neutral"
 
 
+def test_validate_prompt_template_candidate_accepts_insert_inside_empty_editable_region() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "After\n"
+    )
+    proposed_body = body.replace(
+        "<!-- evolve:prompt-editable:end -->",
+        "Added editable line.\n<!-- evolve:prompt-editable:end -->",
+    )
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "accept"
+    assert result.reason_code is None
+    assert result.cache_impact == "cache_neutral"
+
+
+def test_validate_prompt_template_candidate_prefers_frontmatter_over_boundary_failure() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace(
+        "Editable",
+        "description: changed\n<!-- evolve:prompt-editable:start -->",
+    )
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-frontmatter-mutation"
+    assert result.cache_impact == "cache_sensitive_rejected"
+
+
 def test_validate_prompt_template_candidate_rejects_unclosed_fence_hiding_proposed_end_marker() -> None:
     body = (
         "Before\n"
