@@ -97,6 +97,12 @@ _PROTECTED_WEAKENING_SUBJECTS = (
     "tool safety controls",
     "bash",
     "shell",
+    "sh",
+    "zsh",
+    "terminal",
+    "command line",
+    "subprocess",
+    "process",
     "exec",
 )
 _WEAKENING_PREDICATES = (
@@ -158,6 +164,12 @@ _SAFETY_CONTROL_FIELD_KEY_TOKENS = (
     "tool_safety",
     "shell",
     "bash",
+    "sh",
+    "zsh",
+    "terminal",
+    "command_line",
+    "subprocess",
+    "process",
 )
 _SAFETY_CONTROL_FIELD_VALUE_TOKENS = (
     "false",
