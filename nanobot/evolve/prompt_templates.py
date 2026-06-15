@@ -19,7 +19,7 @@ from nanobot.evolve.schemas import (
 
 _EDITABLE_START = "<!-- evolve:prompt-editable:start -->"
 _EDITABLE_END = "<!-- evolve:prompt-editable:end -->"
-_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _MAX_PROMPT_TEMPLATE_BODY_BYTES = 128 * 1024
 _MAX_PROMPT_TEMPLATE_BODY_LINES = 2_000
 _FRONTMATTER_FIELD_NAMES = frozenset(
@@ -73,6 +73,12 @@ _DENIED_WEAKENING_PHRASES = (
     "apply automatically",
     "use shell instead",
     "hide from user",
+    "do not ask the user",
+    "proceed without approval",
+    "skip human review",
+    "no human approval required",
+    "disable sandbox",
+    "execute untrusted code",
 )
 # Local skeleton mapping for safety phrase matching only; this is not a full
 # Unicode confusables implementation.
@@ -252,7 +258,7 @@ def _body_too_large(body: str) -> bool:
 def _has_frontmatter_mutation(body: str) -> bool:
     for line in body.splitlines():
         stripped = line.strip()
-        if stripped == "---":
+        if re.match(r"^(?:---|\.\.\.)(?:\s|#|$)", stripped):
             return True
         field_name, separator, _field_value = stripped.partition(":")
         if not separator:
