@@ -450,6 +450,11 @@ def test_validate_prompt_template_candidate_rejects_frontmatter_field_mutation(
         "bash: yes",
         "shell: enabled",
         "bash: enabled",
+        "tools: [Bash]",
+        "allowed_tools: [Bash]",
+        "allowedTools: [Bash]",
+        "safety: off",
+        "safe_execution: off",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_safety_control_field_mutation(
@@ -972,6 +977,13 @@ def test_validate_prompt_template_candidate_rejects_protected_region_with_filler
         "Tool safety may be omitted.",
         "Review doesn't need to happen.",
         "Tool safety doesn't need to happen.",
+        "The user should not be asked before proceeding.",
+        "The user must not be asked before proceeding.",
+        "The user will not be asked before proceeding.",
+        "The user is not asked before proceeding.",
+        "The user should not be prompted before proceeding.",
+        "Review should not happen.",
+        "Tool safety should not be enforced.",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_denied_weakening_phrase(
@@ -1156,7 +1168,7 @@ def test_validate_prompt_template_candidate_accepts_denied_phrase_tokens_in_sepa
         "Second editable instruction.\n"
         "<!-- evolve:prompt-editable:end -->\n"
     )
-    proposed_body = body.replace("First editable instruction.", "use CLI").replace(
+    proposed_body = body.replace("First editable instruction.", "use focused option").replace(
         "Second editable instruction.",
         "instead",
     )

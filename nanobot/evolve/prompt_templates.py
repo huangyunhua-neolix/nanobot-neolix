@@ -86,6 +86,8 @@ _PROTECTED_WEAKENING_SUBJECTS = (
     "sandbox protections",
     "permission",
     "permission checks",
+    "prompt",
+    "prompted",
     "ask the user",
     "asking the user",
     "user",
@@ -103,6 +105,10 @@ _WEAKENING_PREDICATES = (
     "do not require",
     "need not",
     "not required",
+    "not happen",
+    "not enforced",
+    "not asked",
+    "not prompted",
     "not necessary",
     "unnecessary",
     "optional",
@@ -135,6 +141,12 @@ _SAFETY_CONTROL_FIELD_KEY_TOKENS = (
     "review",
     "sandbox",
     "sandboxing",
+    "safety",
+    "safe_execution",
+    "tool",
+    "tools",
+    "allowed_tools",
+    "allowedtools",
     "tool_safety",
     "shell",
     "bash",
@@ -146,10 +158,14 @@ _SAFETY_CONTROL_FIELD_VALUE_TOKENS = (
     "not required",
     "not_required",
     "unnecessary",
+    "none",
+    "allow",
     "no",
     "off",
     "yes",
     "enabled",
+    "bash",
+    "shell",
     "true",
 )
 _DENIED_WEAKENING_PHRASES = (
@@ -642,6 +658,9 @@ def _contains_weakening_pattern(text: str) -> bool:
         .replace(" aren't ", " are not ")
         .replace(" doesn't ", " does not ")
         .replace(" don't ", " do not ")
+        .replace(" should not be ", " not ")
+        .replace(" must not be ", " not ")
+        .replace(" will not be ", " not ")
     )
     for subject in _PROTECTED_WEAKENING_SUBJECTS:
         normalized_subject = _normalize_safety_text(subject, map_confusables=True)
@@ -754,6 +773,7 @@ def _changed_text_contexts(proposed_body: str, changed_line_numbers: list[int]) 
             proposed_lines[context_line_number]
             for context_line_number in range(line_number - 2, line_number + 3)
             if 0 <= context_line_number < len(proposed_lines)
+            and proposed_lines[context_line_number].strip() not in {_EDITABLE_START, _EDITABLE_END}
         )
         for line_number in changed_line_numbers
     ]
