@@ -260,8 +260,14 @@ Path(args.output).write_text(json.dumps({
     assert manifest.tool_metadata_artifact_paths["tool_metadata_judge_evidence"] == (
         "tool_metadata_judge_evidence.jsonl"
     )
+    assert manifest.artifact_paths["tool_metadata_judge_evidence"] == (
+        "tool_metadata_judge_evidence.jsonl"
+    )
     manifest_json = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest_json["toolMetadataArtifactPaths"]["tool_metadata_judge_evidence"] == (
+        "tool_metadata_judge_evidence.jsonl"
+    )
+    assert manifest_json["artifactPaths"]["tool_metadata_judge_evidence"] == (
         "tool_metadata_judge_evidence.jsonl"
     )
     optimizer_input = json.loads((run_dir / "optimizer" / "optimizer_input.json").read_text(encoding="utf-8"))
