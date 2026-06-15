@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import stat
 import time
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ class SemanticFidelityGate(Gate):
         self._evidence_dir = evidence_dir
         self._require_external = require_external
         self._aux_client = aux_client
+        self._evidence_initialized = False
 
     @property
     def name(self) -> str:
@@ -115,14 +117,29 @@ class SemanticFidelityGate(Gate):
             return None
         self._evidence_dir.mkdir(parents=True, exist_ok=True)
         path = self._evidence_dir / "judge_evidence.jsonl"
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+        if not self._evidence_initialized:
+            flags |= os.O_TRUNC | os.O_EXCL
+        fd: int | None = None
         try:
-            mode_bits = path.lstat().st_mode
-        except FileNotFoundError:
-            mode = "x"
-        else:
-            if not stat.S_ISREG(mode_bits):
-                raise OSError(f"semantic judge evidence path is not a regular file: {path}")
-            mode = "a"
-        with path.open(mode, encoding="utf-8") as fh:
-            fh.write(evidence.model_dump_json(by_alias=True) + "\n")
+            try:
+                fd = os.open(path, flags, 0o600)
+            except FileExistsError:
+                mode_bits = path.lstat().st_mode
+                if not stat.S_ISREG(mode_bits):
+                    raise OSError(
+                        f"semantic judge evidence path is not a regular file: {path}"
+                    ) from None
+                if self._evidence_initialized:
+                    fd = os.open(path, os.O_WRONLY | os.O_APPEND)
+                else:
+                    path.unlink()
+                    fd = os.open(path, flags, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as fh:
+                fd = None
+                fh.write(evidence.model_dump_json(by_alias=True) + "\n")
+        finally:
+            if fd is not None:
+                os.close(fd)
+        self._evidence_initialized = True
         return path.name

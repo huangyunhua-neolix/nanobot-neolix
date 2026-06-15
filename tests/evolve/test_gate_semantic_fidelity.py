@@ -75,6 +75,33 @@ def test_semantic_fidelity_gate_records_local_fallback_evidence_path(tmp_path: P
     assert rows[0]["score"]["aggregate"] >= 0.8
 
 
+def test_semantic_fidelity_gate_replaces_preexisting_regular_evidence_on_first_write(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "judge_evidence.jsonl"
+    evidence_path.write_text('"optimizer-controlled evidence"\n', encoding="utf-8")
+    gate = SemanticFidelityGate(evidence_dir=tmp_path)
+
+    first_result = gate.evaluate(
+        _candidate("Use concise answers. Include one concrete example."),
+        _baseline(),
+    )
+    second_result = gate.evaluate(
+        _candidate("Use concise answers. Include one concrete example. Cite one caveat."),
+        _baseline(),
+    )
+
+    evidence_text = evidence_path.read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in evidence_text.splitlines()]
+    assert "optimizer-controlled evidence" not in evidence_text
+    assert first_result.evidence is not None
+    assert first_result.evidence["judge_evidence_path"] == "judge_evidence.jsonl"
+    assert second_result.evidence is not None
+    assert second_result.evidence["judge_evidence_path"] == "judge_evidence.jsonl"
+    assert len(rows) == 2
+    assert all(row["recordId"].startswith("semantic:") for row in rows)
+
+
 def test_semantic_fidelity_gate_external_required_fails_without_provider() -> None:
     result = SemanticFidelityGate(require_external=True).evaluate(
         _candidate("Use concise answers. Include one concrete example."),

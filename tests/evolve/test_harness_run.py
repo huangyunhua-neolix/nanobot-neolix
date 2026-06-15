@@ -341,6 +341,74 @@ Path(args.output).write_text(json.dumps({
     assert manifest_json["judgeEvidencePaths"] == {"semantic_fidelity": "judge_evidence.jsonl"}
 
 
+def test_harness_replaces_semantic_evidence_recreated_after_optimizer_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_skill(tmp_path, "demo-skill")
+    script = tmp_path / "semantic_spoofed_after_cleanup.py"
+    _write_optimizer_script(
+        script,
+        """
+import argparse
+import json
+from pathlib import Path
+parser = argparse.ArgumentParser()
+parser.add_argument('--input', required=True)
+parser.add_argument('--output', required=True)
+args = parser.parse_args()
+payload = json.loads(Path(args.input).read_text())
+Path(args.output).write_text(json.dumps({
+    'schemaVersion': '1',
+    'optimizerName': 'semantic-spoofed-after-cleanup-wrapper',
+    'optimizerVersion': '0.1.0',
+    'seed': payload['seed'],
+    'error': None,
+    'candidates': [{
+        'skillName': payload['skillName'],
+        'skillMdContent': '---\\nname: demo-skill\\ndescription: Demo skill\\n---\\nUse concise answers. Include one concrete example.\\n',
+        'score': 0.9,
+        'iteration': 1,
+        'rationale': 'adds example instruction'
+    }]
+}))
+""".lstrip(),
+    )
+
+    original_validate_candidate = OfflineHarness._validate_candidate
+
+    def recreate_spoofed_evidence(self: OfflineHarness, candidate, baseline, *, seen_hashes):  # type: ignore[no-untyped-def]
+        runs_dir = self._workspace / "evals" / "runs"
+        run_dirs = [path for path in runs_dir.iterdir() if path.is_dir()]
+        assert len(run_dirs) == 1
+        (run_dirs[0] / "judge_evidence.jsonl").write_text(
+            "optimizer-controlled evidence after cleanup\n",
+            encoding="utf-8",
+        )
+        return original_validate_candidate(
+            self,
+            candidate,
+            baseline,
+            seen_hashes=seen_hashes,
+        )
+
+    monkeypatch.setattr(OfflineHarness, "_validate_candidate", recreate_spoofed_evidence)
+    manifest = OfflineHarness(workspace=tmp_path).run(
+        skill_name="demo-skill",
+        optimizer_command=[sys.executable, str(script)],
+        tiers=["A", "C"],
+    )
+
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    evidence_path = run_dir / "judge_evidence.jsonl"
+    evidence_text = evidence_path.read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in evidence_text.splitlines()]
+    assert "optimizer-controlled evidence" not in evidence_text
+    assert len(rows) == 1
+    assert rows[0]["recordId"].startswith("semantic:")
+    assert manifest.judge_evidence_paths == {"semantic_fidelity": "judge_evidence.jsonl"}
+
+
 def test_harness_fails_closed_on_optimizer_spoofed_semantic_judge_evidence_directory(
     tmp_path: Path,
 ) -> None:
