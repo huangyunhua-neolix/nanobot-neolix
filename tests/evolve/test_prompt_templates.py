@@ -486,6 +486,27 @@ def test_validate_prompt_template_candidate_accepts_noop_body_with_horizontal_ru
     assert result.changed_line_numbers == []
 
 
+def test_validate_prompt_template_candidate_accepts_edit_with_unchanged_horizontal_rule() -> None:
+    body = (
+        "Intro\n"
+        "---\n"
+        "Details\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable instruction.\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("Editable instruction.", "Clearer editable instruction.")
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "accept"
+    assert result.reason_code is None
+    assert result.cache_impact == "cache_neutral"
+    assert result.changed_line_numbers == [4]
+
+
 @pytest.mark.parametrize(
     ("baseline_body", "proposed_body"),
     [

@@ -425,7 +425,7 @@ def validate_prompt_template_candidate(
             candidate=candidate,
             cache_impact="candidate_noop",
         )
-    if _has_frontmatter_mutation(proposed_body):
+    if _has_frontmatter_mutation(_proposed_changed_text(proposed_body, baseline_body)):
         return _reject_prompt_result(
             candidate=candidate,
             reason_code="prompt-frontmatter-mutation",
