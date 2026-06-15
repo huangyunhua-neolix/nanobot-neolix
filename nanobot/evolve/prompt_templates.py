@@ -76,8 +76,33 @@ _PROTECTED_SAFETY_PHRASES = (
     "do not write",
     "live prompt",
 )
-_PROPOSED_PROTECTED_SAFETY_PHRASES = tuple(
-    phrase for phrase in _PROTECTED_SAFETY_PHRASES if len(re.findall(r"\w+", phrase)) > 1
+_PROPOSED_PROTECTED_SAFETY_PHRASES = _PROTECTED_SAFETY_PHRASES
+_PROTECTED_WEAKENING_SUBJECTS = (
+    "approval",
+    "human approval",
+    "review",
+    "human review",
+    "sandbox",
+    "sandbox protections",
+    "permission",
+    "permission checks",
+    "ask the user",
+)
+_WEAKENING_PREDICATES = (
+    "does not need to",
+    "do not need to",
+    "need not",
+    "not required",
+    "not necessary",
+    "unnecessary",
+    "optional",
+    "may be skipped",
+    "can be skipped",
+    "may be bypassed",
+    "can be bypassed",
+    "may be ignored",
+    "can be ignored",
+    "no need for",
 )
 _DENIED_WEAKENING_PHRASES = (
     "skip approval",
@@ -497,6 +522,20 @@ def _contains_marker_like_editable_boundary(text: str) -> bool:
     )
 
 
+def _contains_weakening_pattern(text: str) -> bool:
+    normalized = _normalize_safety_text(text, map_confusables=True)
+    for subject in _PROTECTED_WEAKENING_SUBJECTS:
+        normalized_subject = _normalize_safety_text(subject, map_confusables=True)
+        if normalized_subject not in normalized:
+            continue
+        if any(
+            _normalize_safety_text(predicate, map_confusables=True) in normalized
+            for predicate in _WEAKENING_PREDICATES
+        ):
+            return True
+    return False
+
+
 def _contains_phrase_tokens_in_order(
     text: str,
     phrases: tuple[str, ...],
@@ -829,6 +868,7 @@ def validate_prompt_template_candidate(
                 _PROPOSED_PROTECTED_SAFETY_PHRASES,
                 map_confusables=True,
             )
+            or _contains_weakening_pattern(text)
             or _contains_phrase(text, _DENIED_WEAKENING_PHRASES, map_confusables=True)
             or _contains_phrase_tokens_in_order(
                 text,

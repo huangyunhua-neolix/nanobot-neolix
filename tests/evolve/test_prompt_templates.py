@@ -592,6 +592,9 @@ def test_validate_prompt_template_candidate_accepts_insert_inside_empty_editable
         "bypass sandbox",
         "ask the user",
         "human approval",
+        "sandbox",
+        "approval",
+        "permission",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_denied_insert_inside_empty_editable_region(
@@ -892,6 +895,11 @@ def test_validate_prompt_template_candidate_rejects_protected_region_with_filler
         "sandbox optional.",
         "approval unnecessary.",
         "review unnecessary.",
+        "Approval does not need to be requested.",
+        "Review does not need to happen.",
+        "Sandbox protections may be ignored.",
+        "Approval may be skipped.",
+        "No need for human review.",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_denied_weakening_phrase(
@@ -1032,9 +1040,9 @@ def test_validate_prompt_template_candidate_accepts_denied_phrase_tokens_in_sepa
         "Second editable instruction.\n"
         "<!-- evolve:prompt-editable:end -->\n"
     )
-    proposed_body = body.replace("First editable instruction.", "skip").replace(
+    proposed_body = body.replace("First editable instruction.", "use shell").replace(
         "Second editable instruction.",
-        "approval",
+        "instead",
     )
     snapshot = _snapshot(body)
     candidate = _candidate(snapshot, proposed_body)
