@@ -36,6 +36,17 @@ _FRONTMATTER_FIELD_NAMES = frozenset(
         "optimizer_version",
     }
 )
+_SAFETY_CONTROL_FIELD_NAMES = frozenset(
+    {
+        "approval",
+        "human_approval",
+        "requires_human_approval",
+        "review",
+        "human_review",
+        "sandbox",
+        "tool_safety",
+    }
+)
 _PROTECTED_SAFETY_PHRASES = (
     "permission",
     "approval",
@@ -64,6 +75,9 @@ _PROTECTED_SAFETY_PHRASES = (
     "not applied",
     "do not write",
     "live prompt",
+)
+_PROPOSED_PROTECTED_SAFETY_PHRASES = tuple(
+    phrase for phrase in _PROTECTED_SAFETY_PHRASES if len(re.findall(r"\w+", phrase)) > 1
 )
 _DENIED_WEAKENING_PHRASES = (
     "skip approval",
@@ -97,6 +111,15 @@ _DENIED_WEAKENING_PHRASES = (
     "no permission needed",
     "use bash instead",
     "run shell instead",
+    "approval not required",
+    "human approval not required",
+    "human review not required",
+    "review not required",
+    "no human review required",
+    "no sandbox required",
+    "sandbox optional",
+    "approval unnecessary",
+    "review unnecessary",
 )
 # Local skeleton mapping for safety phrase matching only; this is not a full
 # Unicode confusables implementation.
@@ -282,8 +305,10 @@ def _has_frontmatter_mutation(body: str) -> bool:
         if not separator:
             continue
         normalized_field_name = _normalize_safety_text(field_name, map_confusables=True)
+        normalized_key = re.sub(r"[\s-]+", "_", normalized_field_name)
         if (
             normalized_field_name in _FRONTMATTER_FIELD_NAMES
+            or normalized_key in _SAFETY_CONTROL_FIELD_NAMES
             or _contains_non_ascii_letter_or_symbol(field_name)
         ):
             return True
@@ -375,6 +400,10 @@ def _insertion_anchor_lines(baseline_start: int, baseline_line_count: int) -> li
 
 
 def _line_in_regions(line_number: int, regions: list[EditableRegion]) -> bool:
+    return any(region.start_line <= line_number <= region.end_line for region in regions)
+
+
+def _line_allowed_by_regions(line_number: int, regions: list[EditableRegion]) -> bool:
     return any(
         region.start_line <= line_number <= region.end_line
         or (region.start_line > region.end_line and line_number == region.start_line)
@@ -395,11 +424,7 @@ def _regions_touched_by_lines(
     return [
         region
         for region in regions
-        if any(
-            region.start_line <= line_number <= region.end_line
-            or (region.start_line > region.end_line and line_number == region.start_line)
-            for line_number in changed_line_numbers
-        )
+        if any(_line_allowed_by_regions(line_number, [region]) for line_number in changed_line_numbers)
     ]
 
 
@@ -545,7 +570,7 @@ def _proposed_region_texts(
             anchored_regions = {
                 index
                 for index, region in enumerate(regions)
-                if any(_line_in_regions(line_number, [region]) for line_number in anchor_lines)
+                if any(_line_allowed_by_regions(line_number, [region]) for line_number in anchor_lines)
                 or _insertion_in_empty_region(baseline_start, [region])
             }
         for index in anchored_regions:
@@ -745,7 +770,7 @@ def validate_prompt_template_candidate(
                 reason="Proposed prompt template changes could not be mapped to baseline lines.",
                 cache_impact="cache_unknown_rejected",
             )
-        if any(not _line_in_regions(line_number, editable_regions) for line_number in changed_line_numbers):
+        if any(not _line_allowed_by_regions(line_number, editable_regions) for line_number in changed_line_numbers):
             return _reject_prompt_result(
                 candidate=candidate,
                 reason_code="prompt-cache-boundary-unknown",
@@ -781,6 +806,12 @@ def validate_prompt_template_candidate(
         )
         if _contains_non_ascii_letter_or_symbol(proposed_changed_text) or any(
             _contains_non_ascii_letter_or_symbol(text)
+            or _contains_phrase(text, _PROPOSED_PROTECTED_SAFETY_PHRASES, map_confusables=True)
+            or _contains_phrase_tokens_in_order(
+                text,
+                _PROPOSED_PROTECTED_SAFETY_PHRASES,
+                map_confusables=True,
+            )
             or _contains_phrase(text, _DENIED_WEAKENING_PHRASES, map_confusables=True)
             or _contains_phrase_tokens_in_order(
                 text,

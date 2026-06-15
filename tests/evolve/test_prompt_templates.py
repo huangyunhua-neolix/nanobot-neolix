@@ -407,6 +407,36 @@ def test_validate_prompt_template_candidate_rejects_frontmatter_field_mutation()
     assert result.cache_impact == "cache_sensitive_rejected"
 
 
+@pytest.mark.parametrize(
+    "safety_control_field",
+    [
+        "requires_human_approval: false",
+        "human_approval: false",
+        "approval: not required",
+        "human approval: not required",
+        "sandbox: optional",
+    ],
+)
+def test_validate_prompt_template_candidate_rejects_safety_control_field_mutation(
+    safety_control_field: str,
+) -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("Editable", safety_control_field)
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-frontmatter-mutation"
+    assert result.cache_impact == "cache_sensitive_rejected"
+
+
 def test_validate_prompt_template_candidate_rejects_case_insensitive_frontmatter_field_mutation() -> None:
     body = (
         "Before\n"
@@ -509,6 +539,27 @@ def test_validate_prompt_template_candidate_accepts_insert_at_editable_region_en
     assert result.cache_impact == "cache_neutral"
 
 
+def test_validate_prompt_template_candidate_rejects_insert_after_empty_editable_region() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "After\n"
+    )
+    proposed_body = body.replace(
+        "<!-- evolve:prompt-editable:end -->\nAfter",
+        "<!-- evolve:prompt-editable:end -->\nAdded outside.\nAfter",
+    )
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-cache-boundary-unknown"
+    assert result.cache_impact == "cache_unknown_rejected"
+
+
 def test_validate_prompt_template_candidate_accepts_insert_inside_empty_editable_region() -> None:
     body = (
         "Before\n"
@@ -535,6 +586,8 @@ def test_validate_prompt_template_candidate_accepts_insert_inside_empty_editable
     [
         "skip approval",
         "bypass sandbox",
+        "ask the user",
+        "human approval",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_denied_insert_inside_empty_editable_region(
@@ -802,6 +855,14 @@ def test_validate_prompt_template_candidate_rejects_protected_region_with_filler
         "no permission needed.",
         "use bash instead.",
         "run shell instead.",
+        "Approval not required.",
+        "Human approval not required.",
+        "Review is not required.",
+        "No human review required.",
+        "No sandbox required.",
+        "sandbox optional.",
+        "approval unnecessary.",
+        "review unnecessary.",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_denied_weakening_phrase(
