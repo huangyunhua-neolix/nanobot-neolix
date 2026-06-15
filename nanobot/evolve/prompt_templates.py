@@ -255,10 +255,12 @@ def _has_frontmatter_mutation(body: str) -> bool:
         if stripped == "---":
             return True
         field_name, separator, _field_value = stripped.partition(":")
+        if not separator:
+            continue
+        normalized_field_name = _normalize_safety_text(field_name, map_confusables=True)
         if (
-            separator
-            and _normalize_safety_text(field_name, map_confusables=True)
-            in _FRONTMATTER_FIELD_NAMES
+            normalized_field_name in _FRONTMATTER_FIELD_NAMES
+            or _contains_non_ascii_letter_or_symbol(field_name)
         ):
             return True
     return False
@@ -380,6 +382,13 @@ def _normalize_safety_text(text: str, *, map_confusables: bool = False) -> str:
 def _alnum_compact_safety_text(text: str, *, map_confusables: bool = False) -> str:
     normalized = _normalize_safety_text(text, map_confusables=map_confusables)
     return "".join(character for character in normalized if character.isalnum())
+
+
+def _contains_non_ascii_letter_or_symbol(text: str) -> bool:
+    return any(
+        ord(character) > 127 and unicodedata.category(character)[0] in {"L", "S"}
+        for character in text
+    )
 
 
 def _contains_phrase(
@@ -694,8 +703,9 @@ def validate_prompt_template_candidate(
             proposed_body=proposed_body,
             regions=touched_regions,
         )
-        if any(
-            _contains_phrase(text, _DENIED_WEAKENING_PHRASES, map_confusables=True)
+        if _contains_non_ascii_letter_or_symbol(proposed_changed_text) or any(
+            _contains_non_ascii_letter_or_symbol(text)
+            or _contains_phrase(text, _DENIED_WEAKENING_PHRASES, map_confusables=True)
             or _contains_phrase_tokens_in_order(
                 text,
                 _DENIED_WEAKENING_PHRASES,
