@@ -13,6 +13,7 @@ import hashlib
 import importlib.metadata
 import json
 import re
+import stat
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -257,6 +258,17 @@ def _prompt_template_rejection_reason(result: PromptTemplateValidationResult) ->
     reason_code = result.reason_code or _PROMPT_TEMPLATE_DEFAULT_REASON_CODE
     reason = result.reason or reason_code
     return _safe_single_line_reason(reason)
+
+
+def _remove_untrusted_prompt_template_judge_evidence(path: Path) -> None:
+    """Remove any optimizer-created evidence target before harness ownership."""
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(mode):
+        raise IsADirectoryError(f"prompt template judge evidence path is a directory: {path}")
+    path.unlink()
 
 
 def _review_validation_results(
@@ -607,9 +619,10 @@ class OfflineHarness:
         snapshot: list[PromptTemplateSnapshot],
         candidates: list[PromptTemplateCandidate],
         validation_results: list[PromptTemplateValidationResult],
-    ) -> list[PromptTemplateValidationResult]:
+    ) -> tuple[list[PromptTemplateValidationResult], str | None]:
         """Write deterministic judge evidence for accepted non-noop prompt candidates."""
         evidence_path = run_dir / _PROMPT_TEMPLATE_JUDGE_EVIDENCE_PATH
+        _remove_untrusted_prompt_template_judge_evidence(evidence_path)
         judge_pool = JudgePool(judges=[JudgeConfig(model="local/deterministic")])
         updated_results = list(validation_results)
         lines: list[str] = []
@@ -627,9 +640,11 @@ class OfflineHarness:
                 update={"judge_evidence_path": _PROMPT_TEMPLATE_JUDGE_EVIDENCE_PATH}
             )
 
-        if lines:
-            atomic_write_text(evidence_path, "\n".join(lines) + "\n")
-        return updated_results
+        if not lines:
+            return updated_results, None
+
+        atomic_write_text(evidence_path, "\n".join(lines) + "\n")
+        return updated_results, _PROMPT_TEMPLATE_JUDGE_EVIDENCE_PATH
 
     def _write_prompt_template_artifacts(
         self,
@@ -637,14 +652,15 @@ class OfflineHarness:
         snapshot: list[PromptTemplateSnapshot],
         candidates: list[PromptTemplateCandidate],
         validation_results: list[PromptTemplateValidationResult],
+        judge_evidence_path: str | None,
     ) -> dict[str, str]:
         """Write inert prompt/template snapshot, candidate, and review artifacts."""
         if not snapshot and not candidates:
             return {}
 
         artifact_paths = _prompt_template_artifact_plan()
-        if (run_dir / _PROMPT_TEMPLATE_JUDGE_EVIDENCE_PATH).is_file():
-            artifact_paths["prompt_template_judge_evidence"] = _PROMPT_TEMPLATE_JUDGE_EVIDENCE_PATH
+        if judge_evidence_path is not None:
+            artifact_paths["prompt_template_judge_evidence"] = judge_evidence_path
         write_redacted_json_artifact(
             run_dir / artifact_paths["prompt_template_snapshot"],
             [item.model_dump(mode="json", by_alias=True) for item in snapshot],
@@ -782,7 +798,10 @@ class OfflineHarness:
                         reason=_prompt_template_rejection_reason(prompt_result),
                     )
                 )
-        prompt_template_validation_results = self._write_prompt_template_judge_evidence(
+        (
+            prompt_template_validation_results,
+            prompt_template_judge_evidence_path,
+        ) = self._write_prompt_template_judge_evidence(
             run_dir,
             prompt_template_snapshot,
             optimizer_result.prompt_template_candidates,
@@ -870,6 +889,7 @@ class OfflineHarness:
             prompt_template_snapshot,
             optimizer_result.prompt_template_candidates,
             prompt_template_validation_results,
+            prompt_template_judge_evidence_path,
         )
         artifact_paths = {
             **_review_artifact_plan(),
