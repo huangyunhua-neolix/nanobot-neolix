@@ -717,7 +717,9 @@ Path(args.output).write_text(json.dumps({
     original_build_diff_patch = OfflineHarness._build_diff_patch
 
     def replace_evidence_target_before_publish(self, baseline, promoted):  # type: ignore[no-untyped-def]
-        run_dirs = [path for path in (self._workspace / "evals" / "runs").iterdir() if path.is_dir()]
+        run_dirs = [
+            path for path in (self._workspace / "evals" / "runs").iterdir() if path.is_dir()
+        ]
         assert len(run_dirs) == 1
         evidence_recorders = [gate for gate in self._gates if hasattr(gate, "_evidence_rows")]
         assert any(getattr(gate, "_evidence_rows") for gate in evidence_recorders)
