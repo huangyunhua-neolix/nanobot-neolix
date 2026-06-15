@@ -416,6 +416,19 @@ def _contains_phrase(
     )
 
 
+def _contains_marker_like_editable_boundary(text: str) -> bool:
+    compact = _alnum_compact_safety_text(text)
+    return any(
+        token in compact
+        for token in (
+            "evolveprompteditablestart",
+            "evolveprompteditableend",
+            "prompteditablestart",
+            "prompteditableend",
+        )
+    )
+
+
 def _contains_phrase_tokens_in_order(
     text: str,
     phrases: tuple[str, ...],
@@ -652,7 +665,7 @@ def validate_prompt_template_candidate(
             reason="Proposed prompt template body includes frontmatter-like content.",
             cache_impact="cache_sensitive_rejected",
         )
-    if _EDITABLE_START in proposed_changed_text or _EDITABLE_END in proposed_changed_text:
+    if _contains_marker_like_editable_boundary(proposed_changed_text):
         return _reject_prompt_result(
             candidate=candidate,
             reason_code="prompt-cache-boundary-unknown",

@@ -492,6 +492,38 @@ def test_validate_prompt_template_candidate_rejects_editable_marker_in_changed_t
     assert result.cache_impact == "cache_unknown_rejected"
 
 
+@pytest.mark.parametrize(
+    "inserted_marker",
+    [
+        "<!-- evolve:prompt-editable:st\u200bart -->",
+        "<!-- evolve:prompt-editable:st\u00adart -->",
+        "< !-- evolve:prompt-editable:start -->",
+        "<!--evolve:prompt-editable:start -->",
+        "<!-- evolve:prompt-editable:start -- >",
+        "<!- evolve:prompt-editable:start -->",
+    ],
+)
+def test_validate_prompt_template_candidate_rejects_marker_like_editable_boundary_corruption(
+    inserted_marker: str,
+) -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "After\n"
+    )
+    proposed_body = body.replace("Editable", f"Editable\n{inserted_marker}")
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-cache-boundary-unknown"
+    assert result.cache_impact == "cache_unknown_rejected"
+
+
 def test_validate_prompt_template_candidate_rejects_protected_editable_region() -> None:
     body = (
         "Before\n"
