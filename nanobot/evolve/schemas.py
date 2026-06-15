@@ -141,6 +141,60 @@ class ToolMetadataValidationResult(EvolveBase):
         return self
 
 
+class PromptTemplateSnapshot(EvolveBase):
+    skill_name: str
+    source_kind: Literal["bundled"] = "bundled"
+    source_identifier: str
+    frontmatter_hash: str = Field(min_length=1)
+    body_hash: str = Field(min_length=1)
+    cache_key_hash: str = Field(min_length=1)
+    editable_region_count: int = Field(ge=0)
+    body_line_count: int = Field(ge=0)
+    snapshot_hash: str = Field(min_length=1)
+    body_text: str
+
+
+class PromptTemplateCandidate(EvolveBase):
+    skill_name: str
+    baseline_snapshot_hash: str = Field(min_length=1)
+    proposed_body: str
+    intended_improvement: str = Field(min_length=1, max_length=2000)
+    risk_assessment: str = Field(min_length=1, max_length=2000)
+    cache_impact_claim: str = Field(min_length=1, max_length=2000)
+
+
+class PromptTemplateValidationResult(EvolveBase):
+    skill_name: str
+    baseline_snapshot_hash: str = Field(min_length=1)
+    verdict: Literal["accept", "reject"]
+    cache_impact: Literal[
+        "cache_neutral",
+        "cache_sensitive_rejected",
+        "cache_unknown_rejected",
+        "candidate_noop",
+    ]
+    reason_code: str | None = None
+    reason: str | None = None
+    changed_line_numbers: list[int] = Field(default_factory=list)
+    judge_evidence_path: str | None = None
+
+    @model_validator(mode="after")
+    def _reject_requires_reason_code(self) -> "PromptTemplateValidationResult":
+        if self.verdict == "reject" and self.reason_code is None:
+            raise ValueError(
+                "PromptTemplateValidationResult with verdict='reject' requires reason_code to be non-None"
+            )
+        return self
+
+
+class PromptTemplateCacheImpactCounts(EvolveBase):
+    cache_neutral: int = Field(default=0, ge=0)
+    cache_sensitive_rejected: int = Field(default=0, ge=0)
+    cache_unknown_rejected: int = Field(default=0, ge=0)
+    candidate_absent: int = Field(default=0, ge=0)
+    candidate_noop: int = Field(default=0, ge=0)
+
+
 class ValidationFailure(EvolveBase):
     candidate_index: int = Field(ge=0)
     candidate_hash: str
@@ -192,6 +246,7 @@ class RunManifest(FrozenEvolveBase):
     judge_run_summary: JudgeRunSummary | None = None
     judge_evidence_paths: dict[str, str] = Field(default_factory=dict)
     tool_metadata_artifact_paths: dict[str, str] = Field(default_factory=dict)
+    prompt_template_artifact_paths: dict[str, str] = Field(default_factory=dict)
 
 
 def assert_odd_pool_size(n: int, *, context: str) -> None:

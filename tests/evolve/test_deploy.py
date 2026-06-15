@@ -249,6 +249,34 @@ def test_assemble_pr_body_omits_tool_metadata_review_checklist_without_artifacts
     assert _section_headers_in_order(body) == list(PR_BODY_SECTIONS)
 
 
+def test_assemble_pr_body_includes_prompt_template_review_checklist() -> None:
+    manifest = _make_run_manifest(
+        prompt_template_artifact_paths={
+            "prompt_template_snapshot": "prompt_template_snapshot.json",
+            "prompt_template_review": "prompt_template_review.md",
+        }
+    )
+    body = assemble_pr_body(manifest, [])
+
+    expected_items = [
+        "- [ ] Reviewer inspected prompt/template diff artifacts",
+        "- [ ] Reviewer confirmed no bundled skill source file changed automatically",
+        "- [ ] Reviewer confirmed cache-sensitive frontmatter was not modified by accepted candidates",
+        "- [ ] Reviewer confirmed safety/tool/sandbox/review wording was not weakened",
+    ]
+    for item in expected_items:
+        assert item in body
+    assert _section_headers_in_order(body) == list(PR_BODY_SECTIONS)
+
+
+def test_assemble_pr_body_omits_prompt_template_review_checklist_without_artifacts() -> None:
+    body = assemble_pr_body(_make_run_manifest(), [])
+
+    assert "prompt/template diff artifacts" not in body
+    assert "cache-sensitive frontmatter" not in body
+    assert _section_headers_in_order(body) == list(PR_BODY_SECTIONS)
+
+
 def test_assemble_pr_body_includes_manifest_run_id() -> None:
     manifest = _make_run_manifest(run_id="run-pinned-abc")
     body = assemble_pr_body(manifest, [])

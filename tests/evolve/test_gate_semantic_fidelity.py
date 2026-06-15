@@ -58,7 +58,8 @@ def test_semantic_fidelity_gate_passes_candidate_above_threshold() -> None:
 
 
 def test_semantic_fidelity_gate_records_local_fallback_evidence_path(tmp_path: Path) -> None:
-    result = SemanticFidelityGate(evidence_dir=tmp_path).evaluate(
+    gate = SemanticFidelityGate(evidence_dir=tmp_path)
+    result = gate.evaluate(
         _candidate("Use concise answers. Include one concrete example."),
         _baseline(),
     )
@@ -70,9 +71,60 @@ def test_semantic_fidelity_gate_records_local_fallback_evidence_path(tmp_path: P
     assert result.evidence["judge_evidence_path"] == "judge_evidence.jsonl"
 
     evidence_path = tmp_path / "judge_evidence.jsonl"
+    gate.publish_evidence()
     rows = [json.loads(line) for line in evidence_path.read_text(encoding="utf-8").splitlines()]
     assert rows[0]["judgeMode"] == "local_fallback"
     assert rows[0]["score"]["aggregate"] >= 0.8
+
+
+def test_semantic_fidelity_gate_replaces_preexisting_regular_evidence_on_first_write(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "judge_evidence.jsonl"
+    evidence_path.write_text('"optimizer-controlled evidence"\n', encoding="utf-8")
+    gate = SemanticFidelityGate(evidence_dir=tmp_path)
+
+    first_result = gate.evaluate(
+        _candidate("Use concise answers. Include one concrete example."),
+        _baseline(),
+    )
+    second_result = gate.evaluate(
+        _candidate("Use concise answers. Include one concrete example. Cite one caveat."),
+        _baseline(),
+    )
+
+    gate.publish_evidence()
+    evidence_text = evidence_path.read_text(encoding="utf-8")
+    rows = [json.loads(line) for line in evidence_text.splitlines()]
+    assert "optimizer-controlled evidence" not in evidence_text
+    assert first_result.evidence is not None
+    assert first_result.evidence["judge_evidence_path"] == "judge_evidence.jsonl"
+    assert second_result.evidence is not None
+    assert second_result.evidence["judge_evidence_path"] == "judge_evidence.jsonl"
+    assert len(rows) == 2
+    assert all(row["recordId"].startswith("semantic:") for row in rows)
+
+
+def test_semantic_fidelity_gate_fails_closed_when_evidence_path_is_directory(
+    tmp_path: Path,
+) -> None:
+    gate = SemanticFidelityGate(evidence_dir=tmp_path)
+    result = gate.evaluate(
+        _candidate("Use concise answers. Include one concrete example."),
+        _baseline(),
+    )
+    evidence_path = tmp_path / "judge_evidence.jsonl"
+    evidence_path.mkdir()
+
+    assert result.evidence is not None
+    assert result.evidence["judge_evidence_path"] == "judge_evidence.jsonl"
+    try:
+        gate.publish_evidence()
+    except OSError as exc:
+        assert "semantic judge evidence path" in str(exc)
+    else:
+        raise AssertionError("publish_evidence() should fail closed on a directory target")
+    assert evidence_path.is_dir()
 
 
 def test_semantic_fidelity_gate_external_required_fails_without_provider() -> None:

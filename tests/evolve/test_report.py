@@ -5,7 +5,13 @@ from datetime import datetime, timezone
 from nanobot.evolve.gates import GateResult
 from nanobot.evolve.optimizer.schemas import OptimizerError, OptimizerResult
 from nanobot.evolve.report import render_run_report
-from nanobot.evolve.schemas import JudgeRunSummary, JudgeSummary, RunManifest, ValidationFailure
+from nanobot.evolve.schemas import (
+    DiffStats,
+    JudgeRunSummary,
+    JudgeSummary,
+    RunManifest,
+    ValidationFailure,
+)
 
 
 def _judge_summary() -> JudgeSummary:
@@ -295,6 +301,99 @@ def test_render_run_report_redacts_artifact_path_values() -> None:
         _manifest(
             artifact_paths={
                 "trace": "/Users/alice/private/sk-ant-1234567890abcdefghijklmnop/trace.log"
+            }
+        ),
+        {},
+        _optimizer_result(),
+        [],
+    )
+
+    assert "[REDACTED:APIKEY:ANTHROPIC]" in report
+    assert "/Users/" not in report
+    assert "alice" not in report
+    assert "sk-ant-" not in report
+
+
+def test_render_run_report_includes_prompt_template_review_artifacts() -> None:
+    report = render_run_report(
+        _manifest(
+            prompt_template_artifact_paths={
+                "prompt_template_snapshot": "runs/1/prompt_template_snapshot.json",
+                "prompt_template_candidates": "runs/1/prompt_template_candidates.jsonl",
+                "prompt_template_review": "runs/1/prompt_template_review.md",
+                "prompt_template_judge_evidence": "runs/1/prompt_template_judge_evidence.jsonl",
+            }
+        ),
+        {},
+        _optimizer_result(),
+        [],
+    )
+
+    assert report.index("## Review state") < report.index("## Prompt template review")
+    assert report.index("## Prompt template review") < report.index("## Validation failures")
+    assert "No bundled skill source changed" in report
+    assert "Cache-sensitive frontmatter was not modified by accepted candidates." in report
+    assert "Snapshot: `runs/1/prompt_template_snapshot.json`" in report
+    assert "Candidates: `runs/1/prompt_template_candidates.jsonl`" in report
+    assert "Review: `runs/1/prompt_template_review.md`" in report
+    assert "Judge evidence: `runs/1/prompt_template_judge_evidence.jsonl`" in report
+
+
+def test_render_run_report_combined_optional_section_ordering() -> None:
+    """Guard the combined-optional ordering: Review state < Tool metadata review
+    < Prompt template review < Semantic judge < Diff stats < Validation failures."""
+    report = render_run_report(
+        _manifest(
+            tool_metadata_artifact_paths={
+                "tool_contract_snapshot": "runs/1/tool_contract_snapshot.json",
+                "tool_metadata_candidates": "runs/1/tool_metadata_candidates.jsonl",
+                "tool_metadata_review": "runs/1/tool_metadata_review.md",
+                "tool_metadata_judge_evidence": "runs/1/tool_metadata_judge_evidence.jsonl",
+            },
+            prompt_template_artifact_paths={
+                "prompt_template_snapshot": "runs/1/prompt_template_snapshot.json",
+                "prompt_template_candidates": "runs/1/prompt_template_candidates.jsonl",
+                "prompt_template_review": "runs/1/prompt_template_review.md",
+                "prompt_template_judge_evidence": "runs/1/prompt_template_judge_evidence.jsonl",
+            },
+            judge_run_summary=JudgeRunSummary(
+                judge_mode="local_fallback",
+                calibrated=False,
+                evidence_count=2,
+                median_aggregate=0.85,
+                min_axis_score=0.70,
+                disagreement_max=None,
+            ),
+            judge_evidence_paths={"semantic_fidelity": "judge_evidence.jsonl"},
+            diff_stats=DiffStats(files_changed=3, insertions=10, deletions=5),
+        ),
+        {},
+        _optimizer_result(),
+        [],
+    )
+
+    idx_review_state = report.index("## Review state")
+    idx_tool_metadata = report.index("## Tool metadata review")
+    idx_prompt_template = report.index("## Prompt template review")
+    idx_semantic_judge = report.index("## Semantic judge")
+    idx_diff_stats = report.index("## Diff stats")
+    idx_validation = report.index("## Validation failures")
+
+    assert idx_review_state < idx_tool_metadata
+    assert idx_tool_metadata < idx_prompt_template
+    assert idx_prompt_template < idx_semantic_judge
+    assert idx_semantic_judge < idx_diff_stats
+    assert idx_diff_stats < idx_validation
+
+
+def test_render_run_report_redacts_prompt_template_artifact_paths() -> None:
+    report = render_run_report(
+        _manifest(
+            prompt_template_artifact_paths={
+                "prompt_template_snapshot": (
+                    "/Users/alice/private/sk-ant-1234567890abcdefghijklmnop/"
+                    "prompt_template_snapshot.json"
+                )
             }
         ),
         {},

@@ -5,12 +5,72 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
+from nanobot.evolve.artifacts import OwnedJsonlEvidenceWriter
 from nanobot.evolve.gates import Gate, GateResult
 from nanobot.evolve.gates._constants import RUBRIC_PASS_THRESHOLD
 
 if TYPE_CHECKING:
     from nanobot.evolve.judges.auxiliary import AuxJudgeClient
     from nanobot.evolve.schemas import Baseline, Candidate, JudgeEvidence
+
+_SEMANTIC_EVIDENCE_NAME = "semantic"
+
+
+def _make_evidence_writer(evidence_dir: Path | None) -> OwnedJsonlEvidenceWriter | None:
+    if evidence_dir is None:
+        return None
+    return OwnedJsonlEvidenceWriter(
+        evidence_dir / "judge_evidence.jsonl",
+        evidence_name=_SEMANTIC_EVIDENCE_NAME,
+    )
+
+
+class SemanticEvidenceRecorder:
+    """Wraps an injected custom gate named '4-semantic-fidelity' to capture evidence rows."""
+
+    def __init__(self, gate: Gate, *, evidence_dir: Path | None = None) -> None:
+        self._gate = gate
+        self._writer = _make_evidence_writer(evidence_dir)
+
+    @property
+    def name(self) -> str:
+        return self._gate.name
+
+    def evaluate(self, candidate: "Candidate", baseline: "Baseline") -> GateResult:
+        result = self._gate.evaluate(candidate, baseline)
+        if (
+            result.gate_name == "4-semantic-fidelity"
+            and result.evidence is not None
+            and result.evidence.get("judge_evidence_path") == "judge_evidence.jsonl"
+        ):
+            self._record_result_evidence(result)
+        return result
+
+    def cleanup_after_timeout(self) -> None:
+        self._gate.cleanup_after_timeout()
+
+    def publish_evidence(self) -> str | None:
+        if self._writer is None:
+            return None
+        return self._writer.publish()
+
+    def _record_result_evidence(self, result: GateResult) -> None:
+        from nanobot.evolve.schemas import JudgeEvidence, RubricScore
+
+        if self._writer is None:
+            return
+        evidence = JudgeEvidence(
+            record_id=f"semantic:{result.candidate_hash}",
+            judge_mode=result.evidence.get("judge_mode", "local_fallback"),  # type: ignore[arg-type]
+            score=RubricScore(
+                process=float(result.metrics.get("semantic_process", 0.0)),
+                output=float(result.metrics.get("semantic_output", 0.0)),
+                token=float(result.metrics.get("semantic_token", 0.0)),
+                aggregate=float(result.metrics.get("semantic_aggregate", 0.0)),
+            ),
+            calibrated=result.evidence.get("calibrated") == "true",
+        )
+        self._writer.buffer(evidence.model_dump_json(by_alias=True))
 
 
 class SemanticFidelityGate(Gate):
@@ -23,13 +83,16 @@ class SemanticFidelityGate(Gate):
         require_external: bool = False,
         aux_client: "AuxJudgeClient | None" = None,
     ) -> None:
-        self._evidence_dir = evidence_dir
+        self._writer = _make_evidence_writer(evidence_dir)
         self._require_external = require_external
         self._aux_client = aux_client
 
     @property
     def name(self) -> str:
         return "4-semantic-fidelity"
+
+    def cleanup_after_timeout(self) -> None:
+        pass
 
     def evaluate(self, candidate: "Candidate", baseline: "Baseline") -> GateResult:
         from nanobot.evolve.judges.calibration import CalibrationRecord
@@ -85,6 +148,11 @@ class SemanticFidelityGate(Gate):
             duration_ms=duration_ms,
         )
 
+    def publish_evidence(self) -> str | None:
+        if self._writer is None:
+            return None
+        return self._writer.publish()
+
     def _failure(
         self,
         candidate: "Candidate",
@@ -109,11 +177,8 @@ class SemanticFidelityGate(Gate):
             duration_ms=int((time.monotonic() - start) * 1000),
         )
 
-    def _write_evidence(self, evidence: JudgeEvidence) -> str | None:
-        if self._evidence_dir is None:
+    def _write_evidence(self, evidence: "JudgeEvidence") -> str | None:
+        if self._writer is None:
             return None
-        self._evidence_dir.mkdir(parents=True, exist_ok=True)
-        path = self._evidence_dir / "judge_evidence.jsonl"
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(evidence.model_dump_json(by_alias=True) + "\n")
-        return path.name
+        self._writer.buffer(evidence.model_dump_json(by_alias=True))
+        return "judge_evidence.jsonl"

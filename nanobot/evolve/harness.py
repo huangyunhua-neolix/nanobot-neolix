@@ -26,11 +26,18 @@ from pydantic import ValidationError
 from nanobot.evolve.deploy import assemble_pr_body
 from nanobot.evolve.exceptions import ConfigError
 from nanobot.evolve.gates import GATES, Gate, GateResult
-from nanobot.evolve.gates.semantic_fidelity import SemanticFidelityGate
-from nanobot.evolve.judges.rubric import JudgeConfig, JudgePool
+from nanobot.evolve.gates.semantic_fidelity import SemanticEvidenceRecorder, SemanticFidelityGate
 from nanobot.evolve.optimizer.adapter import OptimizerAdapter
 from nanobot.evolve.optimizer.schemas import OptimizerCandidate, OptimizerInput, OptimizerResult
 from nanobot.evolve.privacy.redact import redact
+from nanobot.evolve.prompt_template_artifacts import (
+    write_prompt_template_artifacts,
+    write_prompt_template_judge_evidence,
+)
+from nanobot.evolve.prompt_templates import (
+    capture_bundled_prompt_template_snapshot,
+    validate_prompt_template_candidates,
+)
 from nanobot.evolve.report import render_run_report
 from nanobot.evolve.schemas import (
     Baseline,
@@ -38,6 +45,9 @@ from nanobot.evolve.schemas import (
     DiffStats,
     JudgeRunSummary,
     JudgeSummary,
+    PromptTemplateCandidate,
+    PromptTemplateSnapshot,
+    PromptTemplateValidationResult,
     ReviewReadiness,
     RunManifest,
     SkillContent,
@@ -50,10 +60,12 @@ from nanobot.evolve.schemas import (
     load_manifest,
 )
 from nanobot.evolve.tool_metadata import (
-    build_tool_metadata_judge_record,
     capture_loaded_tool_contract_snapshot,
-    render_tool_metadata_review,
     validate_tool_metadata_candidate,
+)
+from nanobot.evolve.tool_metadata_artifacts import (
+    write_tool_metadata_artifacts,
+    write_tool_metadata_judge_evidence,
 )
 
 __all__ = [
@@ -77,9 +89,7 @@ _PATH_CLAIM_RE = re.compile(
 )
 _RUN_ID_SUFFIX_LIMIT = 10_000
 _SAFE_REASON_MAX_CHARS = 300
-_PR_BODY_FORBIDDEN_REASON_CHARS = frozenset(
-    {"\n", "\r", "\u2028", "\u2029", "\u0085", "\x00"}
-)
+_PR_BODY_FORBIDDEN_REASON_CHARS = frozenset({"\n", "\r", "\u2028", "\u2029", "\u0085", "\x00"})
 _REVIEW_ARTIFACT_PATHS: dict[str, str] = {
     "manifest": "manifest.json",
     "report": "report.md",
@@ -88,16 +98,9 @@ _REVIEW_ARTIFACT_PATHS: dict[str, str] = {
     "optimizer_input": "optimizer/optimizer_input.json",
     "optimizer_output": "optimizer/optimizer_output.json",
 }
-_TOOL_METADATA_ARTIFACT_PATHS: dict[str, str] = {
-    "tool_contract_snapshot": "tool_contract_snapshot.json",
-    "tool_metadata_candidates": "tool_metadata_candidates.jsonl",
-    "tool_metadata_review": "tool_metadata_review.md",
-}
-_TOOL_METADATA_JUDGE_EVIDENCE_PATH = "tool_metadata_judge_evidence.jsonl"
-
-
-def _review_artifact_plan() -> dict[str, str]:
-    return dict(_REVIEW_ARTIFACT_PATHS)
+_TOOL_METADATA_DEFAULT_REASON_CODE = "tool-metadata-rejected"
+_PROMPT_TEMPLATE_DEFAULT_REASON_CODE = "prompt-template-rejected"
+_SEMANTIC_JUDGE_EVIDENCE_PATH = "judge_evidence.jsonl"
 
 
 def _sha256_text(text: str) -> str:
@@ -194,9 +197,7 @@ def _safe_single_line_reason(text: str, *, max_chars: int = _SAFE_REASON_MAX_CHA
     """Return a redacted, bounded one-line reason safe for markdown fields."""
     redacted = redact(text).text
     sanitized = "".join(
-        " "
-        if ch in _PR_BODY_FORBIDDEN_REASON_CHARS or ord(ch) < 0x20 or ord(ch) == 0x7F
-        else ch
+        " " if ch in _PR_BODY_FORBIDDEN_REASON_CHARS or ord(ch) < 0x20 or ord(ch) == 0x7F else ch
         for ch in redacted
     )
     sanitized = re.sub(r"\s+", " ", sanitized).replace("```", "'''").strip()
@@ -209,12 +210,8 @@ def _validation_failure_reason(exc: ValidationError) -> str:
     return _safe_single_line_reason(f"frontmatter-invalid: {exc}")
 
 
-def _tool_metadata_artifact_plan() -> dict[str, str]:
-    return dict(_TOOL_METADATA_ARTIFACT_PATHS)
-
-
 def _metadata_rejection_reason(result: ToolMetadataValidationResult) -> str:
-    reason_code = result.reason_code or "tool-metadata-rejected"
+    reason_code = result.reason_code or _TOOL_METADATA_DEFAULT_REASON_CODE
     reason = result.reason or reason_code
     return _safe_single_line_reason(reason)
 
@@ -224,52 +221,15 @@ def _tool_metadata_candidate_hash(candidate: ToolMetadataCandidate) -> str:
     return f"tool-metadata:{candidate.baseline_schema_hash}"
 
 
-def _review_validation_results(
-    results: list[ToolMetadataValidationResult],
-) -> list[ToolMetadataValidationResult]:
-    """Return validation results with review-friendly rejection reasons."""
-    return [
-        result.model_copy(
-            update={
-                "reason": _safe_single_line_reason(
-                    f"{result.reason_code}: {result.reason}"
-                    if result.verdict == "reject" and result.reason_code and result.reason
-                    else result.reason or "<none>"
-                )
-            }
-        )
-        for result in results
-    ]
+def _prompt_template_candidate_hash(candidate: PromptTemplateCandidate) -> str:
+    """Return validation-failure hash in the prompt/template namespace."""
+    return f"prompt-template:{candidate.baseline_snapshot_hash}"
 
 
-def _redacted_tool_metadata_candidate(candidate: ToolMetadataCandidate) -> ToolMetadataCandidate:
-    """Return a metadata candidate safe for shareable JSON artifacts."""
-    return ToolMetadataCandidate.model_validate_json(
-        redact(candidate.model_dump_json(by_alias=True)).text
-    )
-
-
-def _redacted_tool_contract_snapshot(snapshot: ToolContractSnapshot) -> ToolContractSnapshot:
-    """Return a tool contract snapshot safe for shareable JSON artifacts."""
-    return ToolContractSnapshot.model_validate_json(
-        redact(snapshot.model_dump_json(by_alias=True)).text
-    )
-
-
-def _matching_tool_snapshot(
-    candidate: ToolMetadataCandidate,
-    snapshot: list[ToolContractSnapshot],
-) -> ToolContractSnapshot | None:
-    """Return the baseline snapshot matching a metadata candidate contract."""
-    return next(
-        (
-            item
-            for item in snapshot
-            if item.tool_name == candidate.tool_name
-            and item.schema_hash == candidate.baseline_schema_hash
-        ),
-        None,
-    )
+def _prompt_template_rejection_reason(result: PromptTemplateValidationResult) -> str:
+    reason_code = result.reason_code or _PROMPT_TEMPLATE_DEFAULT_REASON_CODE
+    reason = result.reason or reason_code
+    return _safe_single_line_reason(reason)
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +272,8 @@ class OfflineHarness:
         for gate in self._gates:
             if isinstance(gate, SemanticFidelityGate):
                 gates.append(SemanticFidelityGate(evidence_dir=run_dir))
+            elif gate.name == "4-semantic-fidelity":
+                gates.append(SemanticEvidenceRecorder(gate, evidence_dir=run_dir))
             else:
                 gates.append(gate)
         return gates
@@ -359,7 +321,9 @@ class OfflineHarness:
 
     def _load_eval_records(self, skill_name: str, tiers: list[str], run_id: str) -> Path:
         """Write a minimal redacted optimizer eval bundle for ``tiers``."""
-        bundle_path = self._workspace / "evals" / "runs" / run_id / "optimizer" / "eval_bundle.ndjson"
+        bundle_path = (
+            self._workspace / "evals" / "runs" / run_id / "optimizer" / "eval_bundle.ndjson"
+        )
         bundle_path.parent.mkdir(parents=True, exist_ok=True)
 
         lines: list[str] = []
@@ -395,9 +359,7 @@ class OfflineHarness:
             **baseline.frontmatter.model_dump(mode="json", exclude_none=True),
             **frontmatter_values,
             "name": frontmatter_values.get("name", optimizer_candidate.skill_name),
-            "description": frontmatter_values.get(
-                "description", baseline.frontmatter.description
-            ),
+            "description": frontmatter_values.get("description", baseline.frontmatter.description),
             "origin": "agent",
             "created_by": "external:optimizer",
             "created_at": frontmatter_values.get(
@@ -432,7 +394,7 @@ class OfflineHarness:
             gepa_iteration=optimizer_candidate.iteration,
             gepa_seed=optimizer_result.seed,
             review_readiness=ReviewReadiness(
-                artifact_paths=_review_artifact_plan(),
+                artifact_paths=dict(_REVIEW_ARTIFACT_PATHS),
                 requires_human_approval=True,
             ),
         )
@@ -496,76 +458,9 @@ class OfflineHarness:
         """Capture tool contracts using the same loader path as runtime startup."""
         return capture_loaded_tool_contract_snapshot(workspace=str(self._workspace))
 
-    def _write_tool_metadata_judge_evidence(
-        self,
-        run_dir: Path,
-        snapshot: list[ToolContractSnapshot],
-        candidates: list[ToolMetadataCandidate],
-        validation_results: list[ToolMetadataValidationResult],
-    ) -> list[ToolMetadataValidationResult]:
-        """Write deterministic judge evidence for accepted metadata candidates."""
-        evidence_path = run_dir / _TOOL_METADATA_JUDGE_EVIDENCE_PATH
-        # One local judge keeps JudgePool's odd-size quorum invariant without tuning.
-        judge_pool = JudgePool(judges=[JudgeConfig(model="local/deterministic")])
-        updated_results = list(validation_results)
-        lines: list[str] = []
-        for index, (candidate, result) in enumerate(zip(candidates, validation_results)):
-            if result.verdict != "accept":
-                continue
-            baseline = _matching_tool_snapshot(candidate, snapshot)
-            if baseline is None:
-                continue
-            evidence = judge_pool.score_with_evidence(
-                build_tool_metadata_judge_record(candidate, baseline)
-            )
-            lines.append(evidence.model_dump_json(by_alias=True))
-            updated_results[index] = result.model_copy(
-                update={"judge_evidence_path": _TOOL_METADATA_JUDGE_EVIDENCE_PATH}
-            )
-
-        if lines:
-            evidence_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return updated_results
-
-    def _write_tool_metadata_artifacts(
-        self,
-        run_dir: Path,
-        snapshot: list[ToolContractSnapshot],
-        candidates: list[ToolMetadataCandidate],
-        validation_results: list[ToolMetadataValidationResult],
-    ) -> dict[str, str]:
-        """Write metadata artifacts after optional judge evidence has been written."""
-        if not snapshot and not candidates:
-            return {}
-
-        artifact_paths = _tool_metadata_artifact_plan()
-        if (run_dir / _TOOL_METADATA_JUDGE_EVIDENCE_PATH).is_file():
-            artifact_paths["tool_metadata_judge_evidence"] = _TOOL_METADATA_JUDGE_EVIDENCE_PATH
-        safe_snapshot = [_redacted_tool_contract_snapshot(item) for item in snapshot]
-        safe_candidates = [_redacted_tool_metadata_candidate(candidate) for candidate in candidates]
-        (run_dir / artifact_paths["tool_contract_snapshot"]).write_text(
-            json.dumps(
-                [item.model_dump(mode="json", by_alias=True) for item in safe_snapshot],
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        (run_dir / artifact_paths["tool_metadata_candidates"]).write_text(
-            "".join(
-                candidate.model_dump_json(by_alias=True) + "\n"
-                for candidate in safe_candidates
-            ),
-            encoding="utf-8",
-        )
-        (run_dir / artifact_paths["tool_metadata_review"]).write_text(
-            render_tool_metadata_review(
-                snapshot, candidates, _review_validation_results(validation_results)
-            ),
-            encoding="utf-8",
-        )
-        return artifact_paths
+    def _capture_prompt_template_snapshot(self) -> list[PromptTemplateSnapshot]:
+        """Capture bundled prompt templates for inert optimizer context."""
+        return capture_bundled_prompt_template_snapshot()
 
     def _nanobot_version(self) -> str:
         """Return the installed nanobot-ai version, or 0.0.0 in editable test runs."""
@@ -584,6 +479,8 @@ class OfflineHarness:
         optimizer_timeout_seconds: int = 600,
     ) -> RunManifest:
         """Execute the external optimizer and write deterministic offline artifacts."""
+        from nanobot.evolve.artifacts import OwnedJsonlEvidenceWriter
+
         started_at = datetime.now(timezone.utc)
         run_id = self._generate_run_id(skill_name)
         run_dir = self._workspace / "evals" / "runs" / run_id
@@ -591,6 +488,9 @@ class OfflineHarness:
         previous_gates = self._gates
         self._gates = self._gates_for_run(run_dir)
         optimizer_dir = run_dir / "optimizer"
+        OwnedJsonlEvidenceWriter(
+            run_dir / _SEMANTIC_JUDGE_EVIDENCE_PATH, evidence_name="semantic fidelity"
+        ).remove_untrusted()
 
         try:
             return self._run(
@@ -620,8 +520,11 @@ class OfflineHarness:
         run_dir: Path,
         optimizer_dir: Path,
     ) -> RunManifest:
+        from nanobot.evolve.artifacts import OwnedJsonlEvidenceWriter
+
         baseline = self._load_baseline_skill(skill_name)
         tool_contract_snapshot = self._capture_tool_contract_snapshot()
+        prompt_template_snapshot = self._capture_prompt_template_snapshot()
         eval_bundle = self._load_eval_records(skill_name, tiers, run_id)
         record_count_per_tier = _count_eval_bundle_records(eval_bundle)
         optimizer_input = OptimizerInput(
@@ -635,6 +538,7 @@ class OfflineHarness:
             timeout_seconds=optimizer_timeout_seconds,
             seed=123456789,
             tool_contract_snapshot=tool_contract_snapshot,
+            prompt_template_snapshot=prompt_template_snapshot,
         )
 
         subprocess_start = time.perf_counter()
@@ -642,6 +546,10 @@ class OfflineHarness:
             optimizer_input
         )
         subprocess_runtime_ms = int((time.perf_counter() - subprocess_start) * 1000)
+
+        OwnedJsonlEvidenceWriter(
+            run_dir / _SEMANTIC_JUDGE_EVIDENCE_PATH, evidence_name="semantic fidelity"
+        ).remove_untrusted()
 
         validation_failures: list[ValidationFailure] = []
         valid_candidates: list[Candidate] = []
@@ -657,16 +565,48 @@ class OfflineHarness:
                     ValidationFailure(
                         candidate_index=index,
                         candidate_hash=_tool_metadata_candidate_hash(metadata_candidate),
-                        reason_code=validation_result.reason_code or "tool-metadata-rejected",
+                        reason_code=(
+                            validation_result.reason_code or _TOOL_METADATA_DEFAULT_REASON_CODE
+                        ),
                         reason=_metadata_rejection_reason(validation_result),
                     )
                 )
 
-        tool_metadata_validation_results = self._write_tool_metadata_judge_evidence(
+        (
+            tool_metadata_validation_results,
+            tool_metadata_judge_evidence_path,
+        ) = write_tool_metadata_judge_evidence(
             run_dir,
             tool_contract_snapshot,
             optimizer_result.tool_metadata_candidates,
             tool_metadata_validation_results,
+        )
+
+        prompt_template_validation_results = validate_prompt_template_candidates(
+            optimizer_result.prompt_template_candidates,
+            prompt_template_snapshot,
+        )
+        for index, prompt_result in enumerate(prompt_template_validation_results):
+            if prompt_result.verdict == "reject":
+                prompt_candidate = optimizer_result.prompt_template_candidates[index]
+                validation_failures.append(
+                    ValidationFailure(
+                        candidate_index=index,
+                        candidate_hash=_prompt_template_candidate_hash(prompt_candidate),
+                        reason_code=(
+                            prompt_result.reason_code or _PROMPT_TEMPLATE_DEFAULT_REASON_CODE
+                        ),
+                        reason=_prompt_template_rejection_reason(prompt_result),
+                    )
+                )
+        (
+            prompt_template_validation_results,
+            prompt_template_judge_evidence_path,
+        ) = write_prompt_template_judge_evidence(
+            run_dir,
+            prompt_template_snapshot,
+            optimizer_result.prompt_template_candidates,
+            prompt_template_validation_results,
         )
 
         if not (optimizer_result.error and optimizer_result.error.code == "no_improvement"):
@@ -715,11 +655,13 @@ class OfflineHarness:
                 promoted = candidate
                 break
 
-        metadata_rejections_exist = any(
+        # TODO: If a third artifact candidate domain is added, extract the duplicated
+        # capture/validate/write/reject glue into a CandidateDomainPipeline.
+        domain_rejections_exist = any(
             result.verdict == "reject" for result in tool_metadata_validation_results
-        )
+        ) or any(result.verdict == "reject" for result in prompt_template_validation_results)
         if optimizer_result.error and optimizer_result.error.code == "no_improvement":
-            if metadata_rejections_exist and not valid_candidates:
+            if domain_rejections_exist and not valid_candidates:
                 final_status = "rejected_by_validation"
             else:
                 final_status = "no_improvement"
@@ -737,18 +679,28 @@ class OfflineHarness:
                 candidate.skill_md_content, encoding="utf-8"
             )
 
-        tool_metadata_artifact_paths = self._write_tool_metadata_artifacts(
+        tool_metadata_artifact_paths = write_tool_metadata_artifacts(
             run_dir,
             tool_contract_snapshot,
             optimizer_result.tool_metadata_candidates,
             tool_metadata_validation_results,
+            tool_metadata_judge_evidence_path,
+            _safe_single_line_reason,
+        )
+        prompt_template_artifact_paths = write_prompt_template_artifacts(
+            run_dir,
+            prompt_template_snapshot,
+            optimizer_result.prompt_template_candidates,
+            prompt_template_validation_results,
+            prompt_template_judge_evidence_path,
         )
         artifact_paths = {
-            **_review_artifact_plan(),
+            **dict(_REVIEW_ARTIFACT_PATHS),
             "eval_bundle": "optimizer/eval_bundle.ndjson",
             "optimizer_stderr": "optimizer/stderr.txt",
             "optimizer_stdout": "optimizer/stdout.txt",
             **tool_metadata_artifact_paths,
+            **prompt_template_artifact_paths,
         }
         gate_verdicts = [
             result
@@ -758,9 +710,27 @@ class OfflineHarness:
         diff_patch = self._build_diff_patch(baseline, promoted)
         diff_stats = _diff_stats_from_patch(diff_patch)
         judge_run_summary = _judge_summary_from_gate_results(gate_verdicts)
+        semantic_evidence_path = run_dir / _SEMANTIC_JUDGE_EVIDENCE_PATH
+        semantic_evidence_produced = any(
+            result.gate_name == "4-semantic-fidelity"
+            and result.evidence is not None
+            and result.evidence.get("judge_evidence_path") == _SEMANTIC_JUDGE_EVIDENCE_PATH
+            for result in gate_verdicts
+        )
+        if semantic_evidence_produced:
+            for gate in self._gates:
+                if isinstance(gate, SemanticEvidenceRecorder | SemanticFidelityGate):
+                    gate.publish_evidence()
+                    break
+            if not semantic_evidence_path.is_file():
+                semantic_evidence_produced = False
+        else:
+            OwnedJsonlEvidenceWriter(
+                semantic_evidence_path, evidence_name="semantic fidelity"
+            ).remove_untrusted()
         judge_evidence_paths = (
-            {"semantic_fidelity": "judge_evidence.jsonl"}
-            if (run_dir / "judge_evidence.jsonl").is_file()
+            {"semantic_fidelity": _SEMANTIC_JUDGE_EVIDENCE_PATH}
+            if semantic_evidence_produced
             else {}
         )
         finished_at = datetime.now(timezone.utc)
@@ -791,6 +761,7 @@ class OfflineHarness:
             judge_run_summary=judge_run_summary,
             judge_evidence_paths=judge_evidence_paths,
             tool_metadata_artifact_paths=tool_metadata_artifact_paths,
+            prompt_template_artifact_paths=prompt_template_artifact_paths,
         )
 
         (run_dir / "diff.patch").write_text(diff_patch, encoding="utf-8")

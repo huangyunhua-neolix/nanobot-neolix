@@ -12,6 +12,12 @@ _TOOL_METADATA_ARTIFACT_LABELS = (
     ("Review", "tool_metadata_review"),
     ("Judge evidence", "tool_metadata_judge_evidence"),
 )
+_PROMPT_TEMPLATE_ARTIFACT_LABELS = (
+    ("Snapshot", "prompt_template_snapshot"),
+    ("Candidates", "prompt_template_candidates"),
+    ("Review", "prompt_template_review"),
+    ("Judge evidence", "prompt_template_judge_evidence"),
+)
 
 
 def _redact_and_bound(text: str, max_chars: int = _MAX_SAFE_TEXT_CHARS) -> str:
@@ -43,6 +49,35 @@ def render_run_report(
         "## Review state",
         f"Human approval required: `{str(manifest.requires_human_approval).lower()}`",
     ]
+    if manifest.tool_metadata_artifact_paths:
+        lines.extend(
+            [
+                "",
+                "## Tool metadata review",
+                (
+                    "No runtime tool source changed; artifacts require human "
+                    "review before any application."
+                ),
+            ]
+        )
+        for label, key in _TOOL_METADATA_ARTIFACT_LABELS:
+            path = manifest.tool_metadata_artifact_paths.get(key, "<none>")
+            lines.append(f"{label}: `{_redact_and_bound(path)}`")
+    if manifest.prompt_template_artifact_paths:
+        lines.extend(
+            [
+                "",
+                "## Prompt template review",
+                (
+                    "No bundled skill source changed; prompt/template candidates "
+                    "require human review before any application."
+                ),
+                "Cache-sensitive frontmatter was not modified by accepted candidates.",
+            ]
+        )
+        for label, key in _PROMPT_TEMPLATE_ARTIFACT_LABELS:
+            path = manifest.prompt_template_artifact_paths.get(key, "<none>")
+            lines.append(f"{label}: `{_redact_and_bound(path)}`")
     if manifest.judge_run_summary is not None:
         summary = manifest.judge_run_summary
         evidence_path = manifest.judge_evidence_paths.get("semantic_fidelity", "<none>")
@@ -65,20 +100,6 @@ def render_run_report(
                 "Judge metrics were not returned to the optimizer and were not used as optimizer fitness.",
             ]
         )
-    if manifest.tool_metadata_artifact_paths:
-        lines.extend(
-            [
-                "",
-                "## Tool metadata review",
-                (
-                    "No runtime tool source changed; artifacts require human "
-                    "review before any application."
-                ),
-            ]
-        )
-        for label, key in _TOOL_METADATA_ARTIFACT_LABELS:
-            path = manifest.tool_metadata_artifact_paths.get(key, "<none>")
-            lines.append(f"{label}: `{_redact_and_bound(path)}`")
     if manifest.diff_stats is not None:
         lines.extend(
             [

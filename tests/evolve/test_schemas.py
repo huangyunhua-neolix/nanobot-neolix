@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import nanobot.evolve.schemas as evolve_schemas
 from nanobot.evolve.gates import GateResult
 from nanobot.evolve.harness import RunManifest as HarnessRunManifest
 from nanobot.evolve.harness import load_manifest as harness_load_manifest
@@ -717,3 +718,152 @@ def test_optimizer_result_accepts_optional_tool_metadata_candidates() -> None:
 
     assert dumped["toolMetadataCandidates"][0]["toolName"] == "read_file"
     assert OptimizerResult.model_validate(dumped).tool_metadata_candidates == [candidate]
+
+
+# ---------------------------------------------------------------------------
+# M8 Prompt Template Schemas
+# ---------------------------------------------------------------------------
+
+
+def _prompt_template_snapshot() -> evolve_schemas.PromptTemplateSnapshot:
+    return evolve_schemas.PromptTemplateSnapshot(
+        skill_name="demo-skill",
+        source_kind="bundled",
+        source_identifier="skills/demo-skill/SKILL.md",
+        frontmatter_hash="frontmatterhash",
+        body_hash="bodyhash",
+        cache_key_hash="cachekeyhash",
+        editable_region_count=1,
+        body_line_count=3,
+        snapshot_hash="snapshothash",
+        body_text="Use concise answers.\n",
+    )
+
+
+def _prompt_template_candidate() -> evolve_schemas.PromptTemplateCandidate:
+    return evolve_schemas.PromptTemplateCandidate(
+        skill_name="demo-skill",
+        baseline_snapshot_hash="snapshothash",
+        proposed_body="Use concise answers and cite constraints.\n",
+        intended_improvement="Clarifies expected response style.",
+        risk_assessment="No tool permissions or cache-sensitive frontmatter changed.",
+        cache_impact_claim="Body-only edit preserves frontmatter cache key.",
+    )
+
+
+def test_run_manifest_defaults_prompt_template_artifact_paths_for_m7_compatibility() -> None:
+    manifest = RunManifest(**_manifest_payload())
+
+    assert manifest.prompt_template_artifact_paths == {}
+
+
+def test_run_manifest_accepts_prompt_template_artifact_paths_aliases() -> None:
+    manifest = RunManifest.model_validate(
+        {
+            **_manifest_payload(),
+            "promptTemplateArtifactPaths": {
+                "prompt_template_snapshot": "prompt_template_snapshot.json",
+                "prompt_template_candidates": "prompt_template_candidates.jsonl",
+                "prompt_template_review": "prompt_template_review.md",
+                "prompt_template_judge_evidence": "prompt_template_judge_evidence.jsonl",
+            },
+        }
+    )
+
+    dumped = manifest.model_dump(by_alias=True)
+
+    assert dumped["promptTemplateArtifactPaths"] == {
+        "prompt_template_snapshot": "prompt_template_snapshot.json",
+        "prompt_template_candidates": "prompt_template_candidates.jsonl",
+        "prompt_template_review": "prompt_template_review.md",
+        "prompt_template_judge_evidence": "prompt_template_judge_evidence.jsonl",
+    }
+    assert RunManifest.model_validate(dumped).prompt_template_artifact_paths == (
+        manifest.prompt_template_artifact_paths
+    )
+
+
+def test_prompt_template_snapshot_serializes_and_validates_aliases() -> None:
+    snapshot = _prompt_template_snapshot()
+
+    dumped = snapshot.model_dump(by_alias=True)
+
+    assert dumped == {
+        "skillName": "demo-skill",
+        "sourceKind": "bundled",
+        "sourceIdentifier": "skills/demo-skill/SKILL.md",
+        "frontmatterHash": "frontmatterhash",
+        "bodyHash": "bodyhash",
+        "cacheKeyHash": "cachekeyhash",
+        "editableRegionCount": 1,
+        "bodyLineCount": 3,
+        "snapshotHash": "snapshothash",
+        "bodyText": "Use concise answers.\n",
+    }
+    assert evolve_schemas.PromptTemplateSnapshot.model_validate(dumped) == snapshot
+
+
+def test_prompt_template_candidate_serializes_and_validates_aliases() -> None:
+    candidate = _prompt_template_candidate()
+
+    dumped = candidate.model_dump(by_alias=True)
+
+    assert dumped == {
+        "skillName": "demo-skill",
+        "baselineSnapshotHash": "snapshothash",
+        "proposedBody": "Use concise answers and cite constraints.\n",
+        "intendedImprovement": "Clarifies expected response style.",
+        "riskAssessment": "No tool permissions or cache-sensitive frontmatter changed.",
+        "cacheImpactClaim": "Body-only edit preserves frontmatter cache key.",
+    }
+    assert evolve_schemas.PromptTemplateCandidate.model_validate(dumped) == candidate
+
+
+def test_prompt_template_validation_result_reject_requires_reason_code() -> None:
+    with pytest.raises(ValidationError):
+        evolve_schemas.PromptTemplateValidationResult(
+            skill_name="demo-skill",
+            baseline_snapshot_hash="snapshothash",
+            verdict="reject",
+            cache_impact="cache_sensitive_rejected",
+        )
+
+
+def test_optimizer_input_accepts_prompt_template_snapshot_context() -> None:
+    snapshot = _prompt_template_snapshot()
+
+    payload = OptimizerInput(
+        run_id="run-1",
+        skill_name="demo-skill",
+        baseline_hash="basehash",
+        baseline_skill_md_redacted="redacted",
+        eval_records_path="optimizer/eval_bundle.ndjson",
+        output_dir="optimizer",
+        max_candidates=8,
+        timeout_seconds=600,
+        seed=123,
+        prompt_template_snapshot=[snapshot],
+    )
+
+    dumped = payload.model_dump(by_alias=True)
+
+    assert dumped["promptTemplateSnapshot"] == [snapshot.model_dump(by_alias=True)]
+    assert OptimizerInput.model_validate(dumped).prompt_template_snapshot == [snapshot]
+
+
+def test_optimizer_result_accepts_optional_prompt_template_candidates() -> None:
+    candidate = _prompt_template_candidate()
+    error = OptimizerError(code="no_improvement", message="No skill improvement.")
+
+    result = OptimizerResult(
+        optimizer_name="external-wrapper",
+        candidates=[],
+        error=error,
+        prompt_template_candidates=[candidate],
+    )
+
+    dumped = result.model_dump(by_alias=True)
+
+    assert dumped["promptTemplateCandidates"] == [candidate.model_dump(by_alias=True)]
+    assert dumped["candidates"] == []
+    assert OptimizerResult.model_validate(dumped).prompt_template_candidates == [candidate]

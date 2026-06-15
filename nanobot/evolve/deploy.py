@@ -323,6 +323,15 @@ def assemble_pr_body(
                 "- [ ] Reviewer confirmed tool metadata does not expand permissions",
             ]
         )
+    if manifest.prompt_template_artifact_paths:
+        human_review_lines.extend(
+            [
+                "- [ ] Reviewer inspected prompt/template diff artifacts",
+                "- [ ] Reviewer confirmed no bundled skill source file changed automatically",
+                "- [ ] Reviewer confirmed cache-sensitive frontmatter was not modified by accepted candidates",
+                "- [ ] Reviewer confirmed safety/tool/sandbox/review wording was not weakened",
+            ]
+        )
     human_review_lines.extend(
         [
             f"- Human approval required: `{str(manifest.requires_human_approval).lower()}`",
