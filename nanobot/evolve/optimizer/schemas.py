@@ -3,7 +3,12 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from nanobot.evolve._base import EvolveBase
-from nanobot.evolve.schemas import ToolContractSnapshot, ToolMetadataCandidate
+from nanobot.evolve.schemas import (
+    PromptTemplateCandidate,
+    PromptTemplateSnapshot,
+    ToolContractSnapshot,
+    ToolMetadataCandidate,
+)
 
 
 class OptimizerInput(EvolveBase):
@@ -18,6 +23,7 @@ class OptimizerInput(EvolveBase):
     timeout_seconds: int = Field(ge=1)
     seed: int
     tool_contract_snapshot: list[ToolContractSnapshot] = Field(default_factory=list)
+    prompt_template_snapshot: list[PromptTemplateSnapshot] = Field(default_factory=list)
 
 
 class OptimizerCandidate(EvolveBase):
@@ -37,6 +43,7 @@ class OptimizerResult(EvolveBase):
     schema_version: Literal["1"] = "1"
     candidates: list[OptimizerCandidate] = Field(default_factory=list)
     tool_metadata_candidates: list[ToolMetadataCandidate] = Field(default_factory=list)
+    prompt_template_candidates: list[PromptTemplateCandidate] = Field(default_factory=list)
     error: OptimizerError | None = None
     optimizer_name: str
     optimizer_version: str | None = None
