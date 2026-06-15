@@ -56,28 +56,37 @@ def atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
-def write_redacted_json_artifact(path: Path, value: Any) -> None:
+def write_redacted_json_artifact(
+    path: Path,
+    value: Any,
+    *,
+    ensure_ascii: bool = False,
+) -> None:
     """Write a recursively redacted, deterministic JSON artifact."""
     text = json.dumps(
         redact_json_value(value),
         indent=2,
         sort_keys=True,
-        ensure_ascii=False,
+        ensure_ascii=ensure_ascii,
     )
     atomic_write_text(path, f"{text}\n")
 
 
-def write_jsonl_artifact(path: Path, rows: Iterable[Any]) -> None:
-    """Write recursively redacted rows as compact sorted JSON Lines."""
-    lines = [
-        json.dumps(
-            redact_json_value(row),
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        for row in rows
-    ]
+def write_jsonl_artifact(
+    path: Path,
+    rows: Iterable[Any],
+    *,
+    sort_keys: bool = True,
+    compact: bool = True,
+) -> None:
+    """Write recursively redacted rows as JSON Lines."""
+    dump_options: dict[str, object] = {
+        "sort_keys": sort_keys,
+        "ensure_ascii": False,
+    }
+    if compact:
+        dump_options["separators"] = (",", ":")
+    lines = [json.dumps(redact_json_value(row), **dump_options) for row in rows]
     atomic_write_text(path, "\n".join(lines) + ("\n" if lines else ""))
 
 

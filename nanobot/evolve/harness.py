@@ -535,10 +535,13 @@ class OfflineHarness:
         write_redacted_json_artifact(
             run_dir / artifact_paths["tool_contract_snapshot"],
             [item.model_dump(mode="json", by_alias=True) for item in snapshot],
+            ensure_ascii=True,
         )
         write_jsonl_artifact(
             run_dir / artifact_paths["tool_metadata_candidates"],
             [candidate.model_dump(mode="json", by_alias=True) for candidate in candidates],
+            sort_keys=False,
+            compact=True,
         )
         atomic_write_text(
             run_dir / artifact_paths["tool_metadata_review"],

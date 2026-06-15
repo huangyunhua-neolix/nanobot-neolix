@@ -87,6 +87,27 @@ def test_write_jsonl_artifact_preserves_row_order_and_redacts_strings(tmp_path: 
     assert "[REDACTED:APIKEY:ANTHROPIC]" in lines[1]
 
 
+def test_write_redacted_json_artifact_can_escape_non_ascii_for_compatibility(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "artifact.json"
+
+    write_redacted_json_artifact(path, {"message": "工具"}, ensure_ascii=True)
+
+    assert path.read_text(encoding="utf-8") == '{\n  "message": "\\u5de5\\u5177"\n}\n'
+
+
+def test_write_jsonl_artifact_can_preserve_key_order_and_default_spacing(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "artifact.jsonl"
+    rows = [{"zeta": 1, "alpha": 2}]
+
+    write_jsonl_artifact(path, rows, sort_keys=False, compact=False)
+
+    assert path.read_text(encoding="utf-8") == '{"zeta": 1, "alpha": 2}\n'
+
+
 def test_write_jsonl_artifact_empty_rows_produce_empty_file(tmp_path: Path) -> None:
     path = tmp_path / "empty.jsonl"
 
