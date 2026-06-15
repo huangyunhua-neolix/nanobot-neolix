@@ -255,13 +255,19 @@ def _regions_touched_by_lines(
 
 
 def _normalize_safety_text(text: str) -> str:
-    normalized = unicodedata.normalize("NFKC", text).casefold()
-    stripped = "".join(
-        character
-        for character in normalized
-        if character != "\u00ad" and unicodedata.category(character) not in {"Cc", "Cf"}
-    )
-    return " ".join(stripped.split())
+    decomposed = unicodedata.normalize("NFKD", text).casefold()
+    stripped_characters: list[str] = []
+    for character in decomposed:
+        category = unicodedata.category(character)
+        if character == "\u00ad" or category in {"Cf", "Mn"}:
+            continue
+        if category == "Cc":
+            if character.isspace():
+                stripped_characters.append(" ")
+            continue
+        stripped_characters.append(character)
+    normalized = unicodedata.normalize("NFKC", "".join(stripped_characters))
+    return " ".join(normalized.split())
 
 
 def _contains_phrase(text: str, phrases: tuple[str, ...]) -> bool:
@@ -273,6 +279,28 @@ def _contains_phrase(text: str, phrases: tuple[str, ...]) -> bool:
         for phrase in phrases
         if (normalized_phrase := _normalize_safety_text(phrase))
     )
+
+
+def _contains_phrase_tokens_in_order(text: str, phrases: tuple[str, ...]) -> bool:
+    tokens = re.findall(r"\w+", _normalize_safety_text(text))
+    if not tokens:
+        return False
+    for phrase in phrases:
+        phrase_tokens = re.findall(r"\w+", _normalize_safety_text(phrase))
+        if phrase_tokens and _tokens_appear_in_order(tokens, phrase_tokens):
+            return True
+    return False
+
+
+def _tokens_appear_in_order(tokens: list[str], phrase_tokens: list[str]) -> bool:
+    phrase_index = 0
+    for token in tokens:
+        if phrase_index >= len(phrase_tokens):
+            return True
+        if token != phrase_tokens[phrase_index]:
+            continue
+        phrase_index += 1
+    return phrase_index == len(phrase_tokens)
 
 
 def _region_text(body: str, region: EditableRegion) -> str:
@@ -526,6 +554,7 @@ def validate_prompt_template_candidate(
         ]
         if any(
             _contains_phrase(text, _DENIED_WEAKENING_PHRASES)
+            or _contains_phrase_tokens_in_order(text, _DENIED_WEAKENING_PHRASES)
             for text in denied_phrase_texts
         ):
             return _reject_prompt_result(

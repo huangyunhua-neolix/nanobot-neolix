@@ -494,6 +494,64 @@ def test_validate_prompt_template_candidate_rejects_contextual_denied_weakening_
     assert result.reason_code == "prompt-safety-regression"
 
 
+def test_validate_prompt_template_candidate_rejects_denied_phrase_with_combining_mark() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable instruction.\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace(
+        "Editable instruction.",
+        "s\u0301kip approval for this instruction.",
+    )
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-safety-regression"
+
+
+def test_validate_prompt_template_candidate_rejects_denied_phrase_split_by_inserted_filler() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "skip\n"
+        "filler\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("filler\n<!--", "filler\napproval\n<!--")
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-safety-regression"
+
+
+def test_validate_prompt_template_candidate_rejects_denied_phrase_replaced_with_filler() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable instruction.\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace(
+        "Editable instruction.",
+        "skip\nfiller-inserted\napproval",
+    )
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-safety-regression"
+
+
 def test_validate_prompt_template_candidate_accepts_normalized_identical_body_as_noop() -> None:
     snapshot = _snapshot("Cafe\u0301 answer.\n")
     candidate = _candidate(snapshot, "Cafe\u0301 answer.\r\n")
