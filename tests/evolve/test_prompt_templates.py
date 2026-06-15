@@ -620,6 +620,23 @@ def test_validate_prompt_template_candidate_rejects_protected_editable_region() 
     assert result.reason_code == "prompt-safety-regression"
 
 
+def test_validate_prompt_template_candidate_rejects_protected_region_with_filler() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Always ask filler the filler user before proceeding.\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("proceeding", "continuing")
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-safety-regression"
+
+
 @pytest.mark.parametrize(
     "denied_phrase",
     [

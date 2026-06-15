@@ -716,6 +716,11 @@ def validate_prompt_template_candidate(
                 _PROTECTED_SAFETY_PHRASES,
                 map_confusables=True,
             )
+            or _contains_phrase_tokens_in_order(
+                _region_text(baseline_body, region),
+                _PROTECTED_SAFETY_PHRASES,
+                map_confusables=True,
+            )
             for region in touched_regions
         ):
             return _reject_prompt_result(
