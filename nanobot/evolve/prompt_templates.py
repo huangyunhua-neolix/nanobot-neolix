@@ -710,6 +710,7 @@ def _normalized_weakening_text(text: str) -> str:
 
 
 def _contains_tool_enablement(normalized: str) -> bool:
+    compact_normalized = _alnum_compact_safety_text(normalized)
     tool_subjects = (
         "bash",
         "shell",
@@ -731,6 +732,10 @@ def _contains_tool_enablement(normalized: str) -> bool:
         "open",
         "spawn",
         "launch",
+        "enable",
+        "enabled",
+        "allow",
+        "allowed",
         "prefer",
         "may be used",
         "can be used",
@@ -740,9 +745,11 @@ def _contains_tool_enablement(normalized: str) -> bool:
         "tool",
         "calls",
     )
-    return any(subject in normalized for subject in tool_subjects) and any(
-        predicate in normalized for predicate in tool_predicates
+    subject_found = any(
+        subject in normalized or _alnum_compact_safety_text(subject) in compact_normalized
+        for subject in tool_subjects
     )
+    return subject_found and any(predicate in normalized for predicate in tool_predicates)
 
 
 def _contains_safety_control_weakening(normalized: str) -> bool:

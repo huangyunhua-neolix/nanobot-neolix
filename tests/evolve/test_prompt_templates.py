@@ -1324,6 +1324,15 @@ def test_validate_prompt_template_candidate_rejects_cross_region_denied_phrases_
         "spawn subprocesses",
         "spawn child process",
         "launch command line",
+        "use command-line tools",
+        "command-line may be used",
+        "run command-line instead",
+        "bash is allowed",
+        "shell allowed",
+        "terminal allowed",
+        "subprocess allowed",
+        "exec allowed",
+        "enable bash",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_tool_enablement_variants(
