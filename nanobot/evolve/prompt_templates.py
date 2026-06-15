@@ -727,6 +727,10 @@ def _contains_tool_enablement(normalized: str) -> bool:
         "run",
         "execute",
         "call",
+        "invoke",
+        "open",
+        "spawn",
+        "launch",
         "prefer",
         "may be used",
         "can be used",
@@ -1172,9 +1176,14 @@ def validate_prompt_template_candidate(
             proposed_body=proposed_body,
             regions=touched_regions,
         )
+        all_proposed_region_texts = _proposed_region_texts(
+            baseline_body=baseline_body,
+            proposed_body=proposed_body,
+            regions=editable_regions,
+        )
         proposed_safety_texts = [
             *proposed_region_texts,
-            "\n".join(proposed_region_texts),
+            "\n".join(all_proposed_region_texts),
             *_changed_text_contexts(proposed_body, proposed_changed_line_numbers),
         ]
         if _contains_non_ascii_letter_or_symbol(proposed_changed_text) or any(

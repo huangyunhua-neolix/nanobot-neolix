@@ -1284,6 +1284,68 @@ def test_validate_prompt_template_candidate_rejects_cross_region_denied_phrases(
     assert result.changed_line_numbers == [1, 4]
 
 
+@pytest.mark.parametrize(
+    ("baseline_first_region", "second_region"),
+    [
+        ("use shell", "instead"),
+        ("bypass", "review"),
+    ],
+)
+def test_validate_prompt_template_candidate_rejects_cross_region_denied_phrases_with_unchanged_region(
+    baseline_first_region: str,
+    second_region: str,
+) -> None:
+    body = (
+        "<!-- evolve:prompt-editable:start -->\n"
+        f"{baseline_first_region}\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "safe\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("safe", second_region)
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-safety-regression"
+    assert result.cache_impact == "cache_neutral"
+    assert result.changed_line_numbers == [4]
+
+
+@pytest.mark.parametrize(
+    "tool_instruction",
+    [
+        "run zsh",
+        "invoke zsh",
+        "open terminal",
+        "spawn subprocesses",
+        "spawn child process",
+        "launch command line",
+    ],
+)
+def test_validate_prompt_template_candidate_rejects_tool_enablement_variants(
+    tool_instruction: str,
+) -> None:
+    body = (
+        "<!-- evolve:prompt-editable:start -->\n"
+        "safe\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("safe", tool_instruction)
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-safety-regression"
+    assert result.cache_impact == "cache_neutral"
+    assert result.changed_line_numbers == [1]
+
+
 def test_validate_prompt_template_candidate_accepts_normalized_identical_body_as_noop() -> None:
     snapshot = _snapshot("Cafe\u0301 answer.\n")
     candidate = _candidate(snapshot, "Cafe\u0301 answer.\r\n")
