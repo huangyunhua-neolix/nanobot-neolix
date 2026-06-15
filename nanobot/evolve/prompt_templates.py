@@ -154,7 +154,7 @@ def _has_frontmatter_mutation(body: str) -> bool:
         if stripped == "---":
             return True
         field_name, separator, _field_value = stripped.partition(":")
-        if separator and field_name.strip() in _FRONTMATTER_FIELD_NAMES:
+        if separator and field_name.strip().casefold() in _FRONTMATTER_FIELD_NAMES:
             return True
     return False
 
@@ -402,6 +402,13 @@ def validate_prompt_template_candidate(
 
     try:
         changed_line_numbers = _changed_baseline_line_numbers(baseline_body, proposed_body)
+        if not changed_line_numbers:
+            return _reject_prompt_result(
+                candidate=candidate,
+                reason_code="prompt-cache-boundary-unknown",
+                reason="Proposed prompt template changes could not be mapped to baseline lines.",
+                cache_impact="cache_unknown_rejected",
+            )
         editable_regions = parse_editable_regions(baseline_body)
         if any(not _line_in_regions(line_number, editable_regions) for line_number in changed_line_numbers):
             return _reject_prompt_result(

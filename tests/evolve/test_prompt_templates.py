@@ -293,6 +293,18 @@ def test_validate_prompt_template_candidate_size_bound_wins_before_frontmatter()
     assert result.reason_code == "prompt-template-too-large"
 
 
+def test_validate_prompt_template_candidate_rejects_body_over_128_kib_byte_bound() -> None:
+    snapshot = _snapshot("Stable body.\n")
+    oversized_single_line_body = "x" * ((128 * 1024) + 1)
+    candidate = _candidate(snapshot, oversized_single_line_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-template-too-large"
+    assert result.cache_impact == "cache_unknown_rejected"
+
+
 def test_validate_prompt_template_candidate_rejects_frontmatter_delimiter_mutation() -> None:
     snapshot = _snapshot("Stable body.\n")
     candidate = _candidate(snapshot, "Stable body.\n---\nMore body.\n")
@@ -307,6 +319,24 @@ def test_validate_prompt_template_candidate_rejects_frontmatter_delimiter_mutati
 def test_validate_prompt_template_candidate_rejects_frontmatter_field_mutation() -> None:
     snapshot = _snapshot("Stable body.\n")
     candidate = _candidate(snapshot, "description: changed\nStable body.\n")
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-frontmatter-mutation"
+    assert result.cache_impact == "cache_sensitive_rejected"
+
+
+def test_validate_prompt_template_candidate_rejects_case_insensitive_frontmatter_field_mutation() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Editable\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace("Editable", "Description: changed")
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
 
     result = validate_prompt_template_candidate(candidate, [snapshot])
 
@@ -413,6 +443,28 @@ def test_validate_prompt_template_candidate_accepts_normalized_identical_body_as
     assert result.cache_impact == "candidate_noop"
     assert result.changed_line_numbers == []
     assert result.judge_evidence_path is None
+
+
+@pytest.mark.parametrize(
+    ("baseline_body", "proposed_body"),
+    [
+        ("Stable body.\n", "Stable body."),
+        ("Stable body.", "Stable body.\n"),
+    ],
+)
+def test_validate_prompt_template_candidate_rejects_final_newline_only_boundary_change(
+    baseline_body: str,
+    proposed_body: str,
+) -> None:
+    snapshot = _snapshot(baseline_body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-cache-boundary-unknown"
+    assert result.cache_impact == "cache_unknown_rejected"
+    assert result.changed_line_numbers == []
 
 
 def test_validate_prompt_template_candidates_preserves_duplicate_order_and_independent_results() -> None:
