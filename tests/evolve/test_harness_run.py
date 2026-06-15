@@ -137,6 +137,9 @@ Path(args.output).write_text(json.dumps({
         "eval_bundle": "optimizer/eval_bundle.ndjson",
         "optimizer_stderr": "optimizer/stderr.txt",
         "optimizer_stdout": "optimizer/stdout.txt",
+        "tool_contract_snapshot": "tool_contract_snapshot.json",
+        "tool_metadata_candidates": "tool_metadata_candidates.jsonl",
+        "tool_metadata_review": "tool_metadata_review.md",
     }
     assert manifest.evolve_extra_version == {"optimizer": "transform-wrapper"}
     assert manifest.requires_human_approval is True
@@ -661,6 +664,7 @@ Path(args.output).write_text(json.dumps({
     assert manifest.final_status == "no_improvement"
     assert manifest.candidate_hashes == []
     assert manifest.promoted_candidate_hash is None
+
 
 
 def test_harness_run_records_malformed_frontmatter_validation_failure(tmp_path: Path) -> None:

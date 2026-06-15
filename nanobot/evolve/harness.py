@@ -27,6 +27,7 @@ from nanobot.evolve.deploy import assemble_pr_body
 from nanobot.evolve.exceptions import ConfigError
 from nanobot.evolve.gates import GATES, Gate, GateResult
 from nanobot.evolve.gates.semantic_fidelity import SemanticFidelityGate
+from nanobot.evolve.judges.rubric import JudgeConfig, JudgePool
 from nanobot.evolve.optimizer.adapter import OptimizerAdapter
 from nanobot.evolve.optimizer.schemas import OptimizerCandidate, OptimizerInput, OptimizerResult
 from nanobot.evolve.privacy.redact import redact
@@ -41,9 +42,18 @@ from nanobot.evolve.schemas import (
     RunManifest,
     SkillContent,
     SkillFrontmatter,
+    ToolContractSnapshot,
+    ToolMetadataCandidate,
+    ToolMetadataValidationResult,
     ValidationFailure,
     dump_manifest,
     load_manifest,
+)
+from nanobot.evolve.tool_metadata import (
+    build_tool_metadata_judge_record,
+    capture_loaded_tool_contract_snapshot,
+    render_tool_metadata_review,
+    validate_tool_metadata_candidate,
 )
 
 __all__ = [
@@ -78,6 +88,12 @@ _REVIEW_ARTIFACT_PATHS: dict[str, str] = {
     "optimizer_input": "optimizer/optimizer_input.json",
     "optimizer_output": "optimizer/optimizer_output.json",
 }
+_TOOL_METADATA_ARTIFACT_PATHS: dict[str, str] = {
+    "tool_contract_snapshot": "tool_contract_snapshot.json",
+    "tool_metadata_candidates": "tool_metadata_candidates.jsonl",
+    "tool_metadata_review": "tool_metadata_review.md",
+}
+_TOOL_METADATA_JUDGE_EVIDENCE_PATH = "tool_metadata_judge_evidence.jsonl"
 
 
 def _review_artifact_plan() -> dict[str, str]:
@@ -191,6 +207,69 @@ def _safe_single_line_reason(text: str, *, max_chars: int = _SAFE_REASON_MAX_CHA
 
 def _validation_failure_reason(exc: ValidationError) -> str:
     return _safe_single_line_reason(f"frontmatter-invalid: {exc}")
+
+
+def _tool_metadata_artifact_plan() -> dict[str, str]:
+    return dict(_TOOL_METADATA_ARTIFACT_PATHS)
+
+
+def _metadata_rejection_reason(result: ToolMetadataValidationResult) -> str:
+    reason_code = result.reason_code or "tool-metadata-rejected"
+    reason = result.reason or reason_code
+    return _safe_single_line_reason(reason)
+
+
+def _tool_metadata_candidate_hash(candidate: ToolMetadataCandidate) -> str:
+    """Return validation-failure hash in the tool metadata namespace."""
+    return f"tool-metadata:{candidate.baseline_schema_hash}"
+
+
+def _review_validation_results(
+    results: list[ToolMetadataValidationResult],
+) -> list[ToolMetadataValidationResult]:
+    """Return validation results with review-friendly rejection reasons."""
+    return [
+        result.model_copy(
+            update={
+                "reason": _safe_single_line_reason(
+                    f"{result.reason_code}: {result.reason}"
+                    if result.verdict == "reject" and result.reason_code and result.reason
+                    else result.reason or "<none>"
+                )
+            }
+        )
+        for result in results
+    ]
+
+
+def _redacted_tool_metadata_candidate(candidate: ToolMetadataCandidate) -> ToolMetadataCandidate:
+    """Return a metadata candidate safe for shareable JSON artifacts."""
+    return ToolMetadataCandidate.model_validate_json(
+        redact(candidate.model_dump_json(by_alias=True)).text
+    )
+
+
+def _redacted_tool_contract_snapshot(snapshot: ToolContractSnapshot) -> ToolContractSnapshot:
+    """Return a tool contract snapshot safe for shareable JSON artifacts."""
+    return ToolContractSnapshot.model_validate_json(
+        redact(snapshot.model_dump_json(by_alias=True)).text
+    )
+
+
+def _matching_tool_snapshot(
+    candidate: ToolMetadataCandidate,
+    snapshot: list[ToolContractSnapshot],
+) -> ToolContractSnapshot | None:
+    """Return the baseline snapshot matching a metadata candidate contract."""
+    return next(
+        (
+            item
+            for item in snapshot
+            if item.tool_name == candidate.tool_name
+            and item.schema_hash == candidate.baseline_schema_hash
+        ),
+        None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +492,81 @@ class OfflineHarness:
             consensus_split_count=0,
         )
 
+    def _capture_tool_contract_snapshot(self) -> list[ToolContractSnapshot]:
+        """Capture tool contracts using the same loader path as runtime startup."""
+        return capture_loaded_tool_contract_snapshot(workspace=str(self._workspace))
+
+    def _write_tool_metadata_judge_evidence(
+        self,
+        run_dir: Path,
+        snapshot: list[ToolContractSnapshot],
+        candidates: list[ToolMetadataCandidate],
+        validation_results: list[ToolMetadataValidationResult],
+    ) -> list[ToolMetadataValidationResult]:
+        """Write deterministic judge evidence for accepted metadata candidates."""
+        evidence_path = run_dir / _TOOL_METADATA_JUDGE_EVIDENCE_PATH
+        # One local judge keeps JudgePool's odd-size quorum invariant without tuning.
+        judge_pool = JudgePool(judges=[JudgeConfig(model="local/deterministic")])
+        updated_results = list(validation_results)
+        lines: list[str] = []
+        for index, (candidate, result) in enumerate(zip(candidates, validation_results)):
+            if result.verdict != "accept":
+                continue
+            baseline = _matching_tool_snapshot(candidate, snapshot)
+            if baseline is None:
+                continue
+            evidence = judge_pool.score_with_evidence(
+                build_tool_metadata_judge_record(candidate, baseline)
+            )
+            lines.append(evidence.model_dump_json(by_alias=True))
+            updated_results[index] = result.model_copy(
+                update={"judge_evidence_path": _TOOL_METADATA_JUDGE_EVIDENCE_PATH}
+            )
+
+        if lines:
+            evidence_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return updated_results
+
+    def _write_tool_metadata_artifacts(
+        self,
+        run_dir: Path,
+        snapshot: list[ToolContractSnapshot],
+        candidates: list[ToolMetadataCandidate],
+        validation_results: list[ToolMetadataValidationResult],
+    ) -> dict[str, str]:
+        """Write metadata artifacts after optional judge evidence has been written."""
+        if not snapshot and not candidates:
+            return {}
+
+        artifact_paths = _tool_metadata_artifact_plan()
+        if (run_dir / _TOOL_METADATA_JUDGE_EVIDENCE_PATH).is_file():
+            artifact_paths["tool_metadata_judge_evidence"] = _TOOL_METADATA_JUDGE_EVIDENCE_PATH
+        safe_snapshot = [_redacted_tool_contract_snapshot(item) for item in snapshot]
+        safe_candidates = [_redacted_tool_metadata_candidate(candidate) for candidate in candidates]
+        (run_dir / artifact_paths["tool_contract_snapshot"]).write_text(
+            json.dumps(
+                [item.model_dump(mode="json", by_alias=True) for item in safe_snapshot],
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (run_dir / artifact_paths["tool_metadata_candidates"]).write_text(
+            "".join(
+                candidate.model_dump_json(by_alias=True) + "\n"
+                for candidate in safe_candidates
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / artifact_paths["tool_metadata_review"]).write_text(
+            render_tool_metadata_review(
+                snapshot, candidates, _review_validation_results(validation_results)
+            ),
+            encoding="utf-8",
+        )
+        return artifact_paths
+
     def _nanobot_version(self) -> str:
         """Return the installed nanobot-ai version, or 0.0.0 in editable test runs."""
         try:
@@ -467,6 +621,7 @@ class OfflineHarness:
         optimizer_dir: Path,
     ) -> RunManifest:
         baseline = self._load_baseline_skill(skill_name)
+        tool_contract_snapshot = self._capture_tool_contract_snapshot()
         eval_bundle = self._load_eval_records(skill_name, tiers, run_id)
         record_count_per_tier = _count_eval_bundle_records(eval_bundle)
         optimizer_input = OptimizerInput(
@@ -479,6 +634,7 @@ class OfflineHarness:
             max_candidates=max_candidates,
             timeout_seconds=optimizer_timeout_seconds,
             seed=123456789,
+            tool_contract_snapshot=tool_contract_snapshot,
         )
 
         subprocess_start = time.perf_counter()
@@ -490,6 +646,29 @@ class OfflineHarness:
         validation_failures: list[ValidationFailure] = []
         valid_candidates: list[Candidate] = []
         seen_hashes: set[str] = set()
+        tool_metadata_validation_results: list[ToolMetadataValidationResult] = []
+        for index, metadata_candidate in enumerate(optimizer_result.tool_metadata_candidates):
+            validation_result = validate_tool_metadata_candidate(
+                metadata_candidate, tool_contract_snapshot
+            )
+            tool_metadata_validation_results.append(validation_result)
+            if validation_result.verdict == "reject":
+                validation_failures.append(
+                    ValidationFailure(
+                        candidate_index=index,
+                        candidate_hash=_tool_metadata_candidate_hash(metadata_candidate),
+                        reason_code=validation_result.reason_code or "tool-metadata-rejected",
+                        reason=_metadata_rejection_reason(validation_result),
+                    )
+                )
+
+        tool_metadata_validation_results = self._write_tool_metadata_judge_evidence(
+            run_dir,
+            tool_contract_snapshot,
+            optimizer_result.tool_metadata_candidates,
+            tool_metadata_validation_results,
+        )
+
         if not (optimizer_result.error and optimizer_result.error.code == "no_improvement"):
             for index, optimizer_candidate in enumerate(
                 self._rank_candidates(optimizer_result)[:max_candidates]
@@ -536,8 +715,14 @@ class OfflineHarness:
                 promoted = candidate
                 break
 
+        metadata_rejections_exist = any(
+            result.verdict == "reject" for result in tool_metadata_validation_results
+        )
         if optimizer_result.error and optimizer_result.error.code == "no_improvement":
-            final_status = "no_improvement"
+            if metadata_rejections_exist and not valid_candidates:
+                final_status = "rejected_by_validation"
+            else:
+                final_status = "no_improvement"
         elif not valid_candidates and validation_failures:
             final_status = "rejected_by_validation"
         else:
@@ -552,11 +737,18 @@ class OfflineHarness:
                 candidate.skill_md_content, encoding="utf-8"
             )
 
+        tool_metadata_artifact_paths = self._write_tool_metadata_artifacts(
+            run_dir,
+            tool_contract_snapshot,
+            optimizer_result.tool_metadata_candidates,
+            tool_metadata_validation_results,
+        )
         artifact_paths = {
             **_review_artifact_plan(),
             "eval_bundle": "optimizer/eval_bundle.ndjson",
             "optimizer_stderr": "optimizer/stderr.txt",
             "optimizer_stdout": "optimizer/stdout.txt",
+            **tool_metadata_artifact_paths,
         }
         gate_verdicts = [
             result
@@ -598,6 +790,7 @@ class OfflineHarness:
             requires_human_approval=promoted is not None,
             judge_run_summary=judge_run_summary,
             judge_evidence_paths=judge_evidence_paths,
+            tool_metadata_artifact_paths=tool_metadata_artifact_paths,
         )
 
         (run_dir / "diff.patch").write_text(diff_patch, encoding="utf-8")
