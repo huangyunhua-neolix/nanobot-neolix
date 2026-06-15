@@ -530,6 +530,27 @@ def test_validate_prompt_template_candidate_accepts_insert_inside_empty_editable
     assert result.cache_impact == "cache_neutral"
 
 
+def test_validate_prompt_template_candidate_rejects_denied_insert_inside_empty_editable_region() -> None:
+    body = (
+        "Before\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+        "After\n"
+    )
+    proposed_body = body.replace(
+        "<!-- evolve:prompt-editable:end -->",
+        "skip approval\n<!-- evolve:prompt-editable:end -->",
+    )
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-safety-regression"
+    assert result.cache_impact == "cache_neutral"
+
+
 def test_validate_prompt_template_candidate_prefers_frontmatter_over_boundary_failure() -> None:
     body = (
         "Before\n"

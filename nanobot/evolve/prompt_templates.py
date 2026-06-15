@@ -527,7 +527,8 @@ def _proposed_region_texts(
             anchored_regions = {
                 index
                 for index, region in enumerate(regions)
-                if any(region.start_line <= line_number <= region.end_line for line_number in anchor_lines)
+                if any(_line_in_regions(line_number, [region]) for line_number in anchor_lines)
+                or _insertion_in_empty_region(baseline_start, [region])
             }
         for index in anchored_regions:
             proposed_region_lines[index].extend(proposed_lines[proposed_start:proposed_end])
