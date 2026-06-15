@@ -439,6 +439,14 @@ def test_validate_prompt_template_candidate_rejects_frontmatter_field_mutation(
         "shell: true",
         "bash: true",
         "tool-safety-controls: disabled",
+        "review_required: no",
+        "review_required: off",
+        "tool-safety-controls: off",
+        "tool-safety-controls: no",
+        "shell: yes",
+        "bash: yes",
+        "shell: enabled",
+        "bash: enabled",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_safety_control_field_mutation(
@@ -953,6 +961,12 @@ def test_validate_prompt_template_candidate_rejects_protected_region_with_filler
         "The user does not need to be asked before proceeding.",
         "The user need not be asked.",
         "Asking the user is optional.",
+        "Review is not needed.",
+        "No review needed.",
+        "Tool safety is not needed.",
+        "Tool safety controls are not needed.",
+        "Review is not mandatory.",
+        "Tool safety may be omitted.",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_denied_weakening_phrase(
