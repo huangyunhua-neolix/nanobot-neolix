@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -88,6 +89,66 @@ def write_jsonl_artifact(
         dump_options["separators"] = (",", ":")
     lines = [json.dumps(redact_json_value(row), **dump_options) for row in rows]
     atomic_write_text(path, "\n".join(lines) + ("\n" if lines else ""))
+
+
+class OwnedJsonlEvidenceWriter:
+    """Owns one JSONL evidence path for a single harness run lane.
+
+    Lifecycle:
+    1. ``remove_untrusted()`` — call before writing any harness-controlled rows
+       to clear any optimizer-created target at the evidence path.
+    2. ``buffer(row_json)`` — accumulate trusted JSON lines in memory.
+    3. ``publish()`` — atomically write buffered lines to the evidence path.
+    """
+
+    def __init__(self, path: Path, *, evidence_name: str) -> None:
+        self._path = path
+        self._evidence_name = evidence_name
+        self._rows: list[str] = []
+
+    def remove_untrusted(self) -> None:
+        """Remove any optimizer-created target before harness ownership.
+
+        Unlinks regular files and symlinks. Fails closed on directories or other
+        non-regular targets with a clear error containing the evidence name.
+        """
+        try:
+            mode = self._path.lstat().st_mode
+        except FileNotFoundError:
+            return
+        if stat.S_ISDIR(mode):
+            raise IsADirectoryError(
+                f"{self._evidence_name} judge evidence path is a directory: {self._path}"
+            )
+        if not stat.S_ISREG(mode) and not stat.S_ISLNK(mode):
+            raise OSError(
+                f"{self._evidence_name} judge evidence path is not a regular file or symlink: {self._path}"
+            )
+        self._path.unlink()
+
+    def buffer(self, row_json: str) -> None:
+        """Accumulate a trusted JSON line in memory."""
+        self._rows.append(row_json)
+
+    def publish(self) -> str | None:
+        """Atomically write buffered lines to the evidence path.
+
+        Returns the filename on success or ``None`` if there are no rows.
+        Fails closed if the publish target exists and is not a regular file.
+        """
+        if not self._rows:
+            return None
+        try:
+            mode = self._path.lstat().st_mode
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISREG(mode):
+                raise OSError(
+                    f"{self._evidence_name} judge evidence path is not a regular file: {self._path}"
+                )
+        atomic_write_text(self._path, "\n".join(self._rows) + "\n")
+        return self._path.name
 
 
 def markdown_review_text(value: object, *, max_chars: int = 500) -> str:
