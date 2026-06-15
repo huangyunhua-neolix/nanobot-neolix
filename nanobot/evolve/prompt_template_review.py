@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import unicodedata
 
 from nanobot.evolve.artifacts import markdown_review_text
@@ -15,6 +16,8 @@ from nanobot.evolve.schemas import (
 _HASH_PREFIX_LENGTH = 12
 _MAX_REVIEW_TEXT_CHARS = 500
 _MAX_REVIEW_BODY_CHARS = 4_000
+_MARKDOWN_LINK_TARGET_RE = re.compile(r"\]\(([^)]*)\)")
+_BARE_URI_RE = re.compile(r"\b(?:https?|mailto)://\S+", re.IGNORECASE)
 
 
 def _hash_text(value: str) -> str:
@@ -30,6 +33,16 @@ def _normalize_body_text(text: str) -> str:
 
 def _review_text(value: object, *, max_chars: int = _MAX_REVIEW_TEXT_CHARS) -> str:
     return markdown_review_text(value, max_chars=max_chars)
+
+
+def _review_scalar(value: object, *, max_chars: int = _MAX_REVIEW_TEXT_CHARS) -> str:
+    text = _review_text(value, max_chars=max_chars)
+    text = text.replace("`", "&#96;")
+    text = text.replace("\r\n", "⏎").replace("\r", "⏎").replace("\n", "⏎")
+    text = text.replace("<", "&lt;").replace(">", "&gt;")
+    text = text.replace("[", "\\[").replace("]", "\\]")
+    text = _MARKDOWN_LINK_TARGET_RE.sub("](redacted-link)", text)
+    return _BARE_URI_RE.sub("redacted-uri", text)
 
 
 def _review_list(values: list[int]) -> str:
@@ -128,6 +141,8 @@ def render_prompt_template_review(
 ) -> str:
     snapshots_by_name = {snapshot.skill_name: snapshot for snapshot in snapshots}
     cache_counts = _summarize_prompt_template_candidate_cache_impact(candidates, validation_results)
+    if snapshots and not candidates:
+        cache_counts.candidate_absent = 1
     lines = [
         "# Prompt Template Review",
         "",
@@ -149,10 +164,10 @@ def render_prompt_template_review(
     else:
         for snapshot in sorted(snapshots, key=lambda item: (item.source_kind, item.skill_name)):
             lines.append(
-                f"- `{_review_text(snapshot.skill_name)}` ({snapshot.source_kind}) "
-                f"snapshot `{_review_text(snapshot.snapshot_hash[:_HASH_PREFIX_LENGTH])}` "
-                f"body `{_review_text(snapshot.body_hash[:_HASH_PREFIX_LENGTH])}` "
-                f"cache-key `{_review_text(snapshot.cache_key_hash[:_HASH_PREFIX_LENGTH])}` "
+                f"- `{_review_scalar(snapshot.skill_name)}` ({snapshot.source_kind}) "
+                f"snapshot `{_review_scalar(snapshot.snapshot_hash[:_HASH_PREFIX_LENGTH])}` "
+                f"body `{_review_scalar(snapshot.body_hash[:_HASH_PREFIX_LENGTH])}` "
+                f"cache-key `{_review_scalar(snapshot.cache_key_hash[:_HASH_PREFIX_LENGTH])}` "
                 f"editable-regions `{snapshot.editable_region_count}`"
             )
 
@@ -193,19 +208,19 @@ def render_prompt_template_review(
         lines.extend(
             [
                 "",
-                f"### Candidate {index + 1}: `{_review_text(candidate.skill_name)}`",
-                f"Baseline snapshot hash: `{_review_text(candidate.baseline_snapshot_hash[:_HASH_PREFIX_LENGTH])}`",
-                f"Baseline body hash: `{_review_text(baseline_body_hash)}`",
-                f"Proposed body hash: `{_review_text(proposed_body_hash)}`",
-                f"Verdict: `{_review_text(verdict)}`",
-                f"Cache impact: `{_review_text(cache_impact)}`",
-                f"Reason code: `{_review_text(reason_code)}`",
-                f"Redacted reason: {_review_text(reason)}",
+                f"### Candidate {index + 1}: `{_review_scalar(candidate.skill_name)}`",
+                f"Baseline snapshot hash: `{_review_scalar(candidate.baseline_snapshot_hash[:_HASH_PREFIX_LENGTH])}`",
+                f"Baseline body hash: `{_review_scalar(baseline_body_hash)}`",
+                f"Proposed body hash: `{_review_scalar(proposed_body_hash)}`",
+                f"Verdict: `{_review_scalar(verdict)}`",
+                f"Cache impact: `{_review_scalar(cache_impact)}`",
+                f"Reason code: `{_review_scalar(reason_code)}`",
+                f"Redacted reason: {_review_scalar(reason)}",
                 f"Changed lines: {_review_list(changed_line_numbers)}",
-                f"Judge evidence: `{_review_text(judge_evidence_path)}`",
-                f"Intended improvement: {_review_text(candidate.intended_improvement)}",
-                f"Risk assessment: {_review_text(candidate.risk_assessment)}",
-                f"Cache impact claim: {_review_text(candidate.cache_impact_claim)}",
+                f"Judge evidence: `{_review_scalar(judge_evidence_path)}`",
+                f"Intended improvement: {_review_scalar(candidate.intended_improvement)}",
+                f"Risk assessment: {_review_scalar(candidate.risk_assessment)}",
+                f"Cache impact claim: {_review_scalar(candidate.cache_impact_claim)}",
                 "Proposed body:",
                 "````text",
                 _review_text(candidate.proposed_body, max_chars=_MAX_REVIEW_BODY_CHARS),
