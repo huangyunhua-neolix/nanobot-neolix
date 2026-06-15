@@ -161,6 +161,13 @@ _SAFETY_CONTROL_FIELD_KEY_TOKENS = (
     "tools",
     "allowed_tools",
     "allowedtools",
+    "allowed_tool",
+    "allow_tools",
+    "allowtools",
+    "allow_tool",
+    "available_tools",
+    "availabletools",
+    "available_tool",
     "tool_safety",
     "shell",
     "bash",
@@ -681,9 +688,14 @@ def _is_safety_control_field(normalized_key: str, field_value: str) -> bool:
 
 
 def _contains_weakening_pattern(text: str) -> bool:
-    normalized = _normalize_safety_text(text, map_confusables=True)
-    normalized = (
-        normalized.replace("’", "'")
+    normalized = _normalized_weakening_text(text)
+    return _contains_tool_enablement(normalized) or _contains_safety_control_weakening(normalized)
+
+
+def _normalized_weakening_text(text: str) -> str:
+    return (
+        _normalize_safety_text(text, map_confusables=True)
+        .replace("’", "'")
         .replace("`", "'")
         .replace("´", "'")
         .replace(" isn't ", " is not ")
@@ -695,16 +707,124 @@ def _contains_weakening_pattern(text: str) -> bool:
         .replace(" must not be ", " not ")
         .replace(" will not be ", " not ")
     )
-    for subject in _PROTECTED_WEAKENING_SUBJECTS:
-        normalized_subject = _normalize_safety_text(subject, map_confusables=True)
-        if normalized_subject not in normalized:
-            continue
-        if any(
-            _normalize_safety_text(predicate, map_confusables=True) in normalized
-            for predicate in _WEAKENING_PREDICATES
-        ):
-            return True
-    return False
+
+
+def _contains_tool_enablement(normalized: str) -> bool:
+    tool_subjects = (
+        "bash",
+        "shell",
+        " sh",
+        "/bin/sh",
+        "zsh",
+        "terminal",
+        "command line",
+        "subprocess",
+        "process",
+        "exec",
+    )
+    tool_predicates = (
+        "use",
+        "run",
+        "execute",
+        "call",
+        "prefer",
+        "may be used",
+        "can be used",
+        "directly",
+        "instead",
+        "commands",
+        "tool",
+        "calls",
+    )
+    return any(subject in normalized for subject in tool_subjects) and any(
+        predicate in normalized for predicate in tool_predicates
+    )
+
+
+def _contains_safety_control_weakening(normalized: str) -> bool:
+    safety_subjects = (
+        "approval",
+        "human approval",
+        "review",
+        "human review",
+        "sandbox",
+        "sandbox protections",
+        "permission",
+        "permission checks",
+        "tool safety",
+        "tool safety controls",
+    )
+    user_prompt_subjects = (
+        "ask the user",
+        "asking the user",
+        "user",
+        "users",
+        "asked",
+        "prompt",
+        "prompted",
+    )
+    safety_predicates = (
+        "does not need to",
+        "do not need to",
+        "do not require",
+        "need not",
+        "not required",
+        "not happen",
+        "not enforced",
+        "not asked",
+        "not prompted",
+        "not necessary",
+        "unnecessary",
+        "optional",
+        "not needed",
+        "needed",
+        "not mandatory",
+        "mandatory",
+        "may be omitted",
+        "can be omitted",
+        "omitted",
+        "may be skipped",
+        "can be skipped",
+        "may be bypassed",
+        "can be bypassed",
+        "may be ignored",
+        "can be ignored",
+        "no need for",
+        "may be waived",
+        "waived",
+        "discretionary",
+        "disable",
+        "disabled",
+        "removed",
+        "can be removed",
+        "bypass",
+        "bypassed",
+        "allowed",
+        "without",
+    )
+    user_prompt_predicates = (
+        "do not ask",
+        "do not prompt",
+        "does not need to be asked",
+        "never ask",
+        "never be asked",
+        "should never be asked",
+        "must never be asked",
+        "should not need to be asked",
+        "not asked",
+        "not prompted",
+        "need not be asked",
+        "not required",
+        "optional",
+        "without asking",
+    )
+    return (
+        any(subject in normalized for subject in safety_subjects)
+        and any(predicate in normalized for predicate in safety_predicates)
+    ) or (
+        any(subject in normalized for subject in user_prompt_subjects)
+        and any(predicate in normalized for predicate in user_prompt_predicates)
+    )
 
 
 def _contains_phrase_tokens_in_order(
