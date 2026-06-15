@@ -60,12 +60,42 @@ def test_snapshot_from_skill_markdown_normalizes_bom_crlf_and_unicode() -> None:
 def test_snapshot_from_skill_markdown_rejects_non_mapping_frontmatter() -> None:
     text = "---\n- not\n- a\n- mapping\n---\nBody\n"
 
-    with pytest.raises(PromptTemplateBoundaryError, match="frontmatter"):
+    with pytest.raises(PromptTemplateBoundaryError, match="frontmatter must be a YAML mapping"):
         snapshot_from_skill_markdown(
             skill_name="demo-skill",
             source_identifier="nanobot/skills/demo-skill/SKILL.md",
             text=text,
         )
+
+
+def test_snapshot_from_skill_markdown_uses_lenient_frontmatter_after_yaml_error() -> None:
+    body = "Use concise answers.\n"
+    invalid_yaml_text = "---\ndescription: Demo skill: invalid yaml\nname: demo-skill\n---\n"
+    text = f"{invalid_yaml_text}{body}"
+
+    snapshot = snapshot_from_skill_markdown(
+        skill_name="demo-skill",
+        source_identifier="nanobot/skills/demo-skill/SKILL.md",
+        text=text,
+    )
+
+    valid_equivalent = (
+        "---\n"
+        'description: "Demo skill: invalid yaml"\n'
+        "name: demo-skill\n"
+        "---\n"
+        f"{body}"
+    )
+    expected_snapshot = snapshot_from_skill_markdown(
+        skill_name="demo-skill",
+        source_identifier="nanobot/skills/demo-skill/SKILL.md",
+        text=valid_equivalent,
+    )
+
+    assert snapshot.body_text == body
+    assert snapshot.body_hash == expected_snapshot.body_hash
+    assert snapshot.cache_key_hash == expected_snapshot.cache_key_hash
+    assert snapshot.frontmatter_hash == expected_snapshot.frontmatter_hash
 
 
 def test_snapshot_from_skill_markdown_treats_missing_closing_frontmatter_as_body() -> None:
