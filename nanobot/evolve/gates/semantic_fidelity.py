@@ -25,10 +25,8 @@ def _make_evidence_writer(evidence_dir: Path | None) -> OwnedJsonlEvidenceWriter
     )
 
 
-class SemanticEvidenceRecorder(Gate):
+class SemanticEvidenceRecorder:
     """Wraps an injected custom gate named '4-semantic-fidelity' to capture evidence rows."""
-
-    NONDETERMINISTIC: ClassVar[bool] = True
 
     def __init__(self, gate: Gate, *, evidence_dir: Path | None = None) -> None:
         self._gate = gate
