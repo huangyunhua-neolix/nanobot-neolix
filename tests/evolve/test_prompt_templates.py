@@ -305,6 +305,21 @@ def test_validate_prompt_template_candidate_rejects_body_over_128_kib_byte_bound
     assert result.cache_impact == "cache_unknown_rejected"
 
 
+def test_validate_prompt_template_candidate_rejects_raw_body_over_128_kib_before_unicode_normalization() -> None:
+    repeated_character_count = 44_000
+    normalized_body = "é" * repeated_character_count + "\n"
+    raw_nfd_body = unicodedata.normalize("NFD", normalized_body)
+    assert len(raw_nfd_body.encode("utf-8")) > 128 * 1024
+    assert len(normalized_body.encode("utf-8")) <= 128 * 1024
+    snapshot = _snapshot(normalized_body)
+    candidate = _candidate(snapshot, raw_nfd_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "reject"
+    assert result.reason_code == "prompt-template-too-large"
+
+
 def test_validate_prompt_template_candidate_rejects_frontmatter_delimiter_mutation() -> None:
     snapshot = _snapshot("Stable body.\n")
     candidate = _candidate(snapshot, "Stable body.\n---\nMore body.\n")

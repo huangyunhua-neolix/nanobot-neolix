@@ -411,14 +411,14 @@ def validate_prompt_template_candidate(
             cache_impact="cache_unknown_rejected",
         )
 
-    proposed_body = _normalize_body_text(candidate.proposed_body)
-    if _body_too_large(proposed_body):
+    if _body_too_large(candidate.proposed_body):
         return _reject_prompt_result(
             candidate=candidate,
             reason_code="prompt-template-too-large",
             reason="Proposed prompt template body exceeds the hard size bounds.",
             cache_impact="cache_unknown_rejected",
         )
+    proposed_body = _normalize_body_text(candidate.proposed_body)
     baseline_body = baseline.body_text
     if proposed_body == baseline_body:
         return _accept_prompt_result(
