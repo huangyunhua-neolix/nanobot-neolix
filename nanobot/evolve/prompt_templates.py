@@ -87,6 +87,16 @@ _DENIED_WEAKENING_PHRASES = (
     "approval can be skipped",
     "review can be bypassed",
     "do not request approval from the user",
+    "bypass sandbox",
+    "ignore human review",
+    "avoid review",
+    "approval is optional",
+    "no approval needed",
+    "never ask the user",
+    "skip permission checks",
+    "no permission needed",
+    "use bash instead",
+    "run shell instead",
 )
 # Local skeleton mapping for safety phrase matching only; this is not a full
 # Unicode confusables implementation.
