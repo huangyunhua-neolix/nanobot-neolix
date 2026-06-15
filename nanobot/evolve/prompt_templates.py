@@ -87,6 +87,10 @@ _PROTECTED_WEAKENING_SUBJECTS = (
     "permission",
     "permission checks",
     "ask the user",
+    "asking the user",
+    "user",
+    "users",
+    "asked",
     "tool safety",
     "tool safety controls",
     "bash",
@@ -711,6 +715,18 @@ def _proposed_changed_text(proposed_body: str, baseline_body: str) -> str:
     return "\n".join(proposed_lines[line_number] for line_number in changed_lines)
 
 
+def _changed_text_contexts(proposed_body: str, changed_line_numbers: list[int]) -> list[str]:
+    proposed_lines = proposed_body.splitlines()
+    return [
+        "\n".join(
+            proposed_lines[context_line_number]
+            for context_line_number in range(line_number - 2, line_number + 3)
+            if 0 <= context_line_number < len(proposed_lines)
+        )
+        for line_number in changed_line_numbers
+    ]
+
+
 def _changed_proposed_line_numbers(baseline_body: str, proposed_body: str) -> list[int]:
     baseline_lines = baseline_body.splitlines()
     proposed_lines = proposed_body.splitlines()
@@ -951,6 +967,10 @@ def validate_prompt_template_candidate(
             proposed_body=proposed_body,
             regions=touched_regions,
         )
+        proposed_safety_texts = [
+            *proposed_region_texts,
+            *_changed_text_contexts(proposed_body, proposed_changed_line_numbers),
+        ]
         if _contains_non_ascii_letter_or_symbol(proposed_changed_text) or any(
             _contains_non_ascii_letter_or_symbol(text)
             or _contains_phrase(text, _PROPOSED_PROTECTED_SAFETY_PHRASES, map_confusables=True)
@@ -966,7 +986,7 @@ def validate_prompt_template_candidate(
                 _DENIED_WEAKENING_PHRASES,
                 map_confusables=True,
             )
-            for text in proposed_region_texts
+            for text in proposed_safety_texts
         ):
             return _reject_prompt_result(
                 candidate=candidate,

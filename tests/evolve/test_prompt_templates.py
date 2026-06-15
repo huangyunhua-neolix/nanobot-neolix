@@ -950,6 +950,9 @@ def test_validate_prompt_template_candidate_rejects_protected_region_with_filler
         "prefer shell",
         "call bash directly",
         "execute via shell",
+        "The user does not need to be asked before proceeding.",
+        "The user need not be asked.",
+        "Asking the user is optional.",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_denied_weakening_phrase(
@@ -1004,14 +1007,36 @@ def test_validate_prompt_template_candidate_rejects_denied_phrase_with_latin_con
     assert result.reason_code == "prompt-safety-regression"
 
 
-def test_validate_prompt_template_candidate_rejects_contextual_denied_weakening_phrase() -> None:
-    body = (
-        "Before\n"
-        "<!-- evolve:prompt-editable:start -->\n"
-        "skip\n"
-        "<!-- evolve:prompt-editable:end -->\n"
-    )
-    proposed_body = body.replace("skip\n<!--", "skip\napproval\n<!--")
+@pytest.mark.parametrize(
+    ("body", "proposed_body"),
+    [
+        (
+            "Before\n"
+            "<!-- evolve:prompt-editable:start -->\n"
+            "skip\n"
+            "<!-- evolve:prompt-editable:end -->\n",
+            "Before\n"
+            "<!-- evolve:prompt-editable:start -->\n"
+            "skip\n"
+            "approval\n"
+            "<!-- evolve:prompt-editable:end -->\n",
+        ),
+        (
+            "<!-- evolve:prompt-editable:start -->\n"
+            "request\n"
+            "<!-- evolve:prompt-editable:end -->\n"
+            "approval before continuing.\n",
+            "<!-- evolve:prompt-editable:start -->\n"
+            "skip\n"
+            "<!-- evolve:prompt-editable:end -->\n"
+            "approval before continuing.\n",
+        ),
+    ],
+)
+def test_validate_prompt_template_candidate_rejects_contextual_denied_weakening_phrase(
+    body: str,
+    proposed_body: str,
+) -> None:
     snapshot = _snapshot(body)
     candidate = _candidate(snapshot, proposed_body)
 
@@ -1090,7 +1115,7 @@ def test_validate_prompt_template_candidate_accepts_denied_phrase_tokens_in_sepa
         "Second editable instruction.\n"
         "<!-- evolve:prompt-editable:end -->\n"
     )
-    proposed_body = body.replace("First editable instruction.", "use shell").replace(
+    proposed_body = body.replace("First editable instruction.", "use CLI").replace(
         "Second editable instruction.",
         "instead",
     )
