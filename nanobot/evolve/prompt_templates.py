@@ -270,12 +270,18 @@ def _normalize_safety_text(text: str) -> str:
     return " ".join(normalized.split())
 
 
+def _alnum_compact_safety_text(text: str) -> str:
+    return "".join(character for character in _normalize_safety_text(text) if character.isalnum())
+
+
 def _contains_phrase(text: str, phrases: tuple[str, ...]) -> bool:
     normalized = _normalize_safety_text(text)
     compact_normalized = "".join(normalized.split())
+    alnum_compact_normalized = _alnum_compact_safety_text(text)
     return any(
         normalized_phrase in normalized
         or "".join(normalized_phrase.split()) in compact_normalized
+        or _alnum_compact_safety_text(normalized_phrase) in alnum_compact_normalized
         for phrase in phrases
         if (normalized_phrase := _normalize_safety_text(phrase))
     )
@@ -501,12 +507,20 @@ def validate_prompt_template_candidate(
             candidate=candidate,
             cache_impact="candidate_noop",
         )
-    if _has_frontmatter_mutation(_proposed_changed_text(proposed_body, baseline_body)):
+    proposed_changed_text = _proposed_changed_text(proposed_body, baseline_body)
+    if _has_frontmatter_mutation(proposed_changed_text):
         return _reject_prompt_result(
             candidate=candidate,
             reason_code="prompt-frontmatter-mutation",
             reason="Proposed prompt template body includes frontmatter-like content.",
             cache_impact="cache_sensitive_rejected",
+        )
+    if _EDITABLE_START in proposed_changed_text or _EDITABLE_END in proposed_changed_text:
+        return _reject_prompt_result(
+            candidate=candidate,
+            reason_code="prompt-cache-boundary-unknown",
+            reason="Proposed prompt template changes editable region markers.",
+            cache_impact="cache_unknown_rejected",
         )
 
     try:
