@@ -106,8 +106,8 @@ Each snapshot record contains:
 - `skill_name`
 - `source_kind`, fixed to `bundled`
 - `source_identifier`, the redaction-safe relative path `nanobot/skills/<skill_name>/SKILL.md`
-- `frontmatter_hash`, computed from the full parsed frontmatter mapping using sorted compact JSON
-- `body_hash`, computed from the exact body text after frontmatter parsing and line-ending normalization to `\n`
+- `frontmatter_hash`, computed from the full parsed frontmatter mapping converted to JSON-safe primitives and serialized with `sort_keys=True`, `ensure_ascii=False`, and compact separators `(',', ':')`. Non-JSON-native frontmatter values are converted to strings before hashing.
+- `body_hash`, computed from the exact body text after frontmatter parsing, UTF-8 BOM removal, line-ending normalization to `\n`, trailing-newline preservation, and Unicode NFC normalization.
 - `cache_key_hash`, computed with the same current evolve rule as the cache gate: hash of frontmatter `description`
 - `editable_region_count`
 - `body_line_count`
@@ -128,7 +128,7 @@ The optimizer may emit prompt/template candidates as inert artifacts, not patche
 - `risk_assessment`
 - `cache_impact_claim`
 
-`proposed_body` is the single source of truth for the candidate text. The optimizer may include explanatory text, but M8 review rendering must derive diffs from the baseline body and `proposed_body`; optimizer-provided diff summaries are ignored for validation and review truth.
+`cache_impact_claim` is explanatory text only; validation derives cache impact from the baseline snapshot and `proposed_body`. `proposed_body` is the single source of truth for the candidate text. Optimizer-provided diff summaries are not part of the M8 schema; if a future optimizer emits extra summary fields, they must be ignored for validation and review truth.
 
 A candidate may change only body text inside explicit editable regions. It must not include frontmatter delimiters or frontmatter fields.
 
@@ -140,8 +140,8 @@ M8 validates prompt/template candidates deterministically before semantic judgin
 2. `prompt-baseline-stale`: candidate baseline hash does not match the current snapshot.
 3. `prompt-frontmatter-mutation`: candidate includes frontmatter delimiters or attempts to provide frontmatter fields.
 4. `prompt-cache-boundary-unknown`: validator cannot prove every changed line maps to an explicit editable baseline region, or editable-region parsing fails.
-5. `prompt-safety-regression`: deterministic checks or reject-only semantic review detect weakening of protected safety wording.
-6. `prompt-template-too-large`: `proposed_body` exceeds 128 KiB or 2,000 lines. These are hard upper bounds and configuration cannot raise them.
+5. `prompt-safety-regression`: changed lines touch protected wording patterns or reject-only semantic review detects weakening of protected safety wording.
+6. `prompt-template-too-large`: `proposed_body` exceeds 128 KiB or 2,000 lines. These are hard upper bounds and configuration cannot raise them. The current bundled skills are expected to be below the 128 KiB baseline; if a bundled skill already exceeds the bound, M8 must either lower that skill's candidate surface to no-op review or update this spec before implementation.
 
 M8 does not include `prompt-cache-sensitive-mutation` in V1 because the only current cache-sensitive surface is frontmatter, and frontmatter attempts are covered by `prompt-frontmatter-mutation`.
 
@@ -155,22 +155,24 @@ Validation precedence is deterministic:
 6. Safety regression.
 7. Accept.
 
-Any exception during frontmatter parsing, editable-region parsing, diff mapping, or safety classification becomes `prompt-cache-boundary-unknown` unless an earlier rejection code already applies. Parser bugs fail closed.
+Exceptions are mapped by the stage that raised them. Missing skill, stale baseline, and size-bound checks run before parsing. Frontmatter delimiter detection is a plain text scan; if it matches, the result is `prompt-frontmatter-mutation`. Exceptions during editable-region parsing, diff mapping, protected-wording classification, or safety classification become `prompt-cache-boundary-unknown`. Parser bugs fail closed.
 
 ### Safety regression checks
 
 M8 does not rely on a keyword-only allow/pass detector. Safety handling has two layers:
 
-1. Positive editable-region allowlist: accepted candidates can only change text inside explicit editable regions. Protected safety/tool/sandbox/review instructions must not be placed inside editable regions. If they are, implementation must treat the entire region as protected and reject changes touching it.
-2. Reject-only safety review: changed hunks are checked by deterministic deny patterns and optional M6 semantic judge evidence. This review can reject a candidate but can never override another rejection or turn an unsafe candidate into an accepted candidate.
+1. Positive editable-region allowlist: accepted candidates can only change text inside explicit editable regions. Protected safety/tool/sandbox/review instructions must not be placed inside editable regions. If protected wording appears inside an editable region, implementation must treat the entire region as protected and reject changes touching it.
+2. Reject-only safety review: changed hunks are checked by deterministic protected-wording patterns, deterministic deny patterns, and optional M6 semantic judge evidence. This review can reject a candidate but can never override another rejection or turn an unsafe candidate into an accepted candidate.
 
-The canonical protected wording categories are:
+Protected wording recognition is deterministic. The validator scans editable-region baseline text and changed hunks after casefolding and whitespace normalization. If any baseline editable region contains one of the protected phrases below, edits touching that region are `prompt-safety-regression`:
 
-- Permission or approval requirements.
-- Sandbox or execution safety requirements.
-- Human review and PR-only artifact requirements.
-- Narrow-tool preference over broad shell/process execution.
-- Non-application of candidates to live files or runtime prompts.
+- Permission or approval requirements: `permission`, `approval`, `confirm`, `ask the user`, `human approval`.
+- Sandbox or execution safety requirements: `sandbox`, `safe execution`, `do not execute`, `never execute`, `untrusted code`.
+- Human review and PR-only artifact requirements: `human review`, `review artifact`, `pr-only`, `pull request`, `do not apply`, `manual review`.
+- Narrow-tool preference over broad shell/process execution: `narrow tool`, `structured tool`, `prefer read`, `prefer search`, `avoid shell`, `avoid exec`.
+- Non-application of candidates to live files or runtime prompts: `do not modify`, `no runtime`, `not applied`, `do not write`, `live prompt`.
+
+Changed hunks are also rejected if they introduce denied weakening phrases such as `skip approval`, `without asking`, `ignore sandbox`, `bypass review`, `apply automatically`, `use shell instead`, or `hide from user`. Future changes to these phrase sets must add regression tests.
 
 A candidate that removes, contradicts, or weakens these categories is `prompt-safety-regression`.
 
@@ -190,6 +192,9 @@ The review summary includes deterministic counts:
 - `cache_sensitive_rejected`: candidates rejected by `prompt-frontmatter-mutation`.
 - `cache_unknown_rejected`: candidates rejected by `prompt-cache-boundary-unknown`.
 - `candidate_absent`: no prompt/template candidates were emitted.
+- `candidate_noop`: candidates whose normalized body is identical to the baseline body.
+
+Whitespace-only diffs are classified as no-op. A no-op candidate is accepted only if the normalized body is byte-equal to the normalized baseline body after line-ending and Unicode normalization; it is rendered with `cache_impact=noop` and does not receive judge evidence.
 
 ### Review artifacts
 
@@ -199,6 +204,13 @@ When snapshots or candidates exist, the harness writes:
 - `prompt_template_candidates.jsonl`
 - `prompt_template_review.md`
 - Optional `prompt_template_judge_evidence.jsonl` for accepted candidates
+
+Manifest artifact path keys are stable and must be exactly:
+
+- `prompt_template_snapshot`
+- `prompt_template_candidates`
+- `prompt_template_review`
+- `prompt_template_judge_evidence`
 
 Shareable JSON artifacts are redacted before writing using the same redaction pipeline used by M7 artifacts. Markdown review rendering must:
 
@@ -258,19 +270,19 @@ Focused M8 tests must cover:
 
 - Shared artifact-lane extraction preserves M7 tool metadata artifact outputs.
 - Bundled-skill snapshot enumeration reads `nanobot/skills/*/SKILL.md`, excludes workspace/user skills, and is deterministic.
-- Snapshot hashing is stable across dict key order, locale, and CRLF/LF line endings.
+- Snapshot hashing is stable across dict key order, locale, UTF-8 BOM presence, Unicode NFC/NFD forms, trailing-newline variants, and CRLF/LF line endings.
 - Snapshot extraction does not mutate parsed skill data.
 - Optimizer input includes `promptTemplateSnapshot`.
 - Optimizer output accepts optional `promptTemplateCandidates` while preserving old JSON compatibility.
 - One negative validation test per rejection code: `prompt-skill-not-found`, `prompt-baseline-stale`, `prompt-frontmatter-mutation`, `prompt-cache-boundary-unknown`, `prompt-safety-regression`, and `prompt-template-too-large`.
-- Each rejection test asserts the exact reason code appears in JSON and Markdown artifacts.
+- Each rejection test asserts the exact reason code appears in JSON and Markdown artifacts, the JSON artifact remains well-formed, and the manifest records only successfully written artifact paths.
 - Ambiguous editable-region parsing rejects fail-closed with `prompt-cache-boundary-unknown`.
 - Candidate text outside explicit editable regions is rejected.
 - Candidate text inside explicit editable regions can be accepted when all other checks pass.
 - Optimizer-provided diff summaries are ignored; review diffs are derived from baseline body and `proposed_body`.
 - Accepted candidates generate JSON/Markdown artifacts and optional judge evidence.
 - Rejected candidates do not receive judge evidence.
-- Judge evidence does not appear in optimizer input, optimizer output, or later optimizer context.
+- Judge evidence does not appear in optimizer input, optimizer output, or later optimizer context; include a two-run regression where the first run writes judge evidence and the second run's optimizer input remains evidence-free.
 - Artifact redaction covers secret-shaped strings in `proposed_body`, `intended_improvement`, and `risk_assessment`, including Anthropic/OpenAI/GitHub/AWS-like keys, bearer tokens, emails, and absolute home paths.
 - Markdown review rendering keeps candidate-controlled text inside escaped, bounded code fences and cannot render candidate-controlled checklist items.
 - Report and PR body surfaces include prompt/template review state without changing the numeric PR body section count.
@@ -279,7 +291,7 @@ Focused M8 tests must cover:
 - A harness run with rejected prompt/template candidates does not modify bundled skill source file content or mtimes.
 - Duplicate candidates for the same skill have deterministic ordering and independent validation results.
 - Empty bundled-skill enumeration produces a well-formed empty snapshot and no prompt/template candidate artifacts.
-- Whitespace-only diffs are classified explicitly as no-op accepted or rejected; the implementation must pick one behavior and test it.
+- Whitespace-only diffs are classified as no-op accepted, rendered with `cache_impact=noop`, and do not receive judge evidence.
 - Full `tests/evolve` and `ruff check nanobot/evolve tests/evolve` pass.
 
 ## Acceptance criteria
