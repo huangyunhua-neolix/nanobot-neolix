@@ -861,13 +861,21 @@ Path(args.output).write_text(json.dumps({
 """.lstrip(),
     )
 
-    OfflineHarness(workspace=tmp_path).run(
+    manifest = OfflineHarness(workspace=tmp_path).run(
         skill_name="demo-skill",
         optimizer_command=[sys.executable, str(script)],
         tiers=["A", "C"],
     )
 
     assert _bundled_skill_state() == before
+    assert "prompt_template_candidates" in manifest.prompt_template_artifact_paths
+    assert "prompt_template_review" in manifest.prompt_template_artifact_paths
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    candidates_jsonl = (run_dir / "prompt_template_candidates.jsonl").read_text(encoding="utf-8")
+    assert "No-op candidate." in candidates_jsonl
+    review = (run_dir / "prompt_template_review.md").read_text(encoding="utf-8")
+    assert "candidate_noop" in review
+    assert "No-op candidate." in review
 
 
 def test_harness_prompt_template_rejected_candidate_does_not_modify_bundled_skills(
@@ -907,13 +915,17 @@ Path(args.output).write_text(json.dumps({
 """.lstrip(),
     )
 
-    OfflineHarness(workspace=tmp_path).run(
+    manifest = OfflineHarness(workspace=tmp_path).run(
         skill_name="demo-skill",
         optimizer_command=[sys.executable, str(script)],
         tiers=["A", "C"],
     )
 
     assert _bundled_skill_state() == before
+    run_dir = tmp_path / "evals" / "runs" / manifest.run_id
+    review = (run_dir / "prompt_template_review.md").read_text(encoding="utf-8")
+    assert "prompt-frontmatter-mutation" in review
+    assert "reject" in review
 
 
 def test_harness_prompt_template_duplicate_candidates_have_deterministic_review_order(
