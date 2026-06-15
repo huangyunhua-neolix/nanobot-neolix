@@ -710,20 +710,21 @@ def _normalized_weakening_text(text: str) -> str:
 
 
 def _contains_tool_enablement(normalized: str) -> bool:
+    tokens = re.findall(r"[a-z0-9]+", normalized)
+    token_set = set(tokens)
     compact_normalized = _alnum_compact_safety_text(normalized)
-    tool_subjects = (
+    tool_subject_tokens = {
         "bash",
         "shell",
-        " sh",
-        "/bin/sh",
+        "sh",
         "zsh",
         "terminal",
-        "command line",
         "subprocess",
+        "subprocesses",
         "process",
         "exec",
-    )
-    tool_predicates = (
+    }
+    tool_predicate_tokens = {
         "use",
         "run",
         "execute",
@@ -737,19 +738,22 @@ def _contains_tool_enablement(normalized: str) -> bool:
         "allow",
         "allowed",
         "prefer",
-        "may be used",
-        "can be used",
         "directly",
         "instead",
         "commands",
         "tool",
         "calls",
+    }
+    subject_found = (
+        bool(token_set & tool_subject_tokens)
+        or "/bin/sh" in normalized
+        or "binsh" in compact_normalized
+        or "commandline" in compact_normalized
     )
-    subject_found = any(
-        subject in normalized or _alnum_compact_safety_text(subject) in compact_normalized
-        for subject in tool_subjects
+    predicate_found = bool(token_set & tool_predicate_tokens) or any(
+        phrase in normalized for phrase in ("may be used", "can be used")
     )
-    return subject_found and any(predicate in normalized for predicate in tool_predicates)
+    return subject_found and predicate_found
 
 
 def _contains_safety_control_weakening(normalized: str) -> bool:

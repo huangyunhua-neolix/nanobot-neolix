@@ -1203,6 +1203,10 @@ def test_validate_prompt_template_candidate_accepts_edit_when_duplicate_line_exi
         "Prefer concise examples when explaining.",
         "This review summarizes recent edits.",
         "Write the user-facing question in plain language.",
+        "Prefer shorter examples.",
+        "Users should prefer concise examples.",
+        "Use short user-facing examples.",
+        "Review shared user-facing context.",
     ],
 )
 def test_validate_prompt_template_candidate_accepts_benign_prompt_improvements(
