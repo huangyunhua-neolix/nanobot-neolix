@@ -404,7 +404,10 @@ def test_validate_prompt_template_candidate_rejects_frontmatter_delimiter_mutati
     "frontmatter_field",
     [
         "description: changed",
+        '"description": changed',
+        "'description': changed",
         "- name: changed",
+        '- "name": changed',
         "? description: changed",
     ],
 )
@@ -967,6 +970,8 @@ def test_validate_prompt_template_candidate_rejects_protected_region_with_filler
         "Tool safety controls are not needed.",
         "Review is not mandatory.",
         "Tool safety may be omitted.",
+        "Review doesn't need to happen.",
+        "Tool safety doesn't need to happen.",
     ],
 )
 def test_validate_prompt_template_candidate_rejects_denied_weakening_phrase(
@@ -1116,6 +1121,28 @@ def test_validate_prompt_template_candidate_rejects_denied_phrase_replaced_with_
 
     assert result.verdict == "reject"
     assert result.reason_code == "prompt-safety-regression"
+
+
+def test_validate_prompt_template_candidate_accepts_edit_when_duplicate_line_exists_outside_region() -> None:
+    body = (
+        "Duplicate line\n"
+        "<!-- evolve:prompt-editable:start -->\n"
+        "Duplicate line\n"
+        "<!-- evolve:prompt-editable:end -->\n"
+    )
+    proposed_body = body.replace(
+        "<!-- evolve:prompt-editable:start -->\nDuplicate line",
+        "<!-- evolve:prompt-editable:start -->\nClearer line",
+    )
+    snapshot = _snapshot(body)
+    candidate = _candidate(snapshot, proposed_body)
+
+    result = validate_prompt_template_candidate(candidate, [snapshot])
+
+    assert result.verdict == "accept"
+    assert result.reason_code is None
+    assert result.cache_impact == "cache_neutral"
+    assert result.changed_line_numbers == [2]
 
 
 def test_validate_prompt_template_candidate_accepts_denied_phrase_tokens_in_separate_regions() -> None:

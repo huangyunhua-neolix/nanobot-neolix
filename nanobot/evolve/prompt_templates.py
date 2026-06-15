@@ -509,19 +509,35 @@ def _has_region_span_bypass(
     baseline_body: str,
     proposed_body: str,
 ) -> bool:
+    baseline_lines = baseline_body.splitlines()
     proposed_lines = proposed_body.splitlines()
     for baseline_region, proposed_region in zip(baseline_regions, proposed_regions, strict=True):
-        proposed_region_lines = set(_region_line_numbers(proposed_region, len(proposed_lines)))
         proposed_region_text = _region_text(proposed_body, proposed_region).splitlines()
         for baseline_line in _region_text(baseline_body, baseline_region).splitlines():
             if not baseline_line or baseline_line in proposed_region_text:
                 continue
-            if any(
-                line == baseline_line and line_number not in proposed_region_lines
-                for line_number, line in enumerate(proposed_lines)
-            ):
+            baseline_outside_count = _line_count_outside_region(
+                baseline_lines,
+                baseline_region,
+                baseline_line,
+            )
+            proposed_outside_count = _line_count_outside_region(
+                proposed_lines,
+                proposed_region,
+                baseline_line,
+            )
+            if proposed_outside_count > baseline_outside_count:
                 return True
     return False
+
+
+def _line_count_outside_region(lines: list[str], region: EditableRegion, target_line: str) -> int:
+    region_lines = set(_region_line_numbers(region, len(lines)))
+    return sum(
+        1
+        for line_number, line in enumerate(lines)
+        if line == target_line and line_number not in region_lines
+    )
 
 
 def _region_line_numbers(region: EditableRegion, line_count: int) -> list[int]:
@@ -602,7 +618,7 @@ def _normalize_field_name(field_name: str) -> str:
     normalized = _normalize_safety_text(field_name, map_confusables=True).strip()
     while normalized[:1] in {"-", "?"}:
         normalized = normalized[1:].strip()
-    return normalized
+    return normalized.strip("'\"")
 
 
 def _is_safety_control_field(normalized_key: str, field_value: str) -> bool:
@@ -621,7 +637,12 @@ def _is_safety_control_field(normalized_key: str, field_value: str) -> bool:
 
 def _contains_weakening_pattern(text: str) -> bool:
     normalized = _normalize_safety_text(text, map_confusables=True)
-    normalized = normalized.replace(" isn't ", " is not ").replace(" aren't ", " are not ")
+    normalized = (
+        normalized.replace(" isn't ", " is not ")
+        .replace(" aren't ", " are not ")
+        .replace(" doesn't ", " does not ")
+        .replace(" don't ", " do not ")
+    )
     for subject in _PROTECTED_WEAKENING_SUBJECTS:
         normalized_subject = _normalize_safety_text(subject, map_confusables=True)
         if normalized_subject not in normalized:
