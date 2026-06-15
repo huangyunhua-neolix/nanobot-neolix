@@ -266,7 +266,6 @@ def test_assemble_pr_body_includes_prompt_template_review_checklist() -> None:
     ]
     for item in expected_items:
         assert item in body
-    assert sum(1 for item in expected_items if item in body) == 4
     assert _section_headers_in_order(body) == list(PR_BODY_SECTIONS)
 
 
