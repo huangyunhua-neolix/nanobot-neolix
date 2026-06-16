@@ -1,3 +1,4 @@
+import ast
 import asyncio
 import json
 import re
@@ -408,24 +409,37 @@ def test_provider_commands_module_has_no_commands_import():
     assert "nanobot.cli.commands" not in source
 
 
-def test_commands_py_no_longer_defines_moved_gateway_handlers() -> None:
-    source = Path("nanobot/cli/commands.py").read_text(encoding="utf-8")
+def _commands_py_symbols() -> set[str]:
+    tree = ast.parse(Path("nanobot/cli/commands.py").read_text(encoding="utf-8"))
+    symbols: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            symbols.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    symbols.add(target.id)
+    return symbols
 
-    assert "def serve(" not in source
-    assert "def gateway(" not in source
-    assert "def desktop_gateway(" not in source
-    assert "def _run_gateway(" not in source
-    assert "DESKTOP_BOOTSTRAP_PROVIDER" not in source
+
+def test_commands_py_no_longer_defines_moved_gateway_handlers() -> None:
+    symbols = _commands_py_symbols()
+
+    assert "serve" not in symbols
+    assert "gateway" not in symbols
+    assert "desktop_gateway" not in symbols
+    assert "_run_gateway" not in symbols
+    assert "DESKTOP_BOOTSTRAP_PROVIDER" not in symbols
 
 
 def test_commands_py_no_longer_defines_provider_oauth_handlers() -> None:
-    source = Path("nanobot/cli/commands.py").read_text(encoding="utf-8")
+    symbols = _commands_py_symbols()
 
-    assert "provider_app = typer.Typer" not in source
-    assert "def provider_login(" not in source
-    assert "def provider_logout(" not in source
-    assert "def _login_openai_codex(" not in source
-    assert "def _login_github_copilot(" not in source
+    assert "provider_app" not in symbols
+    assert "provider_login" not in symbols
+    assert "provider_logout" not in symbols
+    assert "_login_openai_codex" not in symbols
+    assert "_login_github_copilot" not in symbols
 
 
 def test_commands_py_registers_focused_cli_modules_explicitly() -> None:
@@ -435,6 +449,40 @@ def test_commands_py_registers_focused_cli_modules_explicitly() -> None:
     assert "from nanobot.cli.provider_commands import register_provider_commands" in source
     assert "register_gateway_commands(app)" in source
     assert "register_provider_commands(app)" in source
+
+
+def test_production_code_does_not_import_moved_cli_internals_from_commands_py() -> None:
+    moved_names = {
+        "serve",
+        "gateway",
+        "desktop_gateway",
+        "_run_gateway",
+        "DESKTOP_BOOTSTRAP_PROVIDER",
+        "_configure_desktop_gateway",
+        "_load_or_create_desktop_config",
+        "provider_login",
+        "provider_logout",
+        "_login_openai_codex",
+        "_login_github_copilot",
+        "_migrate_cron_store",
+        "_heartbeat_has_active_tasks",
+    }
+    offenders: list[str] = []
+    for path in Path("nanobot").rglob("*.py"):
+        if path == Path("nanobot/cli/commands.py"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if node.module != "nanobot.cli.commands":
+                continue
+            imported = {alias.name for alias in node.names}
+            stale = sorted(imported & moved_names)
+            if stale:
+                offenders.append(f"{path}: {', '.join(stale)}")
+
+    assert offenders == []
 
 
 def test_config_matches_explicit_ollama_prefix_without_api_key():
