@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback keeps transition guards active.
+    fcntl = None
 
 from pydantic import Field, field_validator
 
@@ -23,6 +30,25 @@ _PROPOSAL_ID_RE = re.compile(r"^[a-zA-Z0-9_.-]+$")
 _SKILL_NAME_RE = re.compile(r"^[a-zA-Z0-9_.-]+$")
 _MIN_PREFIX_LENGTH = len("evolve-000000")
 _EVOLUTION_ACTIONS = {CuratorAction.PATCH_CANDIDATE, CuratorAction.MERGE_CANDIDATE}
+_LOCKS: dict[Path, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def _proposal_lock(path: Path):
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with _LOCKS_GUARD:
+        thread_lock = _LOCKS.setdefault(lock_path, threading.Lock())
+    with thread_lock:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 class EvolutionProposal(FrozenEvolveBase):
@@ -85,8 +111,9 @@ def _relative_to_workspace(path: Path, workspace: Path) -> str:
 
 class ProposalStore:
     def __init__(self, workspace: Path) -> None:
-        self.workspace = workspace
-        self.proposals_dir = workspace / "evals" / "proposals"
+        self.workspace = Path(workspace)
+        self.proposals_dir = self.workspace / "evals" / "proposals"
+        self.proposals_dir.mkdir(parents=True, exist_ok=True)
 
     def create(
         self,
@@ -140,29 +167,43 @@ class ProposalStore:
         return self._load_path(matches[0])
 
     def mark_running(self, proposal: EvolutionProposal) -> EvolutionProposal:
-        updated = proposal.model_copy(update={"status": "running", "error_redacted": None})
-        self.write(updated)
-        return updated
+        with _proposal_lock(self._path_for_id(proposal.proposal_id)):
+            current = self.get(proposal.proposal_id)
+            if current.status == "running":
+                raise RuntimeError(f"proposal is already running: {proposal.proposal_id}")
+            if current.status == "completed":
+                raise RuntimeError(f"proposal is already completed: {proposal.proposal_id}")
+            updated = current.model_copy(update={"status": "running", "error_redacted": None})
+            self.write(updated)
+            return updated
 
     def mark_completed(self, proposal: EvolutionProposal, manifest: RunManifest) -> EvolutionProposal:
-        manifest_path = self.workspace / "evals" / "runs" / manifest.run_id / "manifest.json"
-        updated = proposal.model_copy(
-            update={
-                "status": "completed",
-                "run_id": manifest.run_id,
-                "manifest_path": _relative_to_workspace(manifest_path, self.workspace),
-                "error_redacted": None,
-            }
-        )
-        self.write(updated)
-        return updated
+        with _proposal_lock(self._path_for_id(proposal.proposal_id)):
+            current = self.get(proposal.proposal_id)
+            if current.status != "running":
+                raise RuntimeError(f"proposal is not running: {proposal.proposal_id}")
+            manifest_path = self.workspace / "evals" / "runs" / manifest.run_id / "manifest.json"
+            updated = current.model_copy(
+                update={
+                    "status": "completed",
+                    "run_id": manifest.run_id,
+                    "manifest_path": _relative_to_workspace(manifest_path, self.workspace),
+                    "error_redacted": None,
+                }
+            )
+            self.write(updated)
+            return updated
 
     def mark_failed(self, proposal: EvolutionProposal, exc: BaseException) -> EvolutionProposal:
-        updated = proposal.model_copy(
-            update={"status": "failed", "error_redacted": redact(str(exc)).text[:1000]}
-        )
-        self.write(updated)
-        return updated
+        with _proposal_lock(self._path_for_id(proposal.proposal_id)):
+            current = self.get(proposal.proposal_id)
+            if current.status == "completed":
+                return current
+            updated = current.model_copy(
+                update={"status": "failed", "error_redacted": redact(str(exc)).text[:1000]}
+            )
+            self.write(updated)
+            return updated
 
     def _generate_id(self, skill_name: str, created_at: datetime) -> str:
         stamp = created_at.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

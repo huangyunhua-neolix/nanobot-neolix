@@ -26,8 +26,15 @@ def _make_loop(*, evolution_config: EvolutionConfig | None = None) -> Any:
     )
 
 
-def _ctx(raw: str, args: str = "", loop: Any = None) -> CommandContext:
-    msg = InboundMessage(channel="cli", sender_id="u1", chat_id="direct", content=raw)
+def _ctx(
+    raw: str,
+    args: str = "",
+    loop: Any = None,
+    *,
+    channel: str = "cli",
+    sender_id: str = "u1",
+) -> CommandContext:
+    msg = InboundMessage(channel=channel, sender_id=sender_id, chat_id="direct", content=raw)
     return CommandContext(
         msg=msg,
         session=None,
@@ -83,13 +90,76 @@ async def test_evolve_create_requires_skill_and_rationale() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_evolve_create_rejects_path_like_skill_name() -> None:
     out = await cmd_evolve(_ctx("/evolve create ../secret make better", args="create ../secret make better"))
 
     assert "skill_name" in out.content
 
 
+@pytest.mark.asyncio
+async def test_evolve_create_requires_approved_sender(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_create(*args, **kwargs):
+        raise AssertionError("unapproved sender should not create proposals")
+
+    monkeypatch.setattr("nanobot.evolve.proposals.create_manual_proposal", fail_create)
+
+    out = await cmd_evolve(
+        _ctx(
+            "/evolve create demo-skill make better",
+            args="create demo-skill make better",
+            loop=_make_loop(),
+            channel="telegram",
+        )
+    )
+
+    assert "approved sender" in out.content
+
+
+@pytest.mark.asyncio
+async def test_evolve_create_allows_configured_sender(monkeypatch: pytest.MonkeyPatch) -> None:
+    class StubProposal:
+        proposal_id = "evolve-1"
+        skill_name = "demo-skill"
+        source = "manual"
+        status = "proposed"
+        created_at = datetime(2026, 6, 16, 12, 0, tzinfo=timezone.utc)
+        trigger_ref = None
+        run_id = None
+        manifest_path = None
+        rationale_redacted = "make better"
+        error_redacted = None
+
+    class StubStore:
+        def __init__(self, workspace):
+            pass
+
+    def fake_create_manual_proposal(store, *, skill_name, rationale):
+        assert skill_name == "demo-skill"
+        assert rationale == "make better"
+        return StubProposal()
+
+    loop = _make_loop()
+    loop.channels_config = SimpleNamespace(telegram=SimpleNamespace(allow_from=["u1"]))
+    monkeypatch.setattr("nanobot.evolve.proposals.ProposalStore", StubStore)
+    monkeypatch.setattr(
+        "nanobot.evolve.proposals.create_manual_proposal",
+        fake_create_manual_proposal,
+    )
+
+    out = await cmd_evolve(
+        _ctx(
+            "/evolve create demo-skill make better",
+            args="create demo-skill make better",
+            loop=loop,
+            channel="telegram",
+        )
+    )
+
+    assert "evolve-1" in out.content
+    assert "demo-skill" in out.content
+
+
+@pytest.mark.asyncio
 async def test_evolve_create_writes_manual_proposal(monkeypatch: pytest.MonkeyPatch) -> None:
     class StubProposal:
         proposal_id = "evolve-1"
@@ -179,6 +249,25 @@ async def test_evolve_create_respects_manual_trigger_config() -> None:
     )
 
     assert "Manual evolution proposals are disabled" in out.content
+
+
+@pytest.mark.asyncio
+async def test_evolve_run_requires_approved_sender(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_schedule(coro):
+        raise AssertionError("unapproved sender should not start runs")
+
+    loop = SimpleNamespace(
+        workspace=Path("/tmp/workspace"),
+        evolution_config=EvolutionConfig(),
+        bus=SimpleNamespace(publish_outbound=lambda msg: None),
+        _schedule_background=fail_schedule,
+    )
+
+    out = await cmd_evolve(
+        _ctx("/evolve run evolve-1", args="run evolve-1", loop=loop, channel="telegram")
+    )
+
+    assert "approved sender" in out.content
 
 
 @pytest.mark.asyncio

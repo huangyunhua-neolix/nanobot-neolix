@@ -830,6 +830,29 @@ _EVOLVE_USAGE = (
 )
 
 
+def _evolve_sender_allowed(ctx: CommandContext) -> bool:
+    if ctx.msg.channel in {"cli", "websocket"} or ctx.msg.metadata.get("webui") is True:
+        return True
+
+    sender_id = str(ctx.msg.sender_id)
+    channels_config = getattr(ctx.loop, "channels_config", None)
+    channel_config = getattr(channels_config, ctx.msg.channel, None) if channels_config is not None else None
+    if isinstance(channel_config, dict):
+        allow_list = channel_config.get("allow_from") or channel_config.get("allowFrom") or []
+    else:
+        allow_list = getattr(channel_config, "allow_from", None) or []
+    if "*" in allow_list or sender_id in allow_list:
+        return True
+    if sender_id.count("|") == 1:
+        sid, username = sender_id.split("|", 1)
+        if sid in allow_list or username in allow_list:
+            return True
+
+    from nanobot.pairing import is_approved
+
+    return is_approved(ctx.msg.channel, sender_id)
+
+
 async def cmd_evolve(ctx: CommandContext) -> OutboundMessage:
     """Create, inspect, and run offline evolution proposals."""
     from nanobot.config.schema import EvolutionConfig
@@ -880,7 +903,9 @@ async def cmd_evolve(ctx: CommandContext) -> OutboundMessage:
         )
 
     if action == "create" and len(parts) >= 3:
-        if "manual" not in config.proposal_triggers:
+        if not _evolve_sender_allowed(ctx):
+            content = "Evolution proposal creation requires an approved sender."
+        elif "manual" not in config.proposal_triggers:
             content = "Manual evolution proposals are disabled by config."
         else:
             try:
@@ -896,6 +921,13 @@ async def cmd_evolve(ctx: CommandContext) -> OutboundMessage:
         )
 
     if action == "run" and len(parts) >= 2:
+        if not _evolve_sender_allowed(ctx):
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content="Evolution runs require an approved sender.",
+                metadata=metadata,
+            )
         proposal_id = parts[1]
 
         async def _run_proposal() -> None:

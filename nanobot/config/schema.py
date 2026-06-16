@@ -215,7 +215,7 @@ class EvolutionConfig(Base):
         """Return the evolve workspace for runtime proposal storage and runs."""
         if self.workspace:
             return Path(self.workspace).expanduser()
-        return agent_workspace
+        return Path(agent_workspace).expanduser()
 
     def resolve_optimizer_command(self) -> list[str]:
         """Return the configured optimizer command or deterministic fallback."""

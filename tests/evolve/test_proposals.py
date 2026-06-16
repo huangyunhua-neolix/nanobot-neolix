@@ -54,6 +54,37 @@ def test_create_manual_proposal_redacts_sensitive_rationale(tmp_path: Path) -> N
     assert (tmp_path / "evals" / "proposals" / f"{proposal.proposal_id}.json").is_file()
 
 
+def test_proposal_store_initializes_proposal_directory(tmp_path: Path) -> None:
+    store = ProposalStore(tmp_path)
+
+    assert store.proposals_dir.is_dir()
+
+
+def test_create_manual_proposal_does_not_touch_skills_dir(tmp_path: Path) -> None:
+    skill_path = tmp_path / "skills" / "agent" / "demo-skill" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_content = (
+        "---\n"
+        "name: demo-skill\n"
+        "description: Demo skill\n"
+        "origin: agent\n"
+        "created_by: test\n"
+        "created_at: 2026-01-01T00:00:00Z\n"
+        "---\n"
+        "Use concise answers.\n"
+    )
+    skill_path.write_text(skill_content, encoding="utf-8")
+
+    create_manual_proposal(
+        ProposalStore(tmp_path),
+        skill_name="demo-skill",
+        rationale="try offline improvement",
+        now=datetime(2026, 6, 16, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert skill_path.read_text(encoding="utf-8") == skill_content
+
+
 def test_proposal_store_lists_newest_first(tmp_path: Path) -> None:
     store = ProposalStore(tmp_path)
     first = store.create(
@@ -247,6 +278,36 @@ def test_proposal_runner_rejects_path_like_skill_name_before_writing_run_dir(tmp
         )
 
     assert not (tmp_path / "evals" / "runs").exists()
+
+
+def test_proposal_store_rejects_running_proposal_transition(tmp_path: Path) -> None:
+    store = ProposalStore(tmp_path)
+    proposal = store.create(
+        source="manual",
+        skill_name="demo-skill",
+        rationale="try offline improvement",
+        now=datetime(2026, 6, 16, 12, 0, tzinfo=timezone.utc),
+    )
+
+    running = store.mark_running(proposal)
+
+    with pytest.raises(RuntimeError, match="already running"):
+        store.mark_running(running)
+
+
+def test_proposal_store_rejects_completed_proposal_rerun(tmp_path: Path) -> None:
+    store = ProposalStore(tmp_path)
+    proposal = store.create(
+        source="manual",
+        skill_name="demo-skill",
+        rationale="try offline improvement",
+        now=datetime(2026, 6, 16, 12, 0, tzinfo=timezone.utc),
+    )
+    running = store.mark_running(proposal)
+    completed = store.mark_completed(running, _run_manifest("run-1"))
+
+    with pytest.raises(RuntimeError, match="already completed"):
+        store.mark_running(completed)
 
 
 def test_proposal_runner_marks_completed_and_records_manifest(
