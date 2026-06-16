@@ -71,7 +71,6 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-register_gateway_commands(app)
 register_provider_commands(app)
 
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
@@ -514,6 +513,8 @@ def _onboard_plugins(config_path: Path) -> None:
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
+
+register_gateway_commands(app)
 
 # ============================================================================
 # Agent Commands

@@ -364,6 +364,16 @@ def test_desktop_gateway_stays_hidden_from_top_level_help():
     assert "desktop-gateway" not in result.stdout
 
 
+def test_gateway_commands_preserve_root_help_order():
+    result = runner.invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    stripped_output = _strip_ansi(result.stdout)
+    assert stripped_output.index("onboard") < stripped_output.index("serve")
+    assert stripped_output.index("serve") < stripped_output.index("gateway")
+    assert stripped_output.index("gateway") < stripped_output.index("agent")
+
+
 def test_gateway_commands_module_has_no_commands_import():
     source = Path("nanobot/cli/gateway_commands.py").read_text(encoding="utf-8")
 
