@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import sys
 import time
@@ -15,8 +14,6 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.command.router import CommandContext, CommandRouter
 from nanobot.utils.helpers import build_status_content
 from nanobot.utils.restart import set_restart_notice_to_env
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
