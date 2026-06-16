@@ -29,6 +29,7 @@ wrap. The wrap preserves ``__cause__`` via ``raise ... from exc``.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -280,6 +281,66 @@ def run_apply(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _proposal_store(args: argparse.Namespace):
+    from nanobot.evolve.proposals import ProposalStore
+
+    workspace = Path(args.workspace).expanduser()
+    if not workspace.exists():
+        raise ConfigError(f"workspace does not exist: {workspace}")
+    return ProposalStore(workspace)
+
+
+def run_proposal_list(args: argparse.Namespace) -> int:
+    """List runtime evolution proposals."""
+    from nanobot.evolve.proposals import format_proposal_list
+
+    store = _proposal_store(args)
+    print(format_proposal_list(store.list()))
+    return EXIT_OK
+
+
+def run_proposal_create(args: argparse.Namespace) -> int:
+    """Create a manual runtime evolution proposal."""
+    from nanobot.evolve.proposals import create_manual_proposal, format_proposal_show
+
+    store = _proposal_store(args)
+    proposal = create_manual_proposal(store, skill_name=args.skill, rationale=args.rationale)
+    print(format_proposal_show(proposal))
+    return EXIT_OK
+
+
+def run_proposal_show(args: argparse.Namespace) -> int:
+    """Show one runtime evolution proposal."""
+    from nanobot.evolve.proposals import format_proposal_show
+
+    store = _proposal_store(args)
+    print(format_proposal_show(store.get(args.proposal_id)))
+    return EXIT_OK
+
+
+def run_proposal_run(args: argparse.Namespace) -> int:
+    """Run one runtime evolution proposal through the offline harness."""
+    from nanobot.evolve.proposals import ProposalRunner, format_run_result
+
+    store = _proposal_store(args)
+    if args.optimizer_command == []:
+        raise ConfigError("--optimizer-command requires at least one executable argument")
+    optimizer_command = args.optimizer_command or [
+        sys.executable,
+        "-m",
+        "nanobot.evolve.noop_optimizer",
+    ]
+    result = ProposalRunner(store).run(
+        args.proposal_id,
+        optimizer_command=optimizer_command,
+        tiers=[tier.strip() for tier in args.tiers.split(",") if tier.strip()],
+        max_candidates=args.max_candidates,
+        optimizer_timeout_seconds=args.optimizer_timeout_seconds,
+    )
+    print(format_run_result(result))
+    return EXIT_OK
+
+
 # ---------------------------------------------------------------------------
 # argparse wiring
 # ---------------------------------------------------------------------------
@@ -311,6 +372,62 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Workspace directory (defaults to ~/.nanobot/evolve/default).",
     )
     init_p.set_defaults(func=run_init)
+
+    # proposal -------------------------------------------------------------
+    proposal_p = evolve_subs.add_parser(
+        "proposal",
+        help="Manage runtime offline-evolution proposals.",
+    )
+    proposal_subs = proposal_p.add_subparsers(
+        dest="proposal_cmd",
+        metavar="<action>",
+        required=True,
+    )
+
+    proposal_list_p = proposal_subs.add_parser("list", help="List evolution proposals.")
+    proposal_list_p.add_argument("--workspace", required=True, help="Workspace directory.")
+    proposal_list_p.set_defaults(func=run_proposal_list)
+
+    proposal_create_p = proposal_subs.add_parser(
+        "create",
+        help="Create a manual evolution proposal.",
+    )
+    proposal_create_p.add_argument("--workspace", required=True, help="Workspace directory.")
+    proposal_create_p.add_argument("--skill", required=True, help="Skill name to evolve.")
+    proposal_create_p.add_argument("--rationale", required=True, help="Why this proposal exists.")
+    proposal_create_p.set_defaults(func=run_proposal_create)
+
+    proposal_show_p = proposal_subs.add_parser("show", help="Show one evolution proposal.")
+    proposal_show_p.add_argument("proposal_id", help="Proposal ID or unambiguous prefix.")
+    proposal_show_p.add_argument("--workspace", required=True, help="Workspace directory.")
+    proposal_show_p.set_defaults(func=run_proposal_show)
+
+    proposal_run_p = proposal_subs.add_parser(
+        "run",
+        help="Run one proposal through the offline harness.",
+    )
+    proposal_run_p.add_argument("proposal_id", help="Proposal ID or unambiguous prefix.")
+    proposal_run_p.add_argument("--workspace", required=True, help="Workspace directory.")
+    proposal_run_p.add_argument("--tiers", default="A,C", help="Comma-separated eval tiers.")
+    proposal_run_p.add_argument(
+        "--max-candidates",
+        type=int,
+        default=8,
+        help="Maximum optimizer candidates to evaluate (default: 8).",
+    )
+    proposal_run_p.add_argument(
+        "--optimizer-timeout-seconds",
+        type=int,
+        default=600,
+        help="Optimizer command timeout in seconds (default: 600).",
+    )
+    proposal_run_p.add_argument(
+        "--optimizer-command",
+        nargs=argparse.REMAINDER,
+        default=None,
+        help="Optimizer command and arguments (optional; must appear last).",
+    )
+    proposal_run_p.set_defaults(func=run_proposal_run)
 
     # run ------------------------------------------------------------------
     run_p = evolve_subs.add_parser("run", help="Run a single evolve cycle.")

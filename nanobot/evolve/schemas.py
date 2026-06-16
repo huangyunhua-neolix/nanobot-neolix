@@ -202,6 +202,11 @@ class ValidationFailure(EvolveBase):
     reason: str
 
 
+class EvolutionProposalContext(EvolveBase):
+    proposal_id: str = Field(min_length=1, max_length=500)
+    source: Literal["manual", "curator", "dream"]
+
+
 class DiffStats(EvolveBase):
     files_changed: int = Field(default=0, ge=0)
     insertions: int = Field(default=0, ge=0)
@@ -247,6 +252,7 @@ class RunManifest(FrozenEvolveBase):
     judge_evidence_paths: dict[str, str] = Field(default_factory=dict)
     tool_metadata_artifact_paths: dict[str, str] = Field(default_factory=dict)
     prompt_template_artifact_paths: dict[str, str] = Field(default_factory=dict)
+    evolution_proposal: EvolutionProposalContext | None = None
 
 
 def assert_odd_pool_size(n: int, *, context: str) -> None:
@@ -268,7 +274,7 @@ def load_manifest(path: Path) -> RunManifest:
 def dump_manifest(path: Path, manifest: RunManifest) -> None:
     """Write a RunManifest JSON file using the model's alias contract."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        manifest.model_dump_json(by_alias=True, indent=2),
-        encoding="utf-8",
-    )
+    data = manifest.model_dump(mode="json", by_alias=True)
+    if data.get("evolutionProposal") is None:
+        data.pop("evolutionProposal", None)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")

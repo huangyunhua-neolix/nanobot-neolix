@@ -163,6 +163,19 @@ def _section_headers_in_order(body: str) -> list[str]:
     return [line[3:].strip() for line in body.splitlines() if line.startswith("## ")]
 
 
+def test_assemble_pr_body_includes_evolution_proposal_context() -> None:
+    manifest = _make_run_manifest(
+        evolution_proposal={"proposal_id": "evolve-1", "source": "manual"}
+    )
+
+    body = assemble_pr_body(manifest, [])
+
+    assert "Runtime proposal `evolve-1` from `manual` triggered this offline run." in body
+    assert [line.removeprefix("## ") for line in body.splitlines() if line.startswith("## ")] == list(
+        PR_BODY_SECTIONS
+    )
+
+
 def test_assemble_pr_body_has_6_sections_in_order() -> None:
     manifest = _make_run_manifest()
     body = assemble_pr_body(manifest, [])

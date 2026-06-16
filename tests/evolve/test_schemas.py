@@ -89,6 +89,106 @@ def _judge_provider_identity() -> JudgeProviderIdentity:
     )
 
 
+def test_dump_manifest_omits_absent_evolution_proposal(tmp_path: Path) -> None:
+    manifest = RunManifest.model_validate(
+        {
+            "runId": "run-1",
+            "startedAt": "2026-06-16T12:00:00Z",
+            "finishedAt": "2026-06-16T12:01:00Z",
+            "nanobotVersion": "0.0.0",
+            "evolveExtraVersion": {"optimizer": "noop"},
+            "skillName": "demo-skill",
+            "baselineHash": "basehash",
+            "candidateHashes": [],
+            "promotedCandidateHash": None,
+            "gateVerdicts": [],
+            "judgeSummary": {
+                "recordCount": 0,
+                "medianAggregate": 0.0,
+                "medianProcess": 0.0,
+                "medianOutput": 0.0,
+                "medianToken": 0.0,
+                "consensusSplitCount": 0,
+            },
+            "finalStatus": "no_improvement",
+            "tiersUsed": ["A"],
+            "recordCountPerTier": {"A": 1},
+            "judgePoolHealth": {},
+        }
+    )
+    path = tmp_path / "manifest.json"
+
+    dump_manifest(path, manifest)
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    assert "evolutionProposal" not in data
+
+
+def test_run_manifest_accepts_evolution_proposal_context() -> None:
+    manifest = RunManifest.model_validate(
+        {
+            "runId": "run-1",
+            "startedAt": "2026-06-16T12:00:00Z",
+            "finishedAt": "2026-06-16T12:01:00Z",
+            "nanobotVersion": "0.0.0",
+            "evolveExtraVersion": {"optimizer": "noop"},
+            "skillName": "demo-skill",
+            "baselineHash": "basehash",
+            "candidateHashes": [],
+            "promotedCandidateHash": None,
+            "gateVerdicts": [],
+            "judgeSummary": {
+                "recordCount": 0,
+                "medianAggregate": 0.0,
+                "medianProcess": 0.0,
+                "medianOutput": 0.0,
+                "medianToken": 0.0,
+                "consensusSplitCount": 0,
+            },
+            "finalStatus": "no_improvement",
+            "tiersUsed": ["A"],
+            "recordCountPerTier": {"A": 1},
+            "judgePoolHealth": {},
+            "evolutionProposal": {"proposal_id": "evolve-1", "source": "manual"},
+        }
+    )
+
+    assert manifest.evolution_proposal is not None
+    assert manifest.evolution_proposal.proposal_id == "evolve-1"
+    assert manifest.evolution_proposal.source == "manual"
+
+
+def test_run_manifest_rejects_invalid_evolution_proposal_source() -> None:
+    data = {
+        "runId": "run-1",
+        "startedAt": "2026-06-16T12:00:00Z",
+        "finishedAt": "2026-06-16T12:01:00Z",
+        "nanobotVersion": "0.0.0",
+        "evolveExtraVersion": {"optimizer": "noop"},
+        "skillName": "demo-skill",
+        "baselineHash": "basehash",
+        "candidateHashes": [],
+        "promotedCandidateHash": None,
+        "gateVerdicts": [],
+        "judgeSummary": {
+            "recordCount": 0,
+            "medianAggregate": 0.0,
+            "medianProcess": 0.0,
+            "medianOutput": 0.0,
+            "medianToken": 0.0,
+            "consensusSplitCount": 0,
+        },
+        "finalStatus": "no_improvement",
+        "tiersUsed": ["A"],
+        "recordCountPerTier": {"A": 1},
+        "judgePoolHealth": {},
+        "evolutionProposal": {"proposalId": "evolve-1", "source": "unknown"},
+    }
+
+    with pytest.raises(ValidationError):
+        RunManifest.model_validate(data)
+
+
 def test_judge_provider_identity_serializes_full_calibration_surface() -> None:
     identity = _judge_provider_identity()
 

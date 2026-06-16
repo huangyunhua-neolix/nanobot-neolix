@@ -260,6 +260,13 @@ def assemble_pr_body(
         f"(final status: `{manifest.final_status}`).",
         f"Baseline `{manifest.baseline_hash[:8]}` → promoted candidate `{short_sha}`.",
     ]
+    if manifest.evolution_proposal:
+        proposal_id = manifest.evolution_proposal.proposal_id
+        proposal_source = manifest.evolution_proposal.source
+        _validate_no_newlines(proposal_id=proposal_id, proposal_source=proposal_source)
+        summary_lines.append(
+            f"Runtime proposal `{proposal_id}` from `{proposal_source}` triggered this offline run."
+        )
 
     # --- Eval results -----------------------------------------------------
     eval_lines = ["## Eval results"]

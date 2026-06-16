@@ -77,6 +77,18 @@ def _gate(
     )
 
 
+def test_render_run_report_includes_evolution_proposal_context() -> None:
+    report = render_run_report(
+        _manifest(evolution_proposal={"proposal_id": "evolve-1", "source": "manual"}),
+        {},
+        _optimizer_result(),
+        [],
+    )
+
+    assert "Proposal: `evolve-1`" in report
+    assert "Proposal source: `manual`" in report
+
+
 def test_render_run_report_has_stable_sections() -> None:
     report = render_run_report(
         _manifest(),

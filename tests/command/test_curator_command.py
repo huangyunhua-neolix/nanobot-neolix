@@ -11,7 +11,7 @@ import pytest
 from nanobot.bus.events import InboundMessage
 from nanobot.command.builtin import BUILTIN_COMMAND_SPECS, cmd_curator, register_builtin_commands
 from nanobot.command.router import CommandContext, CommandRouter
-from nanobot.config.schema import CuratorConfig
+from nanobot.config.schema import CuratorConfig, EvolutionConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -31,13 +31,18 @@ class _FakeTelemetry:
         return {"schema_version": 1, "updated_at": "", "entries": {}}
 
 
-def _make_loop(*, curator_config: CuratorConfig | None = None) -> Any:
+def _make_loop(
+    *,
+    curator_config: CuratorConfig | None = None,
+    evolution_config: EvolutionConfig | None = None,
+) -> Any:
     """Build a minimal fake loop accepted by cmd_curator."""
     loop = SimpleNamespace(
         workspace=MagicMock(),  # Path-like; str() is called on it
         context=SimpleNamespace(skills=_FakeSkills()),
         telemetry=_FakeTelemetry(),
         curator_config=curator_config or CuratorConfig(),
+        evolution_config=evolution_config or EvolutionConfig(),
     )
     # Make str(loop.workspace) return something sensible
     loop.workspace.__str__ = lambda self: "/fake/workspace"
@@ -106,6 +111,39 @@ async def test_curator_json_flag_wraps_in_fenced_block() -> None:
     inner = out.content.strip().removeprefix("```json").removesuffix("```").strip()
     data = json.loads(inner)
     assert "mode" in data
+
+
+@pytest.mark.asyncio
+async def test_curator_json_with_evolve_proposals_stays_single_json_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    class StubProposal:
+        proposal_id = "evolve-1"
+
+    class StubStore:
+        def __init__(self, workspace):
+            pass
+
+    def fake_proposals_from_curator(store, proposals, *, now=None):
+        return [StubProposal()]
+
+    monkeypatch.setattr("nanobot.evolve.proposals.ProposalStore", StubStore)
+    monkeypatch.setattr(
+        "nanobot.evolve.proposals.proposals_from_curator",
+        fake_proposals_from_curator,
+    )
+
+    out = await cmd_curator(
+        _ctx("/curator --json --evolve-proposals", args="--json --evolve-proposals")
+    )
+
+    assert out.content.startswith("```json\n")
+    assert out.content.rstrip().endswith("```")
+    inner = out.content.strip().removeprefix("```json").removesuffix("```").strip()
+    data = json.loads(inner)
+    assert data["evolutionProposalsCreated"] == ["evolve-1"]
 
 
 @pytest.mark.asyncio
@@ -203,3 +241,63 @@ def test_curator_in_command_palette() -> None:
     assert spec.description == "Review skill telemetry and propose safe cleanup actions."
     assert spec.icon == "scissors"
     assert "--dry-run" in spec.arg_hint
+
+
+@pytest.mark.asyncio
+async def test_curator_evolve_proposals_flag_creates_runtime_proposals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = []
+
+    class StubProposal:
+        proposal_id = "evolve-1"
+
+    class StubStore:
+        def __init__(self, workspace):
+            pass
+
+    def fake_proposals_from_curator(store, proposals, *, now=None):
+        created.append((store, proposals, now))
+        return [StubProposal()]
+
+    monkeypatch.setattr("nanobot.evolve.proposals.ProposalStore", StubStore)
+    monkeypatch.setattr(
+        "nanobot.evolve.proposals.proposals_from_curator",
+        fake_proposals_from_curator,
+    )
+
+    out = await cmd_curator(_ctx("/curator --evolve-proposals", args="--evolve-proposals"))
+
+    assert created
+    assert "Evolution proposals created: 1" in out.content
+    assert "evolve-1" in out.content
+
+
+@pytest.mark.asyncio
+async def test_curator_evolve_proposals_respects_trigger_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_create(*args, **kwargs):
+        raise AssertionError("curator proposals should be disabled")
+
+    monkeypatch.setattr("nanobot.evolve.proposals.proposals_from_curator", fail_create)
+
+    out = await cmd_curator(
+        _ctx(
+            "/curator --evolve-proposals",
+            args="--evolve-proposals",
+            loop=_make_loop(evolution_config=EvolutionConfig(proposal_triggers=["manual", "dream"])),
+        )
+    )
+
+    assert "Evolution proposals created: 0" in out.content
+
+
+@pytest.mark.asyncio
+async def test_curator_evolve_proposals_flag_does_not_enable_apply() -> None:
+    out = await cmd_curator(
+        _ctx("/curator --apply --evolve-proposals", args="--apply --evolve-proposals")
+    )
+
+    assert "Apply refused" in out.content
+    assert "forced dry-run" in out.content.lower()

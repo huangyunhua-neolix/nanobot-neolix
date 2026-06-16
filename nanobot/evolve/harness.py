@@ -43,6 +43,7 @@ from nanobot.evolve.schemas import (
     Baseline,
     Candidate,
     DiffStats,
+    EvolutionProposalContext,
     JudgeRunSummary,
     JudgeSummary,
     PromptTemplateCandidate,
@@ -88,6 +89,7 @@ _PATH_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 _RUN_ID_SUFFIX_LIMIT = 10_000
+_SAFE_SKILL_NAME_RE = re.compile(r"^[a-zA-Z0-9_.-]+$")
 _SAFE_REASON_MAX_CHARS = 300
 _PR_BODY_FORBIDDEN_REASON_CHARS = frozenset({"\n", "\r", "\u2028", "\u2029", "\u0085", "\x00"})
 _REVIEW_ARTIFACT_PATHS: dict[str, str] = {
@@ -280,8 +282,19 @@ class OfflineHarness:
 
     # --- run preparation -------------------------------------------------
 
+    def _validate_skill_name(self, skill_name: str) -> str:
+        skill_name = skill_name.strip()
+        if not skill_name:
+            raise ConfigError("skill_name must not be empty")
+        if not _SAFE_SKILL_NAME_RE.fullmatch(skill_name):
+            raise ConfigError("skill_name must contain only letters, numbers, '.', '_', or '-'")
+        if ".." in skill_name:
+            raise ConfigError("skill_name must not contain '..'")
+        return skill_name
+
     def _generate_run_id(self, skill_name: str, *, timestamp: str | None = None) -> str:
         """Return the first unused run id for ``skill_name`` at ``timestamp``."""
+        skill_name = self._validate_skill_name(skill_name)
         if timestamp is None:
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -303,7 +316,13 @@ class OfflineHarness:
 
     def _load_baseline_skill(self, skill_name: str) -> Baseline:
         """Load the workspace skill file as a baseline model."""
-        skill_path = self._workspace / "skills" / "agent" / skill_name / "SKILL.md"
+        skill_name = self._validate_skill_name(skill_name)
+        skills_root = (self._workspace / "skills" / "agent").resolve()
+        skill_path = (skills_root / skill_name / "SKILL.md").resolve()
+        try:
+            skill_path.relative_to(skills_root)
+        except ValueError as exc:
+            raise ConfigError(f"skill path escapes skills root: {skill_name}") from exc
         raw = skill_path.read_text(encoding="utf-8")
         frontmatter_values, body = _parse_frontmatter(raw)
         frontmatter = SkillFrontmatter.model_validate(frontmatter_values)
@@ -477,10 +496,12 @@ class OfflineHarness:
         tiers: list[str],
         max_candidates: int = 8,
         optimizer_timeout_seconds: int = 600,
+        proposal_context: EvolutionProposalContext | None = None,
     ) -> RunManifest:
         """Execute the external optimizer and write deterministic offline artifacts."""
         from nanobot.evolve.artifacts import OwnedJsonlEvidenceWriter
 
+        skill_name = self._validate_skill_name(skill_name)
         started_at = datetime.now(timezone.utc)
         run_id = self._generate_run_id(skill_name)
         run_dir = self._workspace / "evals" / "runs" / run_id
@@ -503,6 +524,7 @@ class OfflineHarness:
                 run_id=run_id,
                 run_dir=run_dir,
                 optimizer_dir=optimizer_dir,
+                proposal_context=proposal_context,
             )
         finally:
             self._gates = previous_gates
@@ -519,6 +541,7 @@ class OfflineHarness:
         run_id: str,
         run_dir: Path,
         optimizer_dir: Path,
+        proposal_context: EvolutionProposalContext | None,
     ) -> RunManifest:
         from nanobot.evolve.artifacts import OwnedJsonlEvidenceWriter
 
@@ -702,6 +725,8 @@ class OfflineHarness:
             **tool_metadata_artifact_paths,
             **prompt_template_artifact_paths,
         }
+        if proposal_context:
+            artifact_paths["evolution_proposal"] = "evolution_proposal.json"
         gate_verdicts = [
             result
             for candidate in valid_candidates
@@ -762,8 +787,16 @@ class OfflineHarness:
             judge_evidence_paths=judge_evidence_paths,
             tool_metadata_artifact_paths=tool_metadata_artifact_paths,
             prompt_template_artifact_paths=prompt_template_artifact_paths,
+            evolution_proposal=proposal_context,
         )
 
+        if proposal_context:
+            from nanobot.evolve.artifacts import write_redacted_json_artifact
+
+            write_redacted_json_artifact(
+                run_dir / "evolution_proposal.json",
+                proposal_context.model_dump(mode="json", by_alias=True),
+            )
         (run_dir / "diff.patch").write_text(diff_patch, encoding="utf-8")
         (run_dir / "pr_body.md").write_text(
             assemble_pr_body(manifest, gate_verdicts), encoding="utf-8"
