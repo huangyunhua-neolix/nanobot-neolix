@@ -1987,7 +1987,7 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
     assert result.exit_code == 0
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 18791
-    assert "Health endpoint: http://127.0.0.1:18791/health" in result.stdout
+    assert "Health endpoint: http://127.0.0.1:18791/health" in _strip_ansi(result.stdout)
 
     def _call_handler(path: str) -> tuple[str, _FakeWriter]:
         request = f"GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode()

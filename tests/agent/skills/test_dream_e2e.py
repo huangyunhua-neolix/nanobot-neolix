@@ -202,7 +202,7 @@ def test_builtin_dream_command_uses_context_memory() -> None:
 
     Verified structurally via AST (see ``_find_store_attr_chains``).
     """
-    rel = "nanobot/command/builtin.py"
+    rel = "nanobot/command/dream_command.py"
     chains = _find_store_attr_chains(rel)
     assert "loop.context.memory" in chains, (
         f"/dream builtin command must contain `store = loop.context.memory` "
