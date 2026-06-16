@@ -9,7 +9,8 @@ import pytest
 from typer.testing import CliRunner
 
 from nanobot.bus.events import OutboundMessage
-from nanobot.cli.commands import _proactive_delivery_metadata, app
+from nanobot.cli.commands import app
+from nanobot.cli.shared import _proactive_delivery_metadata
 from nanobot.config.schema import Config
 from nanobot.cron.types import CronJob, CronPayload
 from nanobot.providers.factory import ProviderSnapshot, make_provider
@@ -987,13 +988,13 @@ def test_heartbeat_retains_recent_messages_by_default():
     ],
 )
 def test_heartbeat_has_active_tasks(content, expected):
-    from nanobot.cli.commands import _heartbeat_has_active_tasks
+    from nanobot.cli.shared import _heartbeat_has_active_tasks
 
     assert _heartbeat_has_active_tasks(content) is expected
 
 
 def test_heartbeat_skips_bundled_template():
-    from nanobot.cli.commands import _heartbeat_has_active_tasks
+    from nanobot.cli.shared import _heartbeat_has_active_tasks
     from nanobot.utils.helpers import load_bundled_template
 
     assert _heartbeat_has_active_tasks(load_bundled_template("HEARTBEAT.md")) is False
@@ -1552,7 +1553,7 @@ def test_gateway_custom_config_workspace_does_not_migrate_legacy_cron(
 
 def test_migrate_cron_store_moves_legacy_file(tmp_path: Path) -> None:
     """Legacy global jobs.json is moved into the workspace on first run."""
-    from nanobot.cli.commands import _migrate_cron_store
+    from nanobot.cli.shared import _migrate_cron_store
 
     legacy_dir = tmp_path / "global" / "cron"
     legacy_dir.mkdir(parents=True)
@@ -1573,7 +1574,7 @@ def test_migrate_cron_store_moves_legacy_file(tmp_path: Path) -> None:
 
 def test_migrate_cron_store_skips_when_workspace_file_exists(tmp_path: Path) -> None:
     """Migration does not overwrite an existing workspace cron store."""
-    from nanobot.cli.commands import _migrate_cron_store
+    from nanobot.cli.shared import _migrate_cron_store
 
     legacy_dir = tmp_path / "global" / "cron"
     legacy_dir.mkdir(parents=True)
@@ -1589,6 +1590,14 @@ def test_migrate_cron_store_skips_when_workspace_file_exists(tmp_path: Path) -> 
         _migrate_cron_store(config)
 
     assert workspace_cron.read_text() == '{"new": true}'
+
+
+def test_cli_shared_has_no_command_module_imports() -> None:
+    source = Path("nanobot/cli/shared.py").read_text(encoding="utf-8")
+
+    assert "nanobot.cli.commands" not in source
+    assert "nanobot.cli.gateway_commands" not in source
+    assert "nanobot.cli.provider_commands" not in source
 
 
 def test_gateway_uses_configured_port_when_cli_flag_is_missing(monkeypatch, tmp_path: Path) -> None:
