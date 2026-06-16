@@ -9,7 +9,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from nanobot.bus.events import InboundMessage
-from nanobot.command.builtin import BUILTIN_COMMAND_SPECS, cmd_curator, register_builtin_commands
+from nanobot.command.builtin import BUILTIN_COMMAND_SPECS, register_builtin_commands
+from nanobot.command.evolution_command import cmd_curator
 from nanobot.command.router import CommandContext, CommandRouter
 from nanobot.config.schema import CuratorConfig, EvolutionConfig
 

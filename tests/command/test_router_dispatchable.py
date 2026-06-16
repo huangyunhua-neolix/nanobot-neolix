@@ -28,6 +28,8 @@ class TestIsDispatchableCommand:
         assert router.is_dispatchable_command("/dream-restore")
         assert router.is_dispatchable_command("/goal")
         assert router.is_dispatchable_command("/pairing")
+        assert router.is_dispatchable_command("/curator")
+        assert router.is_dispatchable_command("/evolve")
 
     def test_prefix_commands_match(self, router: CommandRouter) -> None:
         assert router.is_dispatchable_command("/dream-log abc123")
@@ -37,6 +39,7 @@ class TestIsDispatchableCommand:
         assert router.is_dispatchable_command("/pairing list")
         assert router.is_dispatchable_command("/pairing approve CODE")
         assert router.is_dispatchable_command("/curator --apply")
+        assert router.is_dispatchable_command("/evolve list")
 
     def test_priority_commands_not_matched(self, router: CommandRouter) -> None:
         # Priority commands are NOT in the dispatchable tiers — they are
@@ -61,6 +64,16 @@ class TestIsDispatchableCommand:
     def test_unknown_slash_command_not_matched(self, router: CommandRouter) -> None:
         assert not router.is_dispatchable_command("/unknown")
         assert not router.is_dispatchable_command("/foo bar")
+
+
+def test_moved_handlers_are_not_reexported_from_builtin() -> None:
+    import nanobot.command.builtin as builtin
+
+    assert not hasattr(builtin, "cmd_dream")
+    assert not hasattr(builtin, "cmd_dream_log")
+    assert not hasattr(builtin, "cmd_dream_restore")
+    assert not hasattr(builtin, "cmd_curator")
+    assert not hasattr(builtin, "cmd_evolve")
 
 
 class TestMidTurnCommandDispatchedDirectly:
