@@ -5,7 +5,7 @@ instance to the Dream tool registry:
 
 * ``nanobot/agent/context.py`` — ``ContextBuilder.__init__`` constructs the
   ``MemoryStore`` and forwards ``telemetry`` to it.
-* ``nanobot/cli/commands.py`` — the cron Dream job calls
+* ``nanobot/cli/gateway_commands.py`` — the cron Dream job calls
   ``store.build_dream_tools()`` on ``agent.context.memory``.
 * ``nanobot/command/builtin.py`` — the manual ``/dream`` slash command calls
   ``store.build_dream_tools()`` on ``loop.context.memory``.
@@ -177,7 +177,7 @@ def test_cli_commands_dream_path_uses_context_memory() -> None:
     This survives whitespace / comment / wrapping changes but still pins the
     head of the chain (``agent``) and the intermediate node (``context``).
     """
-    rel = "nanobot/cli/commands.py"
+    rel = "nanobot/cli/gateway_commands.py"
     chains = _find_store_attr_chains(rel)
     assert "agent.context.memory" in chains, (
         f"Dream CLI job must contain `store = agent.context.memory` "
@@ -202,7 +202,7 @@ def test_builtin_dream_command_uses_context_memory() -> None:
 
     Verified structurally via AST (see ``_find_store_attr_chains``).
     """
-    rel = "nanobot/command/builtin.py"
+    rel = "nanobot/command/dream_command.py"
     chains = _find_store_attr_chains(rel)
     assert "loop.context.memory" in chains, (
         f"/dream builtin command must contain `store = loop.context.memory` "

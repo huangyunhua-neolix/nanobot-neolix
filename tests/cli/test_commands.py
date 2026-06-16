@@ -1,3 +1,4 @@
+import ast
 import asyncio
 import json
 import re
@@ -9,7 +10,8 @@ import pytest
 from typer.testing import CliRunner
 
 from nanobot.bus.events import OutboundMessage
-from nanobot.cli.commands import _proactive_delivery_metadata, app
+from nanobot.cli.commands import app
+from nanobot.cli.shared import _proactive_delivery_metadata
 from nanobot.config.schema import Config
 from nanobot.cron.types import CronJob, CronPayload
 from nanobot.providers.factory import ProviderSnapshot, make_provider
@@ -329,6 +331,158 @@ def test_provider_login_rejects_unknown_provider():
 
     assert result.exit_code == 1
     assert "Unknown OAuth provider" in result.stdout
+
+
+def test_serve_help_remains_registered():
+    result = runner.invoke(app, ["serve", "--help"])
+
+    assert result.exit_code == 0
+    assert "API server port" in result.stdout
+    assert "OpenAI-compatible" in result.stdout
+
+
+def test_gateway_help_remains_registered():
+    result = runner.invoke(app, ["gateway", "--help"])
+
+    assert result.exit_code == 0
+    assert "Gateway port" in result.stdout
+    assert "Workspace directory" in result.stdout
+
+
+def test_desktop_gateway_help_remains_registered():
+    result = runner.invoke(app, ["desktop-gateway", "--help"])
+
+    assert result.exit_code == 0
+    stripped_output = _strip_ansi(result.stdout)
+    assert "--token-issue-secret" in stripped_output
+    assert "--webui-port" in stripped_output
+
+
+def test_desktop_gateway_stays_hidden_from_top_level_help():
+    result = runner.invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "desktop-gateway" not in result.stdout
+
+
+def test_gateway_commands_preserve_root_help_order():
+    result = runner.invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    stripped_output = _strip_ansi(result.stdout)
+    assert stripped_output.index("onboard") < stripped_output.index("serve")
+    assert stripped_output.index("serve") < stripped_output.index("gateway")
+    assert stripped_output.index("gateway") < stripped_output.index("agent")
+
+
+def test_gateway_commands_module_has_no_commands_import():
+    source = Path("nanobot/cli/gateway_commands.py").read_text(encoding="utf-8")
+
+    assert "nanobot.cli.commands" not in source
+
+
+def test_provider_help_remains_registered():
+    result = runner.invoke(app, ["provider", "--help"])
+
+    assert result.exit_code == 0
+    assert "login" in result.stdout
+    assert "logout" in result.stdout
+
+
+def test_provider_login_help_remains_registered():
+    result = runner.invoke(app, ["provider", "login", "--help"])
+
+    assert result.exit_code == 0
+    assert "OAuth provider" in result.stdout
+
+
+def test_provider_logout_help_remains_registered():
+    result = runner.invoke(app, ["provider", "logout", "--help"])
+
+    assert result.exit_code == 0
+    assert "OAuth provider" in result.stdout
+
+
+def test_provider_commands_module_has_no_commands_import():
+    source = Path("nanobot/cli/provider_commands.py").read_text(encoding="utf-8")
+
+    assert "nanobot.cli.commands" not in source
+
+
+def _commands_py_symbols() -> set[str]:
+    tree = ast.parse(Path("nanobot/cli/commands.py").read_text(encoding="utf-8"))
+    symbols: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            symbols.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    symbols.add(target.id)
+    return symbols
+
+
+def test_commands_py_no_longer_defines_moved_gateway_handlers() -> None:
+    symbols = _commands_py_symbols()
+
+    assert "serve" not in symbols
+    assert "gateway" not in symbols
+    assert "desktop_gateway" not in symbols
+    assert "_run_gateway" not in symbols
+    assert "DESKTOP_BOOTSTRAP_PROVIDER" not in symbols
+
+
+def test_commands_py_no_longer_defines_provider_oauth_handlers() -> None:
+    symbols = _commands_py_symbols()
+
+    assert "provider_app" not in symbols
+    assert "provider_login" not in symbols
+    assert "provider_logout" not in symbols
+    assert "_login_openai_codex" not in symbols
+    assert "_login_github_copilot" not in symbols
+
+
+def test_commands_py_registers_focused_cli_modules_explicitly() -> None:
+    source = Path("nanobot/cli/commands.py").read_text(encoding="utf-8")
+
+    assert "from nanobot.cli.gateway_commands import register_gateway_commands" in source
+    assert "from nanobot.cli.provider_commands import register_provider_commands" in source
+    assert "register_gateway_commands(app)" in source
+    assert "register_provider_commands(app)" in source
+
+
+def test_production_code_does_not_import_moved_cli_internals_from_commands_py() -> None:
+    moved_names = {
+        "serve",
+        "gateway",
+        "desktop_gateway",
+        "_run_gateway",
+        "DESKTOP_BOOTSTRAP_PROVIDER",
+        "_configure_desktop_gateway",
+        "_load_or_create_desktop_config",
+        "provider_login",
+        "provider_logout",
+        "_login_openai_codex",
+        "_login_github_copilot",
+        "_migrate_cron_store",
+        "_heartbeat_has_active_tasks",
+    }
+    offenders: list[str] = []
+    for path in Path("nanobot").rglob("*.py"):
+        if path == Path("nanobot/cli/commands.py"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if node.module != "nanobot.cli.commands":
+                continue
+            imported = {alias.name for alias in node.names}
+            stale = sorted(imported & moved_names)
+            if stale:
+                offenders.append(f"{path}: {', '.join(stale)}")
+
+    assert offenders == []
 
 
 def test_config_matches_explicit_ollama_prefix_without_api_key():
@@ -987,13 +1141,13 @@ def test_heartbeat_retains_recent_messages_by_default():
     ],
 )
 def test_heartbeat_has_active_tasks(content, expected):
-    from nanobot.cli.commands import _heartbeat_has_active_tasks
+    from nanobot.cli.shared import _heartbeat_has_active_tasks
 
     assert _heartbeat_has_active_tasks(content) is expected
 
 
 def test_heartbeat_skips_bundled_template():
-    from nanobot.cli.commands import _heartbeat_has_active_tasks
+    from nanobot.cli.shared import _heartbeat_has_active_tasks
     from nanobot.utils.helpers import load_bundled_template
 
     assert _heartbeat_has_active_tasks(load_bundled_template("HEARTBEAT.md")) is False
@@ -1040,7 +1194,7 @@ def _patch_cli_command_runtime(
     monkeypatch.setattr("nanobot.config.loader.load_config", lambda _path=None: config)
     monkeypatch.setattr("nanobot.config.loader.resolve_config_env_vars", lambda c: c)
     monkeypatch.setattr(
-        "nanobot.cli.commands.sync_workspace_templates",
+        "nanobot.cli.gateway_commands.sync_workspace_templates",
         sync_templates or (lambda _path: None),
     )
     monkeypatch.setattr(
@@ -1104,7 +1258,7 @@ def _patch_serve_runtime(monkeypatch, config: Config, seen: dict[str, object]) -
         message_bus=lambda: object(),
         session_manager=lambda _workspace: object(),
     )
-    monkeypatch.setattr("nanobot.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("nanobot.cli.gateway_commands.AgentLoop", _FakeAgentLoop)
     monkeypatch.setattr("nanobot.api.server.create_app", _fake_create_app)
     monkeypatch.setattr("aiohttp.web.run_app", _fake_run_app)
 
@@ -1195,7 +1349,7 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
 
     monkeypatch.setattr("nanobot.config.loader.set_config_path", lambda _path: None)
     monkeypatch.setattr("nanobot.config.loader.load_config", lambda _path=None: config)
-    monkeypatch.setattr("nanobot.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("nanobot.cli.gateway_commands.sync_workspace_templates", lambda _path: None)
     monkeypatch.setattr("nanobot.providers.factory.make_provider", lambda _config: provider)
     monkeypatch.setattr(
         "nanobot.providers.factory.build_provider_snapshot",
@@ -1276,10 +1430,10 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
         return True
 
     monkeypatch.setattr("nanobot.cron.service.CronService", _FakeCron)
-    monkeypatch.setattr("nanobot.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("nanobot.cli.gateway_commands.AgentLoop", _FakeAgentLoop)
     monkeypatch.setattr("nanobot.channels.manager.ChannelManager", _StopAfterCronSetup)
     monkeypatch.setattr(
-        "nanobot.cli.commands.evaluate_response",
+        "nanobot.cli.gateway_commands.evaluate_response",
         _capture_evaluate_response,
     )
 
@@ -1391,7 +1545,7 @@ def test_gateway_cron_job_suppresses_intermediate_progress(
 
     monkeypatch.setattr("nanobot.config.loader.set_config_path", lambda _path: None)
     monkeypatch.setattr("nanobot.config.loader.load_config", lambda _path=None: config)
-    monkeypatch.setattr("nanobot.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("nanobot.cli.gateway_commands.sync_workspace_templates", lambda _path: None)
     monkeypatch.setattr("nanobot.providers.factory.make_provider", lambda _config: _fake_provider())
     monkeypatch.setattr(
         "nanobot.providers.factory.build_provider_snapshot",
@@ -1443,10 +1597,10 @@ def test_gateway_cron_job_suppresses_intermediate_progress(
         return False
 
     monkeypatch.setattr("nanobot.cron.service.CronService", _FakeCron)
-    monkeypatch.setattr("nanobot.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("nanobot.cli.gateway_commands.AgentLoop", _FakeAgentLoop)
     monkeypatch.setattr("nanobot.channels.manager.ChannelManager", _StopAfterCronSetup)
     monkeypatch.setattr(
-        "nanobot.cli.commands.evaluate_response",
+        "nanobot.cli.gateway_commands.evaluate_response",
         _always_reject,
     )
 
@@ -1552,7 +1706,7 @@ def test_gateway_custom_config_workspace_does_not_migrate_legacy_cron(
 
 def test_migrate_cron_store_moves_legacy_file(tmp_path: Path) -> None:
     """Legacy global jobs.json is moved into the workspace on first run."""
-    from nanobot.cli.commands import _migrate_cron_store
+    from nanobot.cli.shared import _migrate_cron_store
 
     legacy_dir = tmp_path / "global" / "cron"
     legacy_dir.mkdir(parents=True)
@@ -1573,7 +1727,7 @@ def test_migrate_cron_store_moves_legacy_file(tmp_path: Path) -> None:
 
 def test_migrate_cron_store_skips_when_workspace_file_exists(tmp_path: Path) -> None:
     """Migration does not overwrite an existing workspace cron store."""
-    from nanobot.cli.commands import _migrate_cron_store
+    from nanobot.cli.shared import _migrate_cron_store
 
     legacy_dir = tmp_path / "global" / "cron"
     legacy_dir.mkdir(parents=True)
@@ -1591,6 +1745,14 @@ def test_migrate_cron_store_skips_when_workspace_file_exists(tmp_path: Path) -> 
     assert workspace_cron.read_text() == '{"new": true}'
 
 
+def test_cli_shared_has_no_command_module_imports() -> None:
+    source = Path("nanobot/cli/shared.py").read_text(encoding="utf-8")
+
+    assert "nanobot.cli.commands" not in source
+    assert "nanobot.cli.gateway_commands" not in source
+    assert "nanobot.cli.provider_commands" not in source
+
+
 def test_gateway_uses_configured_port_when_cli_flag_is_missing(monkeypatch, tmp_path: Path) -> None:
     config_file = _write_instance_config(tmp_path)
     config = Config()
@@ -1605,7 +1767,7 @@ def test_gateway_uses_configured_port_when_cli_flag_is_missing(monkeypatch, tmp_
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])
 
     assert isinstance(result.exception, _StopGatewayError)
-    assert "port 18791" in result.stdout
+    assert "port 18791" in _strip_ansi(result.stdout)
 
 
 def test_gateway_cli_port_overrides_configured_port(monkeypatch, tmp_path: Path) -> None:
@@ -1622,11 +1784,11 @@ def test_gateway_cli_port_overrides_configured_port(monkeypatch, tmp_path: Path)
     result = runner.invoke(app, ["gateway", "--config", str(config_file), "--port", "18792"])
 
     assert isinstance(result.exception, _StopGatewayError)
-    assert "port 18792" in result.stdout
+    assert "port 18792" in _strip_ansi(result.stdout)
 
 
 def test_configure_desktop_gateway_forces_local_websocket_only() -> None:
-    from nanobot.cli.commands import _configure_desktop_gateway
+    from nanobot.cli.gateway_commands import _configure_desktop_gateway
 
     config = Config()
     config.channels.__pydantic_extra__ = {
@@ -1655,7 +1817,7 @@ def test_configure_desktop_gateway_forces_local_websocket_only() -> None:
 
 
 def test_load_or_create_desktop_config_bootstraps_without_api_key(tmp_path: Path) -> None:
-    from nanobot.cli.commands import _load_or_create_desktop_config
+    from nanobot.cli.gateway_commands import _load_or_create_desktop_config
 
     config_path = tmp_path / "config.json"
     loaded = _load_or_create_desktop_config(
@@ -1676,7 +1838,7 @@ def test_load_or_create_desktop_config_bootstraps_without_api_key(tmp_path: Path
 def test_load_or_create_desktop_config_repairs_existing_unconfigured_default(
     tmp_path: Path,
 ) -> None:
-    from nanobot.cli.commands import _load_or_create_desktop_config
+    from nanobot.cli.gateway_commands import _load_or_create_desktop_config
     from nanobot.config.loader import save_config
 
     config_path = tmp_path / "config.json"
@@ -1695,7 +1857,7 @@ def test_load_or_create_desktop_config_repairs_existing_unconfigured_default(
 def test_load_or_create_desktop_config_unwinds_persisted_bootstrap(
     tmp_path: Path,
 ) -> None:
-    from nanobot.cli.commands import _load_or_create_desktop_config
+    from nanobot.cli.gateway_commands import _load_or_create_desktop_config
     from nanobot.config.loader import save_config
 
     config_path = tmp_path / "config.json"
@@ -1815,7 +1977,7 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
         message_bus=lambda: object(),
         session_manager=lambda _workspace: object(),
     )
-    monkeypatch.setattr("nanobot.cli.commands.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("nanobot.cli.gateway_commands.AgentLoop", _FakeAgentLoop)
     monkeypatch.setattr("nanobot.channels.manager.ChannelManager", _FakeChannelManager)
     monkeypatch.setattr("nanobot.cron.service.CronService", _FakeCronService)
     monkeypatch.setattr("asyncio.start_server", _fake_start_server)
@@ -1825,7 +1987,7 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
     assert result.exit_code == 0
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 18791
-    assert "Health endpoint: http://127.0.0.1:18791/health" in result.stdout
+    assert "Health endpoint: http://127.0.0.1:18791/health" in _strip_ansi(result.stdout)
 
     def _call_handler(path: str) -> tuple[str, _FakeWriter]:
         request = f"GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode()
