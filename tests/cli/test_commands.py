@@ -408,6 +408,35 @@ def test_provider_commands_module_has_no_commands_import():
     assert "nanobot.cli.commands" not in source
 
 
+def test_commands_py_no_longer_defines_moved_gateway_handlers() -> None:
+    source = Path("nanobot/cli/commands.py").read_text(encoding="utf-8")
+
+    assert "def serve(" not in source
+    assert "def gateway(" not in source
+    assert "def desktop_gateway(" not in source
+    assert "def _run_gateway(" not in source
+    assert "DESKTOP_BOOTSTRAP_PROVIDER" not in source
+
+
+def test_commands_py_no_longer_defines_provider_oauth_handlers() -> None:
+    source = Path("nanobot/cli/commands.py").read_text(encoding="utf-8")
+
+    assert "provider_app = typer.Typer" not in source
+    assert "def provider_login(" not in source
+    assert "def provider_logout(" not in source
+    assert "def _login_openai_codex(" not in source
+    assert "def _login_github_copilot(" not in source
+
+
+def test_commands_py_registers_focused_cli_modules_explicitly() -> None:
+    source = Path("nanobot/cli/commands.py").read_text(encoding="utf-8")
+
+    assert "from nanobot.cli.gateway_commands import register_gateway_commands" in source
+    assert "from nanobot.cli.provider_commands import register_provider_commands" in source
+    assert "register_gateway_commands(app)" in source
+    assert "register_provider_commands(app)" in source
+
+
 def test_config_matches_explicit_ollama_prefix_without_api_key():
     config = Config()
     config.agents.defaults.model = "ollama/llama3.2"
