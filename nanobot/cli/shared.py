@@ -24,6 +24,7 @@ if sys.platform == "win32":
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
+# Side effect: configure global loguru output for CLI entry paths only.
 logger.remove()
 _log_handler_id = logger.add(
     sys.stderr,
