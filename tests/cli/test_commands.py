@@ -332,6 +332,34 @@ def test_provider_login_rejects_unknown_provider():
     assert "Unknown OAuth provider" in result.stdout
 
 
+def test_provider_help_remains_registered():
+    result = runner.invoke(app, ["provider", "--help"])
+
+    assert result.exit_code == 0
+    assert "login" in result.stdout
+    assert "logout" in result.stdout
+
+
+def test_provider_login_help_remains_registered():
+    result = runner.invoke(app, ["provider", "login", "--help"])
+
+    assert result.exit_code == 0
+    assert "OAuth provider" in result.stdout
+
+
+def test_provider_logout_help_remains_registered():
+    result = runner.invoke(app, ["provider", "logout", "--help"])
+
+    assert result.exit_code == 0
+    assert "OAuth provider" in result.stdout
+
+
+def test_provider_commands_module_has_no_commands_import():
+    source = Path("nanobot/cli/provider_commands.py").read_text(encoding="utf-8")
+
+    assert "nanobot.cli.commands" not in source
+
+
 def test_config_matches_explicit_ollama_prefix_without_api_key():
     config = Config()
     config.agents.defaults.model = "ollama/llama3.2"
