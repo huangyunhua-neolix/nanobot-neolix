@@ -35,11 +35,7 @@ from typing import Any, Final
 from nanobot.agent._atomic_io import SkillManageError
 from nanobot.agent.tools.base import Tool, tool_parameters
 from nanobot.agent.tools.context import ToolContext
-from nanobot.agent.tools.schema import (
-    ArraySchema,
-    StringSchema,
-    tool_parameters_schema,
-)
+from nanobot.agent.tools.schema import ArraySchema, ObjectSchema, StringSchema
 
 
 @dataclass(frozen=True)
@@ -237,42 +233,44 @@ def _reject(verb: str, name: str, code: str, msg: str = "") -> dict[str, Any]:
 # --- Tool class ---------------------------------------------------------------
 
 
-_PARAM_SCHEMA: Final[dict[str, Any]] = tool_parameters_schema(
-    verb=StringSchema(
-        "Operation to perform: create | edit | patch | delete.",
-        enum=("create", "edit", "patch", "delete"),
-    ),
-    name=StringSchema(
-        "Skill name. Must match ^[a-z0-9][a-z0-9-]*$, length 1..64, "
-        "and must not be a reserved tier name (agent, user, bundled, hub).",
-        min_length=1,
-        max_length=64,
-    ),
-    description=StringSchema(
-        "One-line skill description (≤ max_description_len chars).",
-        max_length=280,
-        nullable=True,
-    ),
-    body=StringSchema(
-        "Full skill body for create/edit (UTF-8). Subject to max_body_bytes "
-        "after encoding. Ignored for delete; for patch use search/replace.",
-        nullable=True,
-    ),
-    requires=ArraySchema(
-        items=StringSchema(""),
-        description="Optional list of skill names this skill depends on.",
-        nullable=True,
-    ),
-    search=StringSchema(
-        "patch only: literal string to search for in the existing body.",
-        nullable=True,
-    ),
-    replace=StringSchema(
-        "patch only: literal replacement text for `search`.",
-        nullable=True,
-    ),
+_PARAM_SCHEMA: Final[dict[str, Any]] = ObjectSchema(
+    properties={
+        "verb": StringSchema(
+            "Operation to perform: create | edit | patch | delete.",
+            enum=("create", "edit", "patch", "delete"),
+        ),
+        "name": StringSchema(
+            "Skill name. Must match ^[a-z0-9][a-z0-9-]*$, length 1..64, "
+            "and must not be a reserved tier name (agent, user, bundled, hub).",
+            min_length=1,
+            max_length=64,
+        ),
+        "description": StringSchema(
+            "One-line skill description (≤ max_description_len chars).",
+            max_length=280,
+            nullable=True,
+        ),
+        "body": StringSchema(
+            "Full skill body for create/edit (UTF-8). Subject to max_body_bytes "
+            "after encoding. Ignored for delete; for patch use search/replace.",
+            nullable=True,
+        ),
+        "requires": ArraySchema(
+            items=StringSchema(""),
+            description="Optional list of skill names this skill depends on.",
+            nullable=True,
+        ),
+        "search": StringSchema(
+            "patch only: literal string to search for in the existing body.",
+            nullable=True,
+        ),
+        "replace": StringSchema(
+            "patch only: literal replacement text for `search`.",
+            nullable=True,
+        ),
+    },
     required=["verb", "name"],
-)
+).to_json_schema()
 
 
 @tool_parameters(_PARAM_SCHEMA)
