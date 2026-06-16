@@ -36,10 +36,9 @@ Parameters:
 - `action`: one of `start`, `send`, `poll`, `stop`, `list`.
 - `session_id`: required for `send`, `poll`, and `stop`.
 - `prompt`: optional initial task text for `start`.
-- `chars`: text to write for `send`. This may include `\n`, escape sequences, or control characters.
-- `working_dir`: optional workspace for `start`; defaults to the nanobot workspace.
-- `command`: optional freecode executable path/name; defaults to `freecode` from PATH or config.
-- `args`: optional extra CLI arguments for `start`.
+- `chars`: text to write for `send`. The tool accepts printable text plus CR/LF/TAB by default; Ctrl-C may be allowed as an explicit interruption path. Other raw control characters and escape sequences are rejected unless a future config explicitly enables raw mode.
+- `working_dir`: optional workspace for `start`; defaults to the nanobot workspace. The resolved real path must stay inside the configured workspace allow-roots and must reject symlink escapes.
+- `args`: optional extra freecode CLI arguments for `start`, validated against an allow-list.
 - `yield_time_ms`: optional wait period before returning output; valid for `start`, `send`, and `poll` only.
 - `wait_for`: optional text to wait for before returning; valid for `start`, `send`, and `poll` only.
 - `wait_timeout_ms`: maximum wait for `wait_for`; valid only when `wait_for` is set.
@@ -58,7 +57,8 @@ The result should be a labeled plain-text block for LLM usability, not JSON. It 
 - `session_id` for active sessions.
 - `state`: running/exited/terminated.
 - `elapsed_s` and `idle_s`.
-- `output`: the output chunk, with truncation notice when applicable.
+- `output`: sanitized output chunk, with truncation notice when applicable. Strip or escape ANSI CSI/OSC sequences and C0/C1 control characters before returning to the LLM or chat channel, while preserving line breaks and tabs.
+- `needs_user_confirmation`: `true` when the recent output appears to ask for a decision outside the small auto-confirm allow-list.
 - `supervisor_note`: a reminder to ask the user before high-risk decisions when the session appears to be waiting for confirmation.
 
 ## PTY Session Manager
@@ -69,52 +69,55 @@ Responsibilities:
 
 - Allocate opaque 12-character lowercase hex session ids, matching the existing exec-session style. Treat ids as unguessable handles and never reveal sessions owned by another nanobot session.
 - Enforce maximum concurrent freecode sessions.
-- Track owner nanobot session key so one chat/session cannot accidentally control another user's terminal.
-- Spawn `freecode` in the requested workspace with a terminal type such as `xterm-256color`.
-- Continuously read PTY output into a bounded buffer.
-- Support writes, polling, stop, and idle cleanup.
-- Return output incrementally and truncate oversized chunks.
+- Track owner nanobot session key from `current_request_session_key()` so one chat/session cannot accidentally control another user's terminal. `list` only returns sessions owned by the current key, and `send`, `poll`, and `stop` treat cross-owner ids exactly like missing ids.
+- Spawn only the configured `freecode_session.command` path in the requested workspace. The caller cannot override the executable path through tool parameters.
+- Resolve `working_dir` with realpath and require it to stay inside configured workspace allow-roots: the current nanobot workspace plus any explicit extra roots from config.
+- Continuously read PTY output into a bounded in-memory ring buffer. This keeps the first version simple while leaving transcript persistence or WebUI mirroring as later append-only sinks.
+- Support writes, polling, stop, and idle cleanup. Pause idle cleanup while the session has a pending user-confirmation escalation.
+- Return sanitized output incrementally and truncate oversized chunks.
 
 Implementation choice:
 
-- Prefer Python PTY support that works on Unix-like systems first, because the current active environment is macOS and nanobot's shell tooling already has platform-aware paths.
-- Use a narrow adapter class so Windows support can later use a different backend without changing the tool API.
+- Use `pexpect` for the first PTY backend. It gives a mature Python PTY abstraction with expect/read/write semantics that map directly to `wait_for`, while keeping the manager API independent from the backend. If dependency policy blocks adding `pexpect`, the implementation plan must explicitly switch to a stdlib `pty` + `selectors` backend before coding starts.
+- Define a narrow `PtyBackend` adapter with `spawn()`, `read()`, `write()`, `terminate()`, and `is_alive()` so Windows support or a stdlib backend can be added later without changing the tool API.
 - If PTY support is unavailable, `start` should fail clearly instead of silently falling back to plain pipes. Freecode supervision depends on terminal behavior.
 
 ## Supervisor Behavior Contract
 
 The tool description must tell the nanobot agent how to behave as supervisor.
 
-Default-autonomous decisions the supervisor may handle:
+Default-autonomous decisions are deliberately narrow. The supervisor may auto-confirm only when the recent output matches a small allow-list of routine prompts, such as continuing a local file read/edit/test inside the allowed workspace or asking freecode to inspect errors, rerun tests, or revise code. The prompt classifier must inspect the action description immediately preceding the confirmation prompt, not just the final `Continue?` line.
 
-- Continue/yes prompts for routine file reads, edits, tests, and local commands.
-- Choosing ordinary task execution options when the task intent is clear.
-- Asking freecode to inspect errors, rerun tests, or revise code.
+Default behavior for unrecognized prompts is escalate, not auto-yes. The tool should set `needs_user_confirmation: true` and include a `supervisor_note` when the recent prompt falls outside the allow-list or matches any deny-list pattern.
 
 Supervisor mechanics:
 
 - Poll until the terminal becomes idle, asks for input, exits, or reaches a configured wait timeout.
-- Surface recent output clearly enough for the supervising agent to decide whether the next input is routine or requires user confirmation.
+- Surface recent sanitized output clearly enough for the supervising agent to decide whether the next input is routine or requires user confirmation.
+- Apply a deny-list to the recent output before auto-confirming. Deny-list matches always require user confirmation.
 
 Decisions that must be escalated to the user:
 
-- Deleting many files or destructive filesystem operations.
-- `git reset --hard`, force push, branch deletion, or similar destructive git operations.
+- Destructive filesystem operations, including recursive deletes, mass rewrites, or operations outside the requested files.
+- Destructive git operations: `git reset --hard`, force push, branch deletion, history rewrite, or similar.
 - Merging PRs, posting comments, or other externally visible actions beyond the requested workflow. Normal branch push and PR creation are allowed when the user has asked the supervisor to complete development work.
-- Installing, removing, or upgrading dependencies.
-- Entering credentials, logging into external services, or handling secrets.
-- Running commands outside the workspace or changing global configuration.
+- Installing, removing, or upgrading dependencies or tools, including package-manager commands such as `brew`, `apt`, `pip --user`, or `npm -g`.
+- Entering credentials, logging into external services, reading secrets, or printing environment variables/dotfiles such as `.env`, `~/.aws/credentials`, `~/.ssh/**`, private keys, or tokens.
+- Running commands outside the workspace, changing global configuration, writing shell startup files, writing `~/.config/**`, crontabs, launchd/systemd files, or other persistence locations.
+- Privilege escalation (`sudo`, `su`, setuid changes), ownership/permission broadening (`chmod 777`, broad `chmod +x`, `chown`), or killing processes the supervisor did not start.
+- Piping remote content into interpreters (`curl|bash`, `wget|sh`, similar), opening non-loopback listeners, or initiating unexplained network egress.
+- Database or migration commands that can mutate or drop persistent data.
 
-The tool should not attempt to parse every possible prompt perfectly. Instead, it should expose recent output clearly and rely on the supervising agent's reasoning plus the explicit risk boundary above.
+The tool is not a full policy engine; the supervising agent still makes final decisions. The tool must, however, provide conservative prompt classification signals (`needs_user_confirmation` and `supervisor_note`) so the agent does not treat arbitrary `yes/no` prompts as safe.
 
 ## Data Flow
 
 1. User asks nanobot to perform a complex task through freecode.
 2. Nanobot calls `freecode_session(action="start", prompt=..., working_dir=...)`.
-3. The manager spawns a PTY running `freecode` and writes the initial prompt if provided.
-4. Nanobot polls output, reads freecode's progress, and decides when to send follow-up input.
-5. If freecode asks for low-risk confirmation, nanobot answers directly.
-6. If freecode asks for high-risk confirmation, nanobot asks the user before sending input.
+3. The manager validates the workspace allow-root, spawns a PTY running the configured `freecode`, and writes the initial prompt if provided.
+4. Nanobot polls sanitized output, reads freecode's progress, and decides when to send follow-up input.
+5. If freecode asks for a prompt that matches the narrow allow-list and no deny-list pattern appears in recent output, nanobot may answer directly.
+6. If freecode asks for a high-risk or unrecognized confirmation, nanobot asks the user before sending input; idle cleanup pauses while this escalation is pending.
 7. When freecode reports completion or exits, nanobot summarizes the result to the user and stops the session if still running.
 
 ## Error Handling
@@ -122,7 +125,9 @@ The tool should not attempt to parse every possible prompt perfectly. Instead, i
 - Missing executable: return a clear error that `freecode` was not found and suggest configuring the command/path.
 - PTY backend unavailable: return a clear unsupported-platform error.
 - Session not found or owned by another nanobot session: return a not-found error without leaking other sessions.
-- Startup failure: include the command, workspace, and short diagnostic output.
+- Workspace outside allow-roots or symlink escape: reject before spawning and return a clear workspace-boundary error.
+- Disallowed CLI arg or caller-supplied executable override: reject before spawning.
+- Startup failure: include the configured command, workspace, and short sanitized diagnostic output.
 - Startup timeout: if the PTY starts but produces no usable output before `startup_timeout`, return a clear timeout error while leaving the session available for later polling unless the child process has already exited.
 - `wait_for` timeout: return the output observed so far plus a clear note that the requested text was not seen before `wait_timeout_ms`.
 - Idle timeout: terminate stale sessions and report that they were cleaned up.
@@ -133,14 +138,21 @@ The tool should not attempt to parse every possible prompt perfectly. Instead, i
 Add a small config section, likely under tool config, with defaults:
 
 - `freecode_session.enable`: default true if PTY backend is available.
-- `freecode_session.command`: default `freecode`.
+- `freecode_session.command`: default `freecode`; resolved from config/PATH at startup and not overrideable per tool call.
+- `freecode_session.allowed_args`: default allow-list for safe freecode CLI flags needed by this tool.
+- `freecode_session.extra_workspace_roots`: default empty list of additional allowed realpaths.
 - `freecode_session.max_sessions`: default 2.
-- `freecode_session.idle_timeout`: default 1800 seconds.
-- `freecode_session.startup_timeout`: default 30 seconds. This governs the initial wait for the PTY-backed process to produce usable startup output; it does not cap the lifetime of the session.
+- `freecode_session.idle_timeout`: default 900 seconds. Idle cleanup pauses while a user-confirmation escalation is pending.
+- `freecode_session.startup_timeout`: default 10 seconds. This governs the initial wait for the PTY-backed process to produce usable startup output; it does not cap the lifetime of the session.
 
 If `freecode_session.enable` is true on a platform without a PTY backend, the tool stays registered but `start` returns the clear unsupported-platform error described above. Auto-disable only controls the default config value; explicit enablement must not silently fall back to plain pipes.
 
 The first implementation can keep config minimal and constructor-inject values in tests, as long as the public schema supports command path and session limits.
+
+## Rejected Alternatives
+
+- Extending `exec` with `pty=true`: rejected for the first version because the supervision flow needs stricter workspace confinement, command pinning, prompt classification, sanitized output, and a freecode-specific risk contract. Keeping it separate avoids expanding the blast radius of the general shell tool.
+- Plain subprocess pipes: rejected because freecode is a terminal application and may render prompts, ANSI output, or interactive behavior differently without a PTY.
 
 ## Testing Plan
 
@@ -152,16 +164,20 @@ Required coverage:
 - `send` writes to the PTY and returns echoed/processed output.
 - `poll` returns incremental output without duplicating old chunks.
 - `stop` terminates the process and removes the session.
-- `list` shows active sessions and respects owner filtering.
+- `list` shows only sessions owned by the current nanobot session key.
 - `send`, `poll`, and `stop` reject cross-owner session ids with the same not-found response used for missing sessions.
+- `start` rejects workspaces outside allow-roots, including symlink escapes.
+- `start` uses the configured freecode command and rejects caller-supplied executable overrides or disallowed args.
 - `max_sessions` rejects starts beyond the configured concurrent-session limit.
 - `wait_for` succeeds when text appears and returns a clear timeout note when text does not appear before `wait_timeout_ms`.
 - output truncation reports omitted characters.
-- idle cleanup terminates stale sessions.
+- output sanitization strips or escapes ANSI CSI/OSC and unsafe control characters before returning to the LLM/chat channel.
+- idle cleanup terminates stale sessions, but pauses while `needs_user_confirmation` is pending.
 - missing command returns a clear error.
 - PTY-backend unavailable returns the unsupported-platform error and does not fall back to pipes.
-- ANSI/control-character writes pass through the PTY path without being stripped before reaching the child process.
-- tool description includes the default-autonomous and high-risk escalation contract. This is a description-lint test; runtime enforcement remains the supervising agent's responsibility, with the tool surfacing `supervisor_note` when output appears to be waiting for confirmation.
+- allowed control-character writes (CR/LF/TAB and explicit Ctrl-C interrupt) pass through, while other raw control/escape sequences are rejected by default.
+- prompt-classification tests cover at least one allow-listed low-risk prompt and deny/escalate examples for `git reset --hard`, PR merge, secret read, package install, `sudo`, `curl|bash`, non-workspace write, and database mutation.
+- tool description includes the default-autonomous and high-risk escalation contract. This is a description-lint test; runtime enforcement remains the supervising agent's responsibility, with the tool surfacing `needs_user_confirmation` and `supervisor_note` when output appears to be waiting for confirmation.
 
 A focused integration-style test can run a mock interactive Python program that prints `ready`, reads a line, prints `got:<line>`, asks a yes/no question, and verifies the PTY path handles the interaction.
 
