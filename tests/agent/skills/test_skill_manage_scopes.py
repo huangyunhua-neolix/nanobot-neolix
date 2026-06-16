@@ -12,6 +12,8 @@ under each of the three scopes documented in the plan:
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from nanobot.agent.tools.context import ToolContext
@@ -48,6 +50,21 @@ def test_loader_registers_skill_manage_in_scope(tmp_path, scope):
         f"skill_manage missing from scope={scope!r}; "
         f"tools={sorted(registry.tool_names)}"
     )
+
+
+def test_skill_manage_schema_is_json_serializable(tmp_path):
+    loader = ToolLoader()
+    registry = ToolRegistry()
+    ctx = _make_ctx(tmp_path)
+
+    loader.load(ctx, registry, scope="core")
+
+    skill_schema = next(
+        definition
+        for definition in registry.get_definitions()
+        if definition["function"]["name"] == "skill_manage"
+    )
+    json.dumps(skill_schema)
 
 
 def test_loader_skill_manage_excluded_from_unknown_scope(tmp_path):
