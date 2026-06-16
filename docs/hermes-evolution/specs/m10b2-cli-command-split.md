@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved for specification on 2026-06-16 after M10b-1 merged.
+Approved for specification on 2026-06-16 after M10b-1 merged. Revised on 2026-06-16 after spec review.
 
 ## Context
 
@@ -48,15 +48,35 @@ This slice will not:
 
 ## Proposed Architecture
 
-Create two focused internal modules under `nanobot/cli/`:
+Create two focused internal modules under `nanobot/cli/` and one small shared-support module:
 
 ```text
 nanobot/cli/
 ├── commands.py              # app, shared console/log setup, onboard, agent, channels, plugins, status, evolve bridge
+├── shared.py                # low-level CLI globals/helpers shared by focused command modules
 ├── gateway_commands.py      # serve, gateway, desktop-gateway, gateway runtime helpers
 ├── provider_commands.py     # provider Typer sub-app, login/logout handlers and OAuth helpers
 └── evolve.py                # existing argparse evolve surface; unchanged in this slice
 ```
+
+`shared.py` is intentionally small and exists to prevent circular imports between `commands.py` and the moved command modules. It should own only infrastructure that is needed by both the root app module and the moved modules.
+
+### `shared.py`
+
+Move these shared infrastructure responsibilities from `commands.py` only as needed by both root and focused modules:
+
+- `console = Console()`
+- loguru setup, including `_log_handler_id`
+- `_model_display()`
+- `_load_runtime_config()`
+- `_warn_deprecated_config_keys()`
+- `_migrate_cron_store()`
+- `_heartbeat_has_active_tasks()`
+- `_proactive_delivery_metadata()`
+- `_PROACTIVE_WEBUI_METADATA`
+- constants used by those helpers, including `_WEBUI_TURN_META_KEY`, `_WEBUI_MESSAGE_SOURCE_META_KEY`, and `_HEARTBEAT_PREAMBLE`
+
+`shared.py` must not import `nanobot.cli.commands`, `gateway_commands`, or `provider_commands`. It is a one-directional dependency target for CLI modules.
 
 ### `gateway_commands.py`
 
@@ -85,7 +105,7 @@ def register_gateway_commands(app: typer.Typer) -> None:
     ...
 ```
 
-`register_gateway_commands(app)` registers the same `serve`, `gateway`, and hidden `desktop-gateway` commands that currently use decorators in `commands.py`.
+`register_gateway_commands(app)` registers the same `serve`, `gateway`, and hidden `desktop-gateway` commands that currently use decorators in `commands.py`. These commands must remain flat root commands, not a nested `gateway` Typer sub-app. The preferred implementation is plain handler functions plus explicit registration inside `register_gateway_commands()`, for example `app.command()(serve)`, `app.command()(gateway)`, and `app.command("desktop-gateway", hidden=True)(desktop_gateway)`.
 
 Behavior must remain unchanged:
 
@@ -122,7 +142,7 @@ def register_provider_commands(app: typer.Typer) -> None:
     ...
 ```
 
-`register_provider_commands(app)` attaches the same `provider` Typer sub-app to the root app.
+`register_provider_commands(app)` attaches the same `provider` Typer sub-app to the root app via `app.add_typer(provider_app, name="provider")`. Unlike gateway commands, provider commands remain nested under the existing `provider` sub-app so `nanobot provider login` and `nanobot provider logout` help output stays equivalent.
 
 Behavior must remain unchanged:
 
@@ -136,16 +156,16 @@ Behavior must remain unchanged:
 `commands.py` remains the public CLI entry point. It keeps:
 
 - `app = typer.Typer(...)`
-- console and loguru setup shared by CLI modules
-- CLI rendering helpers and interactive prompt helpers
+- CLI rendering helpers and interactive prompt helpers not needed by moved modules
 - onboarding command
-- `_load_runtime_config()` and config migration helpers used across command modules
 - interactive `agent()` command
 - channel status/login commands
 - plugin/status commands
 - `nanobot evolve` Typer-to-argparse bridge
 
-After defining shared app/global helpers, `commands.py` imports registration functions from the new modules and calls them once:
+`commands.py` imports shared CLI infrastructure from `nanobot.cli.shared` instead of owning it directly when that infrastructure is needed by moved modules.
+
+After creating `app`, `commands.py` imports registration functions from the new modules and calls them once:
 
 ```python
 from nanobot.cli.gateway_commands import register_gateway_commands
@@ -155,9 +175,14 @@ register_gateway_commands(app)
 register_provider_commands(app)
 ```
 
-Imports should be placed after shared globals and helper definitions needed by moved modules are safe to import. The moved modules may import shared objects from `nanobot.cli.commands` only when those objects are stable shared CLI infrastructure such as `console`, `logger`, `_log_handler_id`, `_load_runtime_config`, `_model_display`, `_migrate_cron_store`, `_heartbeat_has_active_tasks`, `_proactive_delivery_metadata`, `_PROACTIVE_WEBUI_METADATA`, `__logo__`, and `__version__`.
+Import discipline is mandatory for this slice:
 
-This intentionally accepts a small dependency from focused command modules back to the CLI root for this slice. The root remains the public entry point, and the moved modules must not create their own root app.
+1. `shared.py` must not import `commands.py`, `gateway_commands.py`, or `provider_commands.py`.
+2. `gateway_commands.py` and `provider_commands.py` must not import from `nanobot.cli.commands`.
+3. `commands.py` may import `shared.py`, `gateway_commands.py`, and `provider_commands.py`.
+4. Optional heavyweight dependencies remain lazy inside the command/helper functions that already load them lazily today.
+
+This creates one-way dependencies and follows the explicit-registration pattern proven by M10b-1: the root entry point owns registration, focused modules own command families, and no discovery or compatibility re-export layer is introduced.
 
 ## Public API and Import Compatibility
 
@@ -171,6 +196,7 @@ Stable public surface for this slice:
   - `nanobot provider logout`
 - `nanobot.cli.commands.app` as the root Typer app.
 - Existing console output intent and exit-code behavior.
+- Direct imports of moved helper functions from `nanobot.cli.commands` are not public API and should be migrated to the new module paths.
 
 Internal surface:
 
@@ -206,6 +232,10 @@ Only handler definition locations and command registration style change.
 4. Do not change `nanobot/cli/evolve.py` or the `nanobot evolve` bridge in this slice.
 5. Do not alter provider OAuth storage logic, gateway config mutation logic, or runtime wiring.
 6. Update monkeypatch paths only where tests patch moved module-local symbols. Prefer `CliRunner` tests against `app` when possible.
+7. Update existing internal helper imports in tests from `nanobot.cli.commands` to the new module paths. Known current call sites:
+   - `tests/cli/test_commands.py` imports `_configure_desktop_gateway`; update it to `nanobot.cli.gateway_commands`.
+   - `tests/cli/test_commands.py` imports `_load_or_create_desktop_config`; update it to `nanobot.cli.gateway_commands`.
+8. Update structural tests that inspect `nanobot/cli/commands.py` for moved gateway internals. Known current call site: `tests/agent/skills/test_dream_e2e.py` checks Dream cron wiring in `nanobot/cli/commands.py`; after `_run_gateway()` moves, that test should inspect `nanobot/cli/gateway_commands.py` instead.
 
 ## Error Handling
 
@@ -236,6 +266,7 @@ Implementation does not need to preserve:
 Run existing focused CLI tests after migration:
 
 - `tests/cli/test_commands.py`
+- `tests/agent/skills/test_dream_e2e.py`
 - Any gateway/provider tests discovered during implementation.
 
 Add or preserve coverage that verifies:
@@ -247,22 +278,24 @@ Add or preserve coverage that verifies:
 - `nanobot provider logout --help` remains registered.
 - Provider logout behavior for OpenAI Codex and GitHub Copilot still removes the expected files.
 - Unknown provider login/logout behavior remains unchanged.
+- Tests that import `_configure_desktop_gateway` and `_load_or_create_desktop_config` import them from `nanobot.cli.gateway_commands`.
+- The Dream cron structural test inspects the module that owns `_run_gateway()` after the move.
 
 Run lint on changed Python files:
 
 ```bash
-uv run ruff check nanobot/cli/commands.py nanobot/cli/gateway_commands.py nanobot/cli/provider_commands.py tests/cli/test_commands.py
+uv run ruff check nanobot/cli/commands.py nanobot/cli/shared.py nanobot/cli/gateway_commands.py nanobot/cli/provider_commands.py tests/cli/test_commands.py tests/agent/skills/test_dream_e2e.py
 ```
 
 ## Risks and Mitigations
 
 ### Risk: Circular import between `commands.py` and moved modules
 
-Mitigation: keep shared CLI infrastructure in `commands.py`, import moved module registration functions only after those shared objects are defined, and keep moved modules free of root app creation. If a circular import appears, move only truly shared, low-level helpers into a small `nanobot/cli/runtime.py` module rather than widening this split.
+Mitigation: prevent the cycle by introducing `nanobot/cli/shared.py` up front and enforcing one-way imports: shared infrastructure lives in `shared.py`; focused modules import from `shared.py`; `commands.py` imports shared infrastructure and calls focused module registration functions. Focused modules must not import from `nanobot.cli.commands`.
 
 ### Risk: Verbose logging behavior drifts
 
-Mitigation: moved gateway handlers should reuse the same `logger` object and `_log_handler_id` from `commands.py` rather than creating an independent log configuration.
+Mitigation: moved gateway handlers should reuse the same `logger` object and `_log_handler_id` from `shared.py` rather than creating an independent log configuration.
 
 ### Risk: Typer help output changes accidentally
 
@@ -274,7 +307,7 @@ Mitigation: keep OAuth library imports inside provider-specific login/logout fun
 
 ### Risk: Moving `_run_gateway()` is too large for one slice
 
-Mitigation: move it with the gateway command family because it is command-local runtime wiring. Do not split its internals in this slice; preserving behavior is safer than extracting additional abstractions.
+Mitigation: move it with the gateway command family because it is command-local runtime wiring. Do not split its internals in this slice; preserving behavior is safer than extracting additional abstractions. Before moving it, implementation must grep `_run_gateway()` for module-global references and either import those globals from `shared.py` or keep them as lazy local imports. The implementation should not silently invent new parameters for `_run_gateway()` unless a test proves that is safer.
 
 ## Rollback Strategy
 
@@ -290,10 +323,12 @@ No feature flag is needed because:
 ## Success Criteria
 
 - `commands.py` is materially smaller and no longer contains gateway or provider OAuth command implementations.
+- `shared.py` owns only low-level CLI infrastructure needed by both the root app and moved modules, and imports no command modules.
 - `gateway_commands.py` owns `serve`, `gateway`, `desktop-gateway`, and gateway runtime helpers.
 - `provider_commands.py` owns provider login/logout command handlers and OAuth helpers.
 - Existing command names, options, help behavior, output intent, exit behavior, config loading, logging, and side effects are preserved.
 - `nanobot.cli.commands.app` remains the single public root Typer app.
+- No moved module imports from `nanobot.cli.commands`.
 - No command discovery/plugin registry/new CLI framework is introduced.
 - Focused CLI tests pass.
 - Lint passes on changed Python files.
