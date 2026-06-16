@@ -27,6 +27,7 @@ class TestIsDispatchableCommand:
         assert router.is_dispatchable_command("/dream-log")
         assert router.is_dispatchable_command("/dream-restore")
         assert router.is_dispatchable_command("/goal")
+        assert router.is_dispatchable_command("/pairing")
         assert router.is_dispatchable_command("/curator")
         assert router.is_dispatchable_command("/evolve")
 
