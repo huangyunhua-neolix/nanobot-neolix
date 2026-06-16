@@ -62,7 +62,7 @@ def test_evolve_help_lists_all_subcommands(capsys):
     with pytest.raises(SystemExit):
         parser.parse_args(["evolve", "--help"])
     out = capsys.readouterr().out
-    for sub in ("init", "run", "report", "apply"):
+    for sub in ("proposal", "init", "run", "report", "apply"):
         assert sub in out
 
 
@@ -77,6 +77,52 @@ def test_run_help_shows_flags(capsys):
     assert "--max-candidates" in out
     assert "--optimizer-timeout-seconds" in out
     assert "--optimizer-command" in out
+
+
+def test_proposal_help_lists_actions(capsys):
+    parser = _build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["evolve", "proposal", "--help"])
+    out = capsys.readouterr().out
+    for action in ("list", "create", "show", "run"):
+        assert action in out
+
+
+def test_proposal_create_parses_required_args() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(
+        [
+            "evolve",
+            "proposal",
+            "create",
+            "--workspace",
+            "/tmp/ws",
+            "--skill",
+            "demo-skill",
+            "--rationale",
+            "make it better",
+        ]
+    )
+
+    assert args.workspace == "/tmp/ws"
+    assert args.skill == "demo-skill"
+    assert args.rationale == "make it better"
+
+
+def test_proposal_run_rejects_explicit_empty_optimizer_command(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    args = argparse.Namespace(
+        workspace=str(workspace),
+        proposal_id="evolve-1",
+        optimizer_command=[],
+        tiers="A",
+        max_candidates=2,
+        optimizer_timeout_seconds=9,
+    )
+
+    with pytest.raises(ConfigError, match="optimizer-command"):
+        evolve_cli.run_proposal_run(args)
 
 
 def test_run_tiers_default_is_a_c():
@@ -497,6 +543,62 @@ def test_run_init_default_workspace_can_be_parsed():
     assert ws.name == "default"
 
 
+def test_proposal_run_uses_configured_optimizer_args(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    class StubStore:
+        def __init__(self, workspace: Path) -> None:
+            self.workspace = workspace
+
+    class StubResult:
+        proposal = type(
+            "Proposal",
+            (),
+            {
+                "proposal_id": "evolve-1",
+                "skill_name": "demo-skill",
+                "status": "completed",
+                "run_id": "run-1",
+                "manifest_path": "evals/runs/run-1/manifest.json",
+            },
+        )()
+        manifest = type("Manifest", (), {"final_status": "no_improvement"})()
+
+    class StubRunner:
+        def __init__(self, store) -> None:
+            assert store.workspace == workspace
+
+        def run(self, proposal_id_or_prefix: str, **kwargs):
+            assert proposal_id_or_prefix == "evolve-1"
+            assert kwargs["optimizer_command"] == ["python", "optimizer.py"]
+            assert kwargs["tiers"] == ["A"]
+            assert kwargs["max_candidates"] == 2
+            assert kwargs["optimizer_timeout_seconds"] == 9
+            return StubResult()
+
+    monkeypatch.setattr("nanobot.evolve.proposals.ProposalStore", StubStore)
+    monkeypatch.setattr("nanobot.evolve.proposals.ProposalRunner", StubRunner)
+
+    args = argparse.Namespace(
+        workspace=str(workspace),
+        proposal_id="evolve-1",
+        optimizer_command=["python", "optimizer.py"],
+        tiers="A",
+        max_candidates=2,
+        optimizer_timeout_seconds=9,
+    )
+
+    assert evolve_cli.run_proposal_run(args) == evolve_cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "Evolution run" in out
+    assert "run-1" in out
+
+
 # ---------------------------------------------------------------------------
 # run_init — workspace skeleton
 # ---------------------------------------------------------------------------
@@ -696,7 +798,7 @@ def test_typer_shim_evolve_help_lists_subcommands():
     assert result.exit_code == 0
     # argparse writes --help to stdout; CliRunner captures via .output.
     out = result.output
-    for sub in ("init", "run", "report", "apply"):
+    for sub in ("proposal", "init", "run", "report", "apply"):
         assert sub in out, f"subcommand {sub!r} missing from help: {out!r}"
 
 

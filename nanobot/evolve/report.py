@@ -40,6 +40,15 @@ def render_run_report(
         f"Status: `{manifest.final_status}`",
         f"Baseline: `{manifest.baseline_hash[:8]}`",
         f"Promoted candidate: `{manifest.promoted_candidate_hash or '<none>'}`",
+    ]
+    if manifest.evolution_proposal:
+        lines.extend(
+            [
+                f"Proposal: `{_redact_and_bound(manifest.evolution_proposal.proposal_id)}`",
+                f"Proposal source: `{_redact_and_bound(manifest.evolution_proposal.source)}`",
+            ]
+        )
+    lines.extend([
         "",
         "## Optimizer",
         f"Name: `{optimizer_result.optimizer_name}`",
@@ -48,7 +57,7 @@ def render_run_report(
         "",
         "## Review state",
         f"Human approval required: `{str(manifest.requires_human_approval).lower()}`",
-    ]
+    ])
     if manifest.tool_metadata_artifact_paths:
         lines.extend(
             [

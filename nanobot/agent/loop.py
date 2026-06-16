@@ -67,6 +67,7 @@ from nanobot.utils.runtime import (
 if TYPE_CHECKING:
     from nanobot.config.schema import (
         ChannelsConfig,
+        EvolutionConfig,
         ProviderConfig,
         ToolsConfig,
     )
@@ -212,6 +213,7 @@ class AgentLoop:
         preset_snapshot_loader: preset_helpers.PresetSnapshotLoader | None = None,
         runtime_events: RuntimeEventBus | None = None,
         runtime_model_publisher: Callable[[str, str | None], None] | None = None,
+        evolution_config: EvolutionConfig | None = None,
     ):
         from nanobot.config.schema import ToolsConfig
 
@@ -258,6 +260,7 @@ class AgentLoop:
         ):
             self._image_generation_provider_configs["openrouter"] = image_generation_provider_config
         self.cron_service = cron_service
+        self.evolution_config = evolution_config if evolution_config is not None else defaults.evolution
         self.restrict_to_workspace = restrict_to_workspace
         self.workspace_scopes = WorkspaceScopeResolver(
             default_workspace=workspace,
@@ -392,6 +395,7 @@ class AgentLoop:
             tools_config=config.tools,
             model_presets=preset_helpers.configured_model_presets(config),
             model_preset=defaults.model_preset,
+            evolution_config=defaults.evolution,
             provider_snapshot_loader=provider_snapshot_loader,
             preset_snapshot_loader=preset_snapshot_loader,
             **extra,

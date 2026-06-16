@@ -1105,6 +1105,16 @@ def _run_gateway(
                 )
                 if MemoryStore.dream_run_completed(resp):
                     store.set_last_dream_cursor(last_cursor)
+                    try:
+                        from nanobot.evolve.proposals import maybe_create_dream_proposal
+
+                        maybe_create_dream_proposal(
+                            agent,
+                            completed=True,
+                            processed_entries=last_cursor,
+                        )
+                    except Exception:
+                        logger.exception("Dream evolution proposal creation failed")
                     logger.info("Dream cron job completed, cursor advanced to {}", last_cursor)
                 else:
                     logger.warning(

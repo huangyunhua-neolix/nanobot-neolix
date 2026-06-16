@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re as _re
+import sys
 from datetime import datetime as _datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -196,6 +197,49 @@ class CuratorConfig(Base):
         return v
 
 
+class EvolutionConfig(Base):
+    """Runtime-to-offline evolution proposal configuration (M9)."""
+
+    enabled: bool = True
+    workspace: str | None = None
+    proposal_triggers: list[Literal["manual", "curator", "dream"]] = Field(
+        default_factory=lambda: ["manual", "curator", "dream"]
+    )
+    optimizer_command: list[str] = Field(default_factory=list)
+    use_noop_optimizer_when_unset: bool = True
+    default_tiers: str = "A,C"
+    max_candidates: int = Field(default=8, ge=1)
+    optimizer_timeout_seconds: int = Field(default=600, ge=1)
+
+    def resolve_workspace(self, agent_workspace: Path) -> Path:
+        """Return the evolve workspace for runtime proposal storage and runs."""
+        if self.workspace:
+            return Path(self.workspace).expanduser()
+        return agent_workspace
+
+    def resolve_optimizer_command(self) -> list[str]:
+        """Return the configured optimizer command or deterministic fallback."""
+        if self.optimizer_command:
+            return list(self.optimizer_command)
+        if self.use_noop_optimizer_when_unset:
+            return [sys.executable, "-m", "nanobot.evolve.noop_optimizer"]
+        from nanobot.evolve.exceptions import ConfigError
+
+        raise ConfigError(
+            "agents.defaults.evolution.optimizerCommand is required unless "
+            "useNoopOptimizerWhenUnset is true"
+        )
+
+    def default_tier_list(self) -> list[str]:
+        """Return configured default eval tiers as a list."""
+        tiers = [tier.strip() for tier in self.default_tiers.split(",") if tier.strip()]
+        if not tiers:
+            from nanobot.evolve.exceptions import ConfigError
+
+            raise ConfigError("agents.defaults.evolution.defaultTiers must include at least one tier")
+        return tiers
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -248,6 +292,7 @@ class AgentDefaults(Base):
     auxiliary: AuxiliaryConfig = Field(default_factory=AuxiliaryConfig)
     skill_manage: SkillManageConfig = Field(default_factory=SkillManageConfig)
     curator: CuratorConfig = Field(default_factory=CuratorConfig)
+    evolution: EvolutionConfig = Field(default_factory=EvolutionConfig)
 
 
 class AgentsConfig(Base):
