@@ -156,6 +156,6 @@ Tool 与 prompt-template evolution 都不能直接沿用 skills-only pipeline �
 M10 不是 Hermes evolution 的功能扩展，而是为了降低继续扩展 evolution surface 的维护风险。建议拆成：
 
 - **M10a WebUI SettingsView split**：拆分超大 `SettingsView.tsx`。
-- **M10b CLI command split**：拆分 `nanobot/cli/commands.py`，尤其是 evolve / gateway / config / provider 命令。
+- **M10b command-surface split**：分片治理命令面；M10b-1 先拆分 `nanobot/command/builtin.py` 的 slash command handlers，M10b-2 再拆分 `nanobot/cli/commands.py` 的 evolve / gateway / config / provider 命令。
 - **M10c AgentLoop constructor cleanup**：降低构造参数与状态耦合。
 - **M10d WebSocketChannel / WebUI decoupling**：明确 gateway protocol contract，减少前后端隐式耦合。
