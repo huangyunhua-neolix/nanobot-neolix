@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.11, asyncio slash command handlers, existing `CommandRouter`, existing `OutboundMessage`, pytest, ruff.
 
+**Status:** Completed and merged to main on 2026-06-16 via PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/21 (merge commit `45dafeae`). Roadmap follow-up PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/22 recorded the completion state.
+
 ---
 
 ## Scope Check
@@ -114,7 +116,7 @@ If production files appear, update those imports to the new modules in the relev
 - Test: `tests/command/test_builtin_dream.py`
 - Test: `tests/command/test_router_dispatchable.py::TestIsDispatchableCommand`
 
-- [ ] **Step 1: Write the failing Dream import test change**
+- [x] **Step 1: Write the failing Dream import test change**
 
 In `tests/command/test_builtin_dream.py`, replace the existing handler import:
 
@@ -128,7 +130,7 @@ with:
 from nanobot.command.dream_command import cmd_dream_log, cmd_dream_restore
 ```
 
-- [ ] **Step 2: Run the Dream tests to verify they fail**
+- [x] **Step 2: Run the Dream tests to verify they fail**
 
 Run:
 
@@ -142,7 +144,7 @@ Expected: FAIL during collection with:
 ModuleNotFoundError: No module named 'nanobot.command.dream_command'
 ```
 
-- [ ] **Step 3: Create `nanobot/command/dream_command.py`**
+- [x] **Step 3: Create `nanobot/command/dream_command.py`**
 
 Create `nanobot/command/dream_command.py` with this header:
 
@@ -205,7 +207,7 @@ logger.exception("Dream evolution proposal creation failed")
 
 Do not import anything from `nanobot.command.builtin` in `dream_command.py`.
 
-- [ ] **Step 4: Remove Dream implementations from `builtin.py`**
+- [x] **Step 4: Remove Dream implementations from `builtin.py`**
 
 In `nanobot/command/builtin.py`, delete the contiguous Dream block that starts at:
 
@@ -230,7 +232,7 @@ from nanobot.command.dream_command import cmd_dream
 
 at module top level.
 
-- [ ] **Step 5: Update Dream registration in `builtin.py`**
+- [x] **Step 5: Update Dream registration in `builtin.py`**
 
 At the start of `register_builtin_commands()` in `nanobot/command/builtin.py`, add local imports for Dream handlers:
 
@@ -252,7 +254,7 @@ router.exact("/dream-restore", cmd_dream_restore)
 router.prefix("/dream-restore ", cmd_dream_restore)
 ```
 
-- [ ] **Step 6: Run Dream and router tests to verify they pass**
+- [x] **Step 6: Run Dream and router tests to verify they pass**
 
 Run:
 
@@ -262,7 +264,7 @@ pytest tests/command/test_builtin_dream.py tests/command/test_router_dispatchabl
 
 Expected: PASS.
 
-- [ ] **Step 7: Run ruff on changed command files**
+- [x] **Step 7: Run ruff on changed command files**
 
 Run:
 
@@ -272,7 +274,7 @@ ruff check nanobot/command/builtin.py nanobot/command/dream_command.py tests/com
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit the Dream split**
+- [x] **Step 8: Commit the Dream split**
 
 Run:
 
@@ -298,7 +300,7 @@ EOF
 - Test: `tests/command/test_curator_command.py`
 - Test: `tests/command/test_evolve_command.py`
 
-- [ ] **Step 1: Write the failing Curator/Evolve import test changes**
+- [x] **Step 1: Write the failing Curator/Evolve import test changes**
 
 In `tests/command/test_curator_command.py`, replace:
 
@@ -326,7 +328,7 @@ from nanobot.command.builtin import BUILTIN_COMMAND_SPECS, register_builtin_comm
 from nanobot.command.evolution_command import cmd_evolve
 ```
 
-- [ ] **Step 2: Run Curator/Evolve tests to verify they fail**
+- [x] **Step 2: Run Curator/Evolve tests to verify they fail**
 
 Run:
 
@@ -340,7 +342,7 @@ Expected: FAIL during collection with:
 ModuleNotFoundError: No module named 'nanobot.command.evolution_command'
 ```
 
-- [ ] **Step 3: Create `nanobot/command/evolution_command.py`**
+- [x] **Step 3: Create `nanobot/command/evolution_command.py`**
 
 Create `nanobot/command/evolution_command.py` with this header:
 
@@ -427,7 +429,7 @@ content = f"Evolution run failed: {redact(str(exc)).text}"
 
 Do not import anything from `nanobot.command.builtin` in `evolution_command.py`.
 
-- [ ] **Step 4: Remove Curator/Evolve implementations from `builtin.py`**
+- [x] **Step 4: Remove Curator/Evolve implementations from `builtin.py`**
 
 In `nanobot/command/builtin.py`, delete the contiguous runtime evolution block that starts at:
 
@@ -450,7 +452,7 @@ Do not leave module-level compatibility imports such as:
 from nanobot.command.evolution_command import cmd_curator, cmd_evolve
 ```
 
-- [ ] **Step 5: Update Curator/Evolve registration in `builtin.py`**
+- [x] **Step 5: Update Curator/Evolve registration in `builtin.py`**
 
 Update the local import block at the start of `register_builtin_commands()` to include evolution handlers:
 
@@ -472,7 +474,7 @@ router.exact("/evolve", cmd_evolve)
 router.prefix("/evolve ", cmd_evolve)
 ```
 
-- [ ] **Step 6: Run Curator/Evolve tests to verify they pass**
+- [x] **Step 6: Run Curator/Evolve tests to verify they pass**
 
 Run:
 
@@ -482,7 +484,7 @@ pytest tests/command/test_curator_command.py tests/command/test_evolve_command.p
 
 Expected: PASS.
 
-- [ ] **Step 7: Run ruff on changed command files**
+- [x] **Step 7: Run ruff on changed command files**
 
 Run:
 
@@ -492,7 +494,7 @@ ruff check nanobot/command/builtin.py nanobot/command/evolution_command.py tests
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit the evolution command split**
+- [x] **Step 8: Commit the evolution command split**
 
 Run:
 
@@ -515,7 +517,7 @@ EOF
 - Possibly modify: `nanobot/command/builtin.py`
 - Test: `tests/command/test_router_dispatchable.py`
 
-- [ ] **Step 1: Add failing/passing boundary tests**
+- [x] **Step 1: Add failing/passing boundary tests**
 
 In `tests/command/test_router_dispatchable.py`, add this test function near the existing `TestIsDispatchableCommand` tests:
 
@@ -543,7 +545,7 @@ In `TestIsDispatchableCommand.test_prefix_commands_match`, ensure the prefix com
 assert router.is_dispatchable_command("/evolve list")
 ```
 
-- [ ] **Step 2: Run router tests**
+- [x] **Step 2: Run router tests**
 
 Run:
 
@@ -553,7 +555,7 @@ pytest tests/command/test_router_dispatchable.py -v
 
 Expected: PASS. If `test_moved_handlers_are_not_reexported_from_builtin` fails, remove module-level moved handler imports from `builtin.py` and keep them inside `register_builtin_commands()` only.
 
-- [ ] **Step 3: Confirm `builtin.py` has no moved handler implementations or re-export imports**
+- [x] **Step 3: Confirm `builtin.py` has no moved handler implementations or re-export imports**
 
 Run:
 
@@ -589,7 +591,7 @@ builtin split boundary OK
 
 Manual review requirement for this step: local imports inside `register_builtin_commands()` are allowed; module-level moved handler imports are not.
 
-- [ ] **Step 4: Commit boundary tests**
+- [x] **Step 4: Commit boundary tests**
 
 Run:
 
@@ -613,7 +615,7 @@ EOF
 - Modify if needed: `nanobot/command/evolution_command.py`
 - Test: focused command and restart tests
 
-- [ ] **Step 1: Run focused command regression tests**
+- [x] **Step 1: Run focused command regression tests**
 
 Run:
 
@@ -623,7 +625,7 @@ pytest tests/command/test_builtin_dream.py tests/command/test_curator_command.py
 
 Expected: PASS.
 
-- [ ] **Step 2: Run ruff on changed Python files**
+- [x] **Step 2: Run ruff on changed Python files**
 
 Run:
 
@@ -654,7 +656,7 @@ from nanobot.utils.restart import set_restart_notice_to_env
 
 Do not remove `asyncio`, `os`, or `sys`; `/restart` still uses them and restart tests patch `nanobot.command.builtin.asyncio` and `nanobot.command.builtin.os.execv`.
 
-- [ ] **Step 3: Run full command test directory**
+- [x] **Step 3: Run full command test directory**
 
 Run:
 
@@ -664,7 +666,7 @@ pytest tests/command -v
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit cleanup if any files changed**
+- [x] **Step 4: Commit cleanup if any files changed**
 
 If Step 2 or Step 3 required fixes, commit them:
 
@@ -689,7 +691,7 @@ If no files changed, do not create an empty commit.
 - Possibly modify: `docs/hermes-evolution/specs/m10b-slash-command-split.md`
 - Possibly modify: `docs/hermes-evolution/roadmap.md`
 
-- [ ] **Step 1: Verify command split success criteria by source scan**
+- [x] **Step 1: Verify command split success criteria by source scan**
 
 Run:
 
@@ -721,7 +723,7 @@ Expected:
 M10b-1 source split verified
 ```
 
-- [ ] **Step 2: Run final focused tests**
+- [x] **Step 2: Run final focused tests**
 
 Run:
 
@@ -731,7 +733,7 @@ pytest tests/command/test_builtin_dream.py tests/command/test_curator_command.py
 
 Expected: PASS.
 
-- [ ] **Step 3: Run final lint**
+- [x] **Step 3: Run final lint**
 
 Run:
 
@@ -741,7 +743,7 @@ ruff check nanobot/command tests/command tests/cli/test_restart_command.py
 
 Expected: PASS.
 
-- [ ] **Step 4: Check docs still match implementation**
+- [x] **Step 4: Check docs still match implementation**
 
 Confirm these doc statements remain true:
 
@@ -769,13 +771,15 @@ If docs still match, do not create an empty commit.
 
 ## Verification Plan
 
-Run before opening a PR:
+Completed before opening PR https://github.com/huangyunhua-neolix/nanobot-neolix/pull/21:
 
 ```bash
-pytest tests/command/test_builtin_dream.py tests/command/test_curator_command.py tests/command/test_evolve_command.py tests/command/test_router_dispatchable.py tests/cli/test_restart_command.py -v
-pytest tests/command -v
-ruff check nanobot/command tests/command tests/cli/test_restart_command.py
+uv run pytest tests/command/test_builtin_dream.py tests/command/test_curator_command.py tests/command/test_evolve_command.py tests/command/test_router_dispatchable.py tests/cli/test_restart_command.py -v
+uv run pytest tests/command -v
+uv run ruff check nanobot/command tests/command tests/cli/test_restart_command.py
 ```
+
+Results: focused command tests passed, full `tests/command` passed with 74 tests, and ruff passed on the changed command/test files.
 
 Optional source boundary check:
 
